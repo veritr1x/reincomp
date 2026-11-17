@@ -1,0 +1,941 @@
+#include <cfenv>
+#include "libc_resolver_detail.h"
+#include "libc.h"
+#include "../runtime/bridge.h"
+#include "provider_memory.h"
+#include "libc_process_detail.h"
+#include "libc_wall_time_detail.h"
+#include "libc_uname_detail.h"
+#include "libc_calendar_detail.h"
+#include "unicode.h"
+#include <algorithm>
+#include <array>
+#include <atomic>
+#include <cerrno>
+#include <cmath>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <limits>
+#include <memory>
+#include <stdexcept>
+#include <type_traits>
+#include <vector>
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#include <pthread.h>
+#else
+#include <unistd.h>
+#include <sched.h>
+#include <arpa/inet.h>
+#include <time.h>
+#include <sys/time.h>
+#endif
+
+namespace bunker::windows {
+namespace pm=provider_memory;
+namespace {
+thread_local int guest_error;
+std::atomic<uint64_t> next_locale_owner{1};
+using LocaleSelections=std::map<uint64_t,addr_t>;
+#ifdef _WIN32
+void DestroyLocaleSelections(void *value) noexcept {
+  // Native pthread TSS cleanup runs before emutls storage is reclaimed. The
+  // heap map contains only provider IDs/values; no provider or guest is called.
+  delete static_cast<LocaleSelections*>(value);
+}
+LocaleSelections &CurrentLocales(){
+  // One checked process-lifetime native-thread key, not nontrivial C++ TLS.
+  // C++ static initialization may throw here; no pthread C callback may throw.
+  static const pthread_key_t key=[] {
+    pthread_key_t result{};
+    const int error=pthread_key_create(&result,DestroyLocaleSelections);
+    if(error)throw std::runtime_error("locale thread storage key creation failed: "+std::to_string(error));
+    return result;
+  }();
+  auto *value=static_cast<LocaleSelections*>(pthread_getspecific(key));
+  if(!value){
+    auto next=std::make_unique<LocaleSelections>();
+    const int error=pthread_setspecific(key,next.get());
+    if(error)throw std::runtime_error("locale thread storage publication failed: "+std::to_string(error));
+    value=next.release();
+  }
+  return *value;
+}
+#else
+thread_local LocaleSelections current_locales;
+LocaleSelections &CurrentLocales(){return current_locales;}
+#endif
+constexpr addr_t global_locale = UINT64_MAX;
+const char *const imports[] = {
+  "malloc", "calloc", "realloc", "free", "memalign", "posix_memalign", "aligned_alloc",
+  "memcpy", "memmove", "memset", "memcmp", "memchr", "memrchr",
+  "strlen", "strnlen", "strcmp", "strncmp", "strcpy", "strncpy", "strcat", "strncat", "strlcpy",
+  "strchr", "strrchr", "strstr", "strpbrk", "strspn", "strcspn", "strdup", "strndup", "strtok_r",
+  "strcasecmp", "strncasecmp", "strcoll", "strxfrm",
+  "isalnum", "isalpha", "isblank", "iscntrl", "isdigit", "isgraph", "islower", "isprint", "ispunct", "isspace", "isupper", "isxdigit", "tolower", "toupper",
+  "strtol", "strtoul", "strtoll", "strtoull", "atoi", "atol", "atoll", "strtod", "strtof", "atof",
+  "getenv", "setenv", "unsetenv", "__cxa_atexit", "__cxa_finalize", "atexit",
+  "__stack_chk_fail", "abort", "exit", "android_set_abort_message", "__ctype_get_mb_cur_max",
+  "sin", "sinf", "cos", "cosf", "tan", "tanf", "asin", "asinf", "acos", "acosf", "atan", "atanf", "atan2", "atan2f",
+  "exp", "expf", "exp2f", "log", "logf", "log10", "log10f", "log2f", "logb", "pow", "powf", "sqrt", "sqrtf", "hypot",
+  "fmod", "fmodf", "remainderf", "nearbyintf", "ldexp", "ldexpf", "scalbn", "frexpf", "modf", "modff", "getpagesize",
+  "newlocale", "freelocale", "uselocale", "clock", "sysconf", "gettimeofday", "getpid", "sscanf", "setlocale", "bsearch", "readlink", "uname", "time", "mktime", "localtime", "localtime_r", "gmtime", "gmtime_r", "strftime", "difftime", "sched_yield", "inet_pton", "getaddrinfo", "freeaddrinfo", "gai_strerror", "qsort"
+};
+bool Space(int c) { return c == ' ' || (c >= '\t' && c <= '\r'); }
+int Lower(int c) { return c >= 'A' && c <= 'Z' ? c + 32 : c; }
+int Upper(int c) { return c >= 'a' && c <= 'z' ? c - 32 : c; }
+int Digit(int c) { if(c>='0'&&c<='9')return c-'0';c=Lower(c);return c>='a'&&c<='z'?c-'a'+10:99; }
+int CompareCase(const char *a,const char *b,uint64_t count) {
+  for(uint64_t i=0;i<count;++i) { int x=Lower(static_cast<unsigned char>(a[i])),y=Lower(static_cast<unsigned char>(b[i]));if(x!=y)return x-y;if(!x)return 0; }return 0;
+}
+template <typename F,typename... A> auto Math(F function,A... args) {
+  errno=0;auto result=function(args...);return std::make_pair(result,errno);
+}
+template <typename T> auto ParseFloating(const char *input,char **end){
+  auto text=pm::String(input);char *finish=nullptr;
+  auto result=Math([&]{
+    if constexpr(std::is_same_v<T,float>)return std::strtof(text.c_str(),&finish);
+    else return std::strtod(text.c_str(),&finish);
+  });
+  if(end)pm::Write(end,const_cast<char*>(input+(finish-text.c_str())));return result;
+}
+}
+LibC::LibC(Runner runner,addr_t base):runner_(std::move(runner)),marker_base_(base) {
+  if((base&7)||base>UINT64_MAX-sizeof(imports)/sizeof(*imports)*8)throw std::invalid_argument("invalid libc marker base");
+  locale_owner_=next_locale_owner.fetch_add(1);
+  if(!locale_owner_)throw std::overflow_error("locale provider identity exhausted");
+  BuildEnvironment();
+}
+LibC::~LibC(){
+  for(const auto &entry:resolver_nodes_)pm::Free(entry.second);
+  for(const auto &entry:locales_)Free(entry.second.storage);
+  CurrentLocales().erase(locale_owner_);
+  recomp::InvalidateGuestMemory(pm::Address(&environment_slot_),sizeof(environment_slot_));
+  Free(environment_array_);for(auto text:environment_strings_)Free(text);
+}
+addr_t LibC::NewLocale(int32_t mask,const char *name,addr_t /*base*/){
+  // Android 13 LC_ALL_MASK excludes the LC_ALL pseudo-category bit (6).
+  // Bionic ignores base, even for a zero category mask, and allocates afresh.
+  if((uint32_t(mask)&~UINT32_C(0x1fbf))||!name){Fail(22);return 0;}
+  auto text=pm::String(name);
+  if(text!=""&&text!="C"&&text!="POSIX"&&text!="C.UTF-8"&&text!="en_US.UTF-8"){
+    Fail(2);return 0;
+  }
+  const uint64_t maximum=(text.empty()||text.find("UTF-8")!=std::string::npos)?4:1;
+  auto storage=static_cast<uint64_t*>(Malloc(sizeof(uint64_t)));
+  if(!storage)return 0;
+  try{
+    pm::Write(storage,maximum);
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
+    locales_.emplace(pm::Address(storage),Locale{storage,true});
+  }catch(const std::bad_alloc&){Free(storage);Fail(12);return 0;}
+  catch(...){Free(storage);throw;}
+  return pm::Address(storage);
+}
+void LibC::FreeLocale(addr_t locale){
+  if(!locale)return;
+  std::lock_guard<std::recursive_mutex> lock(mutex_);
+  auto found=locales_.find(locale);
+  if(found==locales_.end()||!found->second.active)
+    throw std::invalid_argument("freelocale requires an active locale owned by this provider");
+  // Quarantine backing storage until shutdown: stale handles never alias a
+  // newly created locale. The public API rejects the retired identity.
+  recomp::InvalidateGuestMemory(locale,sizeof(uint64_t));
+  found->second.active=false;
+}
+addr_t LibC::UseLocale(addr_t locale){
+  std::lock_guard<std::recursive_mutex> lock(mutex_);
+  if(locale&&locale!=global_locale){
+    auto found=locales_.find(locale);
+    if(found==locales_.end()||!found->second.active)
+      throw std::invalid_argument("uselocale requires an active locale owned by this provider");
+  }
+  auto &selections=CurrentLocales();
+  auto old=selections.find(locale_owner_);
+  const addr_t previous=old==selections.end()?global_locale:old->second;
+  if(locale)selections[locale_owner_]=locale;
+  return previous;
+}
+char *LibC::SetLocale(int32_t category,const char *name){
+  // Bionic validates the category before touching the optional name. All valid
+  // categories share one global C/UTF8 mode; the empty name is UTF8, not getenv.
+  if(category<0||category>12){Fail(22);return nullptr;}
+  std::string text;
+  if(name){
+    text=pm::String(name);
+    if(text!=""&&text!="C"&&text!="POSIX"&&text!="C.UTF-8"&&text!="en_US.UTF-8"){
+      Fail(2);return nullptr;
+    }
+  }
+  std::lock_guard<std::recursive_mutex> lock(mutex_);
+  if(name)global_locale_is_utf8_=text.empty()||text.find("UTF-8")!=std::string::npos;
+  // Like Bionic's literal results, these immutable canonical bytes have process
+  // lifetime. They are neither caller-owned nor a view of the input snapshot.
+  return const_cast<char*>(global_locale_is_utf8_?"C.UTF-8":"C");
+}
+uint64_t LibC::LocaleMbCurMax(){
+  std::lock_guard<std::recursive_mutex> lock(mutex_);
+  const auto locale=UseLocale(0);
+  // Android starts in C.UTF-8; only this guest process global selection changes.
+  if(locale==global_locale)return global_locale_is_utf8_?4:1;
+  auto found=locales_.find(locale);
+  if(found==locales_.end()||!found->second.active)
+    throw std::invalid_argument("current locale has been retired");
+  return pm::Read(found->second.storage);
+}
+int LibC::Error()const{return guest_error;}
+int64_t LibC::ProcessClock(){
+#ifdef _WIN32
+  FILETIME created{},exited{},kernel{},user{};
+  if(!GetProcessTimes(GetCurrentProcess(),&created,&exited,&kernel,&user)){
+    const auto error=GetLastError();Fail(error==ERROR_ACCESS_DENIED?13:error==ERROR_INVALID_PARAMETER?22:error==ERROR_NOT_ENOUGH_MEMORY?12:error==ERROR_NOT_SUPPORTED?95:5);return -1;
+  }
+  const uint64_t kernel_ticks=uint64_t(kernel.dwHighDateTime)<<32|kernel.dwLowDateTime;
+  const uint64_t user_ticks=uint64_t(user.dwHighDateTime)<<32|user.dwLowDateTime;
+  return libc_detail::CpuMicroseconds(kernel_ticks,user_ticks);
+#else
+  timespec value{};
+  if(::clock_gettime(CLOCK_PROCESS_CPUTIME_ID,&value)){Fail(errno?errno:5);return -1;}
+  if(value.tv_sec<0||value.tv_nsec<0||value.tv_nsec>=1000000000){Fail(5);return -1;}
+  if(uint64_t(value.tv_sec)>uint64_t(INT64_MAX)/1000000){Fail(75);return -1;}
+  const auto whole=uint64_t(value.tv_sec)*1000000,fraction=uint64_t(value.tv_nsec)/1000;
+  if(whole>uint64_t(INT64_MAX)-fraction){Fail(75);return -1;}
+  return static_cast<int64_t>(whole+fraction);
+#endif
+}
+int32_t LibC::GetTimeOfDay(addr_t output,addr_t timezone){
+  if(!output||timezone)throw std::runtime_error("unsupported gettimeofday shape: requires time output and NULL timezone");
+  libc_detail::Timeval value{};
+#ifdef _WIN32
+  FILETIME native{};GetSystemTimePreciseAsFileTime(&native);
+  value=libc_detail::UnixTimeval((uint64_t(native.dwHighDateTime)<<32)|native.dwLowDateTime);
+#else
+  timeval native{};if(::gettimeofday(&native,nullptr)){Fail(errno?errno:5);return -1;}
+  value={static_cast<int64_t>(native.tv_sec),static_cast<int64_t>(native.tv_usec)};
+#endif
+  recomp::WriteGuestMemory(output,&value,sizeof(value));return 0;
+}
+int32_t LibC::ProcessId()const{
+#ifdef _WIN32
+  const uint64_t native=GetCurrentProcessId();
+#else
+  const auto value=::getpid();
+  if(value<=0)throw std::runtime_error("native getpid returned an invalid process ID");
+  const uint64_t native=static_cast<uint64_t>(value);
+#endif
+  if(!native||native>uint64_t(INT32_MAX))
+    throw std::runtime_error("native process ID is not representable as Android signed32 pid_t");
+  return static_cast<int32_t>(native);
+}
+int64_t LibC::ReadLink(const char *path,void *output,uint64_t size){
+  // Android13 readlinkat enters a kernel int bufsiz, despite public size_t.
+  // Its signed low32 nonpositive check precedes all pointer/path access.
+  const uint32_t capacity=static_cast<uint32_t>(size);
+  if(!capacity||capacity>uint32_t(INT32_MAX)){Fail(22);return -1;}
+  if(!path){Fail(14);return -1;}
+  const auto name=pm::String(path,4096);
+  if(name.size()==4096){Fail(36);return -1;}
+  if(name.empty()){Fail(2);return -1;}
+  if(name!="/proc/self/exe"&&name!="/proc/"+std::to_string(ProcessId())+"/exe")
+    throw std::runtime_error("unsupported readlink path outside current-process executable profile");
+  if(!output){Fail(14);return -1;}
+  std::string target;
+#ifdef _WIN32
+  std::vector<wchar_t> native(256);
+  for(;;){
+    const DWORD count=GetModuleFileNameW(nullptr,native.data(),static_cast<DWORD>(native.size()));
+    if(!count)throw std::runtime_error("native process image query failed: Win32="+std::to_string(GetLastError()));
+    if(count<native.size()){
+      std::u16string wide;wide.reserve(count);for(DWORD i=0;i<count;++i)wide.push_back(static_cast<char16_t>(native[i]));
+      target=Utf8(wide);std::replace(target.begin(),target.end(),'\\','/');break;
+    }
+    if(native.size()>=32768)throw std::runtime_error("native process image path exceeds supported Windows WCHAR range");
+    native.resize(native.size()*2);
+  }
+#else
+  std::vector<char> native(256);
+  for(;;){
+    const auto count=::readlink("/proc/self/exe",native.data(),native.size());
+    if(count<0){const int error=errno;Fail(error?error:5);return -1;}
+    if(static_cast<size_t>(count)<native.size()){target.assign(native.data(),static_cast<size_t>(count));break;}
+    if(native.size()>=1048576)throw std::runtime_error("native process image path exceeds supported Linux range");
+    native.resize(native.size()*2);
+  }
+#endif
+  const auto bytes=std::min<uint64_t>(target.size(),capacity);
+  recomp::WriteGuestMemory(reinterpret_cast<addr_t>(output),target.data(),bytes);
+  return static_cast<int64_t>(bytes);
+}
+int64_t LibC::Sysconf(int32_t name){
+  if(name!=39&&name!=40&&name!=97){
+    if(libc_detail::AndroidSysconfName(name))throw std::runtime_error("unsupported Android sysconf name: "+std::to_string(name));
+    Fail(22);return -1;
+  }
+#ifdef _WIN32
+  if(name==39||name==40){SYSTEM_INFO info{};GetSystemInfo(&info);if(!info.dwPageSize){Fail(5);return -1;}return info.dwPageSize;}
+  const auto count=GetActiveProcessorCount(ALL_PROCESSOR_GROUPS);
+  if(!count){const auto error=GetLastError();Fail(error==ERROR_ACCESS_DENIED?13:error==ERROR_INVALID_PARAMETER?22:error==ERROR_NOT_ENOUGH_MEMORY?12:error==ERROR_NOT_SUPPORTED?95:5);return -1;}
+  return count;
+#else
+  errno=0;const auto value=::sysconf(name==97?_SC_NPROCESSORS_ONLN:_SC_PAGESIZE);
+  if(value<=0){Fail(errno?errno:5);return -1;}return static_cast<int64_t>(value);
+#endif
+}
+void LibC::Fail(int error)noexcept{guest_error=error;if(error_sink_)try{error_sink_(error);}catch(...){}}
+[[noreturn]] void LibC::Fatal(const char *why)noexcept{
+  std::fprintf(stderr,"Bunker guest libc fatal: %s\n",why);
+  try { std::lock_guard<std::recursive_mutex> lock(mutex_);
+    if(!abort_message_.empty())std::fprintf(stderr,"%s\n",abort_message_.c_str());
+  } catch (...) {}
+  std::abort();
+}
+addr_t LibC::Marker(const std::string &name)const{
+  if(name=="environ")return reinterpret_cast<addr_t>(&environment_slot_);
+  for(size_t i=0;i<sizeof(imports)/sizeof(*imports);++i)if(name==imports[i])return marker_base_+i*8;
+  throw std::invalid_argument("unsupported libc import: "+name);
+}
+template <typename Signature,typename F>void LibC::Add(recomp::Runtime &runtime,const char *name,F function){
+  auto bridge=recomp::MakeBridge<Signature>(std::move(function));
+  runtime.AddImport(Marker(name),[this,bridge=std::move(bridge),name](State &state){
+    try{bridge(state);}
+    catch(const std::exception &error){
+      std::fprintf(stderr,"Bunker guest libc import %s failed: %s\n",name,error.what());
+      std::fprintf(stderr,"  guest-pc=%#llx return=%#llx x0=%#llx x1=%#llx x2=%#llx x3=%#llx\n",
+        static_cast<unsigned long long>(state.gpr.pc.qword),static_cast<unsigned long long>(state.gpr.x30.qword),
+        static_cast<unsigned long long>(state.gpr.x0.qword),static_cast<unsigned long long>(state.gpr.x1.qword),
+        static_cast<unsigned long long>(state.gpr.x2.qword),static_cast<unsigned long long>(state.gpr.x3.qword));
+      Fatal(name);
+    }
+    catch(...){
+      std::fprintf(stderr,"Bunker guest libc import %s failed: non-standard C++ exception\n",name);
+      Fatal(name);
+    }
+  });
+}
+void *LibC::BinarySearch(const void *key,const void *base,uint64_t count,uint64_t size,addr_t comparator){
+  // Android 13's NetBSD implementation never evaluates unused arguments for an
+  // empty search. Width zero still invokes comparators and halves the count.
+  if(!count)return nullptr;
+  const addr_t original=pm::Address(base);
+  if((size&&count>UINT64_MAX/size)||original>UINT64_MAX-count*size)
+    throw std::overflow_error("bsearch array span is not representable");
+  if(!comparator||!runner_)
+    throw std::invalid_argument("bsearch requires a guest comparator runner and nonzero target");
+  // Preserve pointer identity and comparator side effects. No key/array snapshot,
+  // provider lock, tracked write, errno reset, or host function-pointer cast.
+  std::vector<addr_t> arguments{pm::Address(key),0};
+  addr_t first=original;
+  uint64_t remaining=count;
+  while(remaining){
+    const addr_t element=first+(remaining>>1)*size;
+    arguments[1]=element;
+    const uint32_t comparison=static_cast<uint32_t>(runner_(comparator,arguments));
+    if(!comparison)return reinterpret_cast<void*>(element);
+    // AAPCS64 int result is signed W0; X0's high bits carry no ordering meaning.
+    if(!(comparison&UINT32_C(0x80000000))){first=element+size;--remaining;}
+    remaining>>=1;
+  }
+  return nullptr;
+}
+void LibC::Sort(void *base,uint64_t count,uint64_t size,addr_t comparator){
+  if(count<2||!size)return;
+  const addr_t original=pm::Address(base);
+  if(count>UINT64_MAX/size||original>UINT64_MAX-count*size)throw std::overflow_error("qsort array span is not representable");
+  if(!comparator||!runner_)throw std::invalid_argument("qsort requires a guest comparator runner");
+  // A stable merge sort over element indices: the guest comparator always sees
+  // the unmoved original elements, then one permutation pass moves the bytes.
+  std::vector<uint64_t> order(count);for(uint64_t i=0;i<count;++i)order[i]=i;
+  std::vector<addr_t> arguments{0,0};
+  std::stable_sort(order.begin(),order.end(),[&](uint64_t a,uint64_t b){
+    arguments[0]=original+a*size;arguments[1]=original+b*size;
+    return (static_cast<uint32_t>(runner_(comparator,arguments))&UINT32_C(0x80000000))!=0;});
+  std::vector<unsigned char> copy(static_cast<size_t>(count*size));
+  std::memcpy(copy.data(),base,copy.size());
+  for(uint64_t i=0;i<count;++i)std::memcpy(static_cast<unsigned char*>(base)+i*size,copy.data()+order[i]*size,static_cast<size_t>(size));
+}
+void *LibC::Malloc(uint64_t size){
+  if(size>INT64_MAX){Fail(12);return nullptr;}auto p=pm::Allocate(static_cast<size_t>(size));if(!p)Fail(12);return p;
+}
+void *LibC::Calloc(uint64_t n,uint64_t size){
+  if(size&&n>uint64_t(INT64_MAX)/size){Fail(12);return nullptr;}uint64_t total=n*size;
+  auto p=Malloc(total);if(p)pm::Fill(p,0,static_cast<size_t>(total?total:1));return p;
+}
+void LibC::Free(void *p){
+  if(!p)return;std::lock_guard<std::recursive_mutex> lock(mutex_);auto i=aligned_.find(p);
+  if(i==aligned_.end())pm::Free(p);else{pm::Free(i->second.base);aligned_.erase(i);}
+}
+int32_t LibC::ResolveAddresses(const char *node,const char *service,addr_t hints,addr_t output){
+  libc_calendar::NativeEnvironment native_environment;
+  // Android returns this particular error before accessing hints or *res.
+  if(!node&&!service)return 8;
+  const auto h=hints?pm::Read(reinterpret_cast<const libc_resolver::AddrInfo*>(hints)):libc_resolver::AddrInfo{};
+  const auto node_text=node?pm::String(node):std::string{};
+  const auto service_text=service?pm::String(service):std::string{};
+  auto publish=[&](addr_t value){
+    if(!output||output>UINT64_MAX-sizeof(value))throw std::runtime_error("getaddrinfo output range is invalid");
+    bool copied=false;
+    recomp::WithGuestMemoryWrite(output,sizeof(value),[&]{
+#ifdef _WIN32
+      if(!libc_detail::uname_detail::Writable(output,sizeof(value)))return;
+      SIZE_T count=0;copied=WriteProcessMemory(GetCurrentProcess(),reinterpret_cast<void*>(output),&value,sizeof(value),&count)&&count==sizeof(value);
+#else
+      iovec local{&value,sizeof(value)},remote{reinterpret_cast<void*>(output),sizeof(value)};
+      const auto count=::syscall(SYS_process_vm_writev,::getpid(),&local,1,&remote,1,0);
+      copied=count==static_cast<ssize_t>(sizeof(value));
+#endif
+    });
+    if(!copied)throw std::runtime_error("getaddrinfo output is not fully writable");
+  };
+  publish(0);
+  if(const auto error=libc_resolver::Validate(h,service!=nullptr))return error;
+  const auto parsed=libc_resolver::ParseService(service_text);
+  if(service&&parsed.sets_error)Fail(parsed.error);
+  if(service&&parsed.numeric&&parsed.value>65535)return 9;
+  if(service&&!parsed.numeric&&(h.flags&8))return 8;
+  if(service&&service_text.empty())return 9;
+  if(node&&node_text.empty())return 8;
+  const auto native_service=service&&parsed.numeric?std::to_string(parsed.value):service_text;
+  try{
+    libc_resolver::Native native;
+    std::string normalized=node_text;
+    int numeric_family=0;
+    if(node){
+      const auto scope=node_text.find('%');
+      const auto address=libc_resolver::NormalizeAddress(node_text.substr(0,scope));
+      std::array<unsigned char,16> binary{};
+      if(scope==node_text.npos&&native.PtonAddress(2,address,binary.data())==1)numeric_family=2;
+      else if(native.PtonAddress(10,address,binary.data())==1)numeric_family=10;
+      if(numeric_family)normalized=address+(scope==node_text.npos?std::string{}:node_text.substr(scope));
+      if(numeric_family&&h.family&&h.family!=numeric_family)return 8;
+      if(!numeric_family&&(h.flags&4))return 8;
+    }
+    std::vector<std::pair<int,int>> modes;
+    if((h.type==0||h.type==2)&&(!h.protocol||h.protocol==17))modes.emplace_back(2,17);
+    if((h.type==0||h.type==1)&&(!h.protocol||h.protocol==6))modes.emplace_back(1,6);
+    if(h.type==3)modes.emplace_back(3,h.protocol);
+    if(modes.empty())return !node?7:(h.flags&4)?8:10;
+    std::vector<libc_resolver::Node> nodes;
+    int final_error=8;
+    for(const auto &mode:modes){
+      std::vector<libc_resolver::Node> found;
+      const int query_flags=node?(numeric_family?((h.flags&3)|4):h.flags):(h.flags&1);
+      // Raw results need address/protocol metadata, not a raw native socket.
+      // Native resolution through UDP yields those same address bytes; retain
+      // the caller's raw protocol in the translated addrinfo metadata.
+      int system_error=0;
+      const int error=native.Query(node?normalized.c_str():nullptr,service?native_service.c_str():nullptr,
+        numeric_family?numeric_family:h.family,mode.first==3?2:mode.first,mode.first==3?17:mode.second,query_flags,found,system_error);
+      if(error){if(error==11)Fail(system_error);final_error=error;continue;}
+      for(auto &entry:found){
+        entry.type=mode.first;entry.protocol=mode.second;
+        if(node&&numeric_family&&(h.flags&2)){entry.canonical=node_text;entry.has_canonical=true;}
+        if(!node||!(h.flags&2)){entry.canonical.clear();entry.has_canonical=false;}
+        nodes.push_back(std::move(entry));
+      }
+    }
+    if(nodes.empty())return final_error;
+    struct Block {void *pointer=nullptr;~Block(){pm::Free(pointer);}Block()=default;Block(const Block&)=delete;Block&operator=(const Block&)=delete;Block(Block&&b)noexcept:pointer(b.pointer){b.pointer=nullptr;}};
+    std::vector<Block> blocks;blocks.reserve(nodes.size());
+    for(const auto &entry:nodes){
+      const auto canonical_size=entry.has_canonical?entry.canonical.size()+1:size_t{0};
+      if(canonical_size>SIZE_MAX-sizeof(libc_resolver::AddrInfo)-entry.address.size()){Fail(12);return 6;}
+      blocks.emplace_back();blocks.back().pointer=pm::Allocate(sizeof(libc_resolver::AddrInfo)+entry.address.size()+canonical_size);
+      if(!blocks.back().pointer){Fail(12);return 6;}
+    }
+    for(size_t i=0;i<nodes.size();++i){
+      const auto &entry=nodes[i];const auto address=pm::Address(blocks[i].pointer);
+      libc_resolver::AddrInfo value{h.flags,entry.family,entry.type,entry.protocol,static_cast<uint32_t>(entry.address.size()),0,
+        entry.has_canonical?address+sizeof(libc_resolver::AddrInfo)+entry.address.size():0,address+sizeof(libc_resolver::AddrInfo),
+        i+1<nodes.size()?pm::Address(blocks[i+1].pointer):0};
+      recomp::WriteGuestMemory(address,&value,sizeof(value));
+      recomp::WriteGuestMemory(value.address,entry.address.data(),entry.address.size());
+      if(entry.has_canonical)recomp::WriteGuestMemory(value.canon,entry.canonical.c_str(),entry.canonical.size()+1);
+    }
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
+    std::vector<addr_t> inserted;inserted.reserve(blocks.size());
+    try{
+      for(const auto &block:blocks){
+        const auto address=pm::Address(block.pointer);
+        if(!resolver_nodes_.emplace(address,block.pointer).second)throw std::logic_error("resolver allocation identity collision");
+        inserted.push_back(address);
+      }
+      publish(pm::Address(blocks.front().pointer));
+    }catch(...){for(const auto address:inserted)resolver_nodes_.erase(address);throw;}
+    for(auto &block:blocks)block.pointer=nullptr;
+    return 0;
+  }catch(const std::bad_alloc&){Fail(12);return 6;}
+}
+void LibC::ReleaseAddresses(addr_t list){
+  libc_calendar::NativeEnvironment native_environment;
+  std::lock_guard<std::recursive_mutex> lock(mutex_);
+  // Follow the current caller-visible chain, as Bionic does. A detached suffix
+  // is independently releasable; do not rewrite a caller's predecessor node.
+  while(list){
+    const auto found=resolver_nodes_.find(list);
+    if(found==resolver_nodes_.end())throw std::invalid_argument("freeaddrinfo requires a live node owned by this provider");
+    const auto value=pm::Read(reinterpret_cast<const libc_resolver::AddrInfo*>(list));
+    auto *block=found->second;resolver_nodes_.erase(found);pm::Free(block);list=value.next;
+  }
+}
+const char *LibC::GaiStrError(int32_t error){
+  libc_calendar::NativeEnvironment native_environment;
+  const auto *text=libc_resolver::ErrorText(error);
+  // String literals are immutable process-lifetime values, but invalidate any
+  // preexisting guest-memory cache before their first publication.
+  recomp::InvalidateGuestMemory(pm::Address(text),std::strlen(text)+1);
+  return text;
+}
+void *LibC::AlignedAllocate(uint64_t alignment,uint64_t size,bool set_errno){
+  if(!alignment||(alignment&(alignment-1))){if(set_errno)Fail(22);return nullptr;}
+  alignment=std::max<uint64_t>(alignment,16);
+  if(alignment>uint64_t(INT64_MAX)||size>uint64_t(INT64_MAX)-alignment){if(set_errno)Fail(12);return nullptr;}
+  void *base=pm::Allocate(static_cast<size_t>((size?size:1)+alignment));
+  if(!base){if(set_errno)Fail(12);return nullptr;}
+  auto p=reinterpret_cast<void *>((reinterpret_cast<uintptr_t>(base)+alignment-1)&~uintptr_t(alignment-1));
+  try{std::lock_guard<std::recursive_mutex> lock(mutex_);aligned_.emplace(p,Aligned{base,size,alignment});}
+  catch(...){pm::Free(base);if(set_errno)Fail(12);return nullptr;}return p;
+}
+void *LibC::Memalign(uint64_t alignment,uint64_t size){return AlignedAllocate(alignment,size,true);}
+int LibC::PosixMemalign(void **out,uint64_t alignment,uint64_t size){
+  if(!out||alignment<sizeof(void*)||(alignment&(alignment-1)))return 22;
+  auto p=AlignedAllocate(alignment,size,false);if(!p)return 12;pm::Write(out,p);return 0;
+}
+void *LibC::Realloc(void *p,uint64_t size){
+  if(!p)return Malloc(size);if(!size){Free(p);return nullptr;}if(size>INT64_MAX){Fail(12);return nullptr;}
+  std::lock_guard<std::recursive_mutex> lock(mutex_);auto i=aligned_.find(p);
+  if(i!=aligned_.end()){
+    const auto old=i->second;auto q=AlignedAllocate(old.alignment,size,true);if(!q)return nullptr;
+    try{pm::Copy(q,p,static_cast<size_t>(std::min(size,old.size)));}
+    catch(const std::bad_alloc&){Free(q);Fail(12);return nullptr;}
+    Free(p);return q;
+  }
+  auto q=pm::Reallocate(p,static_cast<size_t>(size));if(!q)Fail(12);return q;
+}
+uint64_t LibC::ParseInteger(const char *text,char **end,int base,bool is_signed){
+  if(end)pm::Write(end,const_cast<char*>(text));
+  if(!text||base<0||base==1||base>36){Fail(22);return 0;}
+  const auto snapshot=pm::String(text);const char *p=snapshot.c_str();while(Space(static_cast<unsigned char>(*p)))++p;
+  bool negative=*p=='-';if(*p=='-'||*p=='+')++p;
+  if((base==0||base==16)&&p[0]=='0'&&(p[1]=='x'||p[1]=='X')&&Digit(static_cast<unsigned char>(p[2]))<16){base=16;p+=2;}
+  // Target Android 13/API 33: only hex/octal prefixes. Binary prefixes were
+  // added in Android 14/API 34, so "0b2" consumes just its leading zero here.
+  if(!base)base=*p=='0'?8:10;
+  const uint64_t limit=is_signed?(negative?UINT64_C(1)<<63:uint64_t(INT64_MAX)):UINT64_MAX;
+  uint64_t value=0;bool any=false,overflow=false;
+  for(int digit;(digit=Digit(static_cast<unsigned char>(*p)))<base;++p){
+    any=true;if(value>(limit-unsigned(digit))/unsigned(base))overflow=true;
+    else if(!overflow)value=value*unsigned(base)+unsigned(digit);
+  }
+  if(!any)return 0;if(end)pm::Write(end,const_cast<char*>(text+(p-snapshot.c_str())));
+  if(overflow){Fail(34);return is_signed&&negative?UINT64_C(1)<<63:limit;}
+  return negative?uint64_t(0)-value:value;
+}
+int32_t LibC::ScanUnsignedLongLong(const char *input,const char *format,uint64_t *output){
+  // Snapshot both strings before any output effects, including input/output aliases.
+  // Android 13 vfscanf copies at most BUF-1 (512) token bytes before strtoumax.
+  const auto pattern=pm::String(format);
+  if(pattern!="%llu")throw std::runtime_error("sscanf format is outside the exact %llu profile");
+  const auto text=pm::String(input);
+  size_t first=0;
+  while(first<text.size()&&Space(static_cast<unsigned char>(text[first])))++first;
+  if(first==text.size())return -1;
+  size_t cursor=first;
+  const bool negative=text[cursor]=='-';
+  if(text[cursor]=='+'||text[cursor]=='-')++cursor;
+  bool any=false,overflow=false;
+  uint64_t value=0;
+  while(cursor<text.size()&&cursor-first<512){
+    const unsigned char c=static_cast<unsigned char>(text[cursor]);
+    if(c<'0'||c>'9')break;
+    any=true;
+    const unsigned digit=c-'0';
+    if(value>(UINT64_MAX-digit)/10)overflow=true;
+    else if(!overflow)value=value*10+digit;
+    ++cursor;
+  }
+  if(!any)return 0;
+  if(overflow){value=UINT64_MAX;Fail(34);}
+  else if(negative)value=uint64_t(0)-value;
+  pm::Write(output,value);
+  return 1;
+}
+int32_t LibC::Scan(const char *input,const char *format,addr_t output0,addr_t output1,addr_t output2,addr_t output3){
+  libc_calendar::NativeEnvironment native;
+  const auto pattern=pm::String(format);
+  if(pattern=="%llu")return ScanUnsignedLongLong(input,format,reinterpret_cast<uint64_t*>(output0));
+  enum class Profile { Scheme,Authority,NoScheme,Bracket,HttpStatus,ParenthesizedUnsigned };
+  Profile profile;
+  size_t conversions;
+  if(pattern=="%15[^:]:%[^\n]"){profile=Profile::Scheme;conversions=2;}
+  else if(pattern=="%15[^\n:]:%3[/]%[^\n/?#]%[^\n]"){profile=Profile::Authority;conversions=4;}
+  else if(pattern=="%[^\n/?#]%[^\n]"){profile=Profile::NoScheme;conversions=2;}
+  else if(pattern=="[%*45[0123456789abcdefABCDEF:.]%c"){profile=Profile::Bracket;conversions=1;}
+  else if(pattern==" HTTP/%d.%d %d"||pattern==" RTSP/%d.%d %3d"){profile=Profile::HttpStatus;conversions=3;}
+  else if(pattern==" HTTP/2 %d"||pattern==" HTTP %3d"){profile=Profile::HttpStatus;conversions=1;}
+  else if(pattern=="(%u)"){profile=Profile::ParenthesizedUnsigned;conversions=1;}
+  else throw std::runtime_error("sscanf format is outside the exact qualified profiles");
+  // Never expose guest output pointers to the native variadic CRT. Snapshot
+  // input and format before output effects, including input/format aliases.
+  const auto text=pm::String(input);
+  if(text.size()==SIZE_MAX)throw std::overflow_error("sscanf staging size overflows");
+  const bool numeric=profile==Profile::HttpStatus||profile==Profile::ParenthesizedUnsigned;
+  std::array<std::vector<char>,4> buffers;
+  for(size_t i=0;i<conversions;++i)buffers[i].resize(numeric?sizeof(uint32_t):text.size()+1);
+  int result;
+  switch(profile){
+    case Profile::Scheme:result=std::sscanf(text.c_str(),"%15[^:]:%[^\n]",buffers[0].data(),buffers[1].data());break;
+    case Profile::Authority:result=std::sscanf(text.c_str(),"%15[^\n:]:%3[/]%[^\n/?#]%[^\n]",buffers[0].data(),buffers[1].data(),buffers[2].data(),buffers[3].data());break;
+    case Profile::NoScheme:result=std::sscanf(text.c_str(),"%[^\n/?#]%[^\n]",buffers[0].data(),buffers[1].data());break;
+    case Profile::Bracket:result=std::sscanf(text.c_str(),"[%*45[0123456789abcdefABCDEF:.]%c",buffers[0].data());break;
+    case Profile::HttpStatus:
+    case Profile::ParenthesizedUnsigned: {
+      // Android13 vfscanf uses a 512-byte numeric token and LP64 strtoimax or
+      // strtoumax, then narrows to 32 bits. Native Windows conversions differ
+      // on overflow. Admit only the four original HTTP/RTSP formats and (%u);
+      // %3d includes the sign in its width. This is not arbitrary scanf grammar.
+      const bool is_unsigned=profile==Profile::ParenthesizedUnsigned;
+      size_t cursor=0,format_cursor=0;
+      auto whitespace=[&]{while(cursor<text.size()&&Space(static_cast<unsigned char>(text[cursor])))++cursor;};
+      result=0;
+      while(format_cursor<pattern.size()){
+        const auto expected=static_cast<unsigned char>(pattern[format_cursor++]);
+        if(Space(expected)){whitespace();continue;}
+        if(expected!='%'){
+          if(cursor==text.size()){if(!result)result=-1;break;}
+          if(static_cast<unsigned char>(text[cursor])!=expected)break;
+          ++cursor;
+          continue;
+        }
+        size_t width=512;
+        if(pattern[format_cursor]=='3'){width=3;++format_cursor;}
+        if(pattern[format_cursor++]!=(is_unsigned?'u':'d'))throw std::logic_error("invalid admitted numeric scanner conversion");
+        whitespace();
+        if(cursor==text.size()){if(!result)result=-1;break;}
+        const auto first=cursor;
+        const bool negative=text[cursor]=='-';
+        if(text[cursor]=='+'||text[cursor]=='-')++cursor;
+        const uint64_t limit=is_unsigned?UINT64_MAX:negative?(UINT64_C(1)<<63):uint64_t(INT64_MAX);
+        uint64_t value=0;
+        bool any=false,overflow=false;
+        while(cursor<text.size()&&cursor-first<width){
+          const auto c=static_cast<unsigned char>(text[cursor]);
+          if(c<'0'||c>'9')break;
+          any=true;
+          const unsigned digit=c-'0';
+          if(value>(limit-digit)/10)overflow=true;
+          else if(!overflow)value=value*10+digit;
+          ++cursor;
+        }
+        if(!any)break;
+        if(overflow){value=limit;Fail(34);}
+        // Bionic StrToU leaves saturated UINT64_MAX unchanged on overflow,
+        // including a negative token; ordinary negative tokens wrap modulo64.
+        const auto bits=static_cast<uint32_t>(negative&&!(is_unsigned&&overflow)?uint64_t(0)-value:value);
+        std::memcpy(buffers[result].data(),&bits,sizeof(bits));
+        ++result;
+      }
+      break;
+    }
+  }
+  if(result<EOF||result>static_cast<int>(conversions))throw std::runtime_error("native sscanf returned an invalid assignment count");
+  const addr_t outputs[]={output0,output1,output2,output3};
+  // Publish only actual assignments, in conversion order. This is not a
+  // transaction across output fields; a later invalid pointer can reject after
+  // a preceding assignment was published. Suppressed/unassigned fields have no
+  // output access. Pointer misuse remains outside the valid C scanf contract.
+  for(int i=0;i<result;++i){
+    const auto size=numeric?sizeof(uint32_t):profile==Profile::Bracket?size_t{1}:std::strlen(buffers[i].data())+1;
+    const auto address=outputs[i];
+    if(!address||address>std::numeric_limits<addr_t>::max()-size)throw std::runtime_error("sscanf assigned output address/range is invalid");
+    bool copied=false;
+    recomp::WithGuestMemoryWrite(address,size,[&]{
+#ifdef _WIN32
+      if(!libc_detail::uname_detail::Writable(address,size))return;
+      SIZE_T count=0;
+      copied=WriteProcessMemory(GetCurrentProcess(),reinterpret_cast<void*>(address),buffers[i].data(),size,&count)&&count==size;
+#else
+      iovec local{buffers[i].data(),size};
+      iovec remote{reinterpret_cast<void*>(address),size};
+      const auto count=::syscall(SYS_process_vm_writev,::getpid(),&local,1,&remote,1,0);
+      copied=count==static_cast<decltype(count)>(size);
+#endif
+    });
+    if(!copied)throw std::runtime_error("sscanf assigned output is not fully writable");
+  }
+  return static_cast<int32_t>(result);
+}
+void LibC::BuildEnvironment(){
+  std::vector<char*> next;
+  char **array=nullptr;
+  try{
+    next.reserve(environment_.size()+1);
+    for(const auto &entry:environment_){
+      auto value=entry.first+'='+entry.second;auto text=static_cast<char*>(Malloc(value.size()+1));
+      if(!text)throw std::bad_alloc();next.push_back(text);
+      recomp::WriteGuestMemory(pm::Address(text),value.c_str(),value.size()+1);
+    }
+    next.push_back(nullptr);array=static_cast<char**>(Malloc(next.size()*sizeof(char*)));
+    if(!array)throw std::bad_alloc();
+    recomp::WriteGuestMemory(pm::Address(array),next.data(),next.size()*sizeof(char*));next.pop_back();
+  }catch(...){Free(array);for(auto p:next)Free(p);throw;}
+  pm::Write(&environment_slot_,array);
+  auto previous=environment_array_;environment_array_=array;environment_strings_.swap(next);
+  Free(previous);for(auto text:next)Free(text);
+}
+void LibC::SetEnvironment(std::map<std::string,std::string> values){
+  for(auto &v:values)if(v.first.empty()||v.first.find('=')!=std::string::npos||v.first.find('\0')!=std::string::npos||v.second.find('\0')!=std::string::npos)throw std::invalid_argument("invalid virtual environment");
+  std::lock_guard<std::recursive_mutex> lock(mutex_);environment_=std::move(values);BuildEnvironment();
+}
+char *LibC::Getenv(const char *name){
+  if(!name)return nullptr;auto key=pm::String(name);std::lock_guard<std::recursive_mutex> lock(mutex_);auto i=environment_.find(key);
+  return i==environment_.end()?nullptr:environment_strings_[std::distance(environment_.begin(),i)]+key.size()+1;
+}
+int LibC::Setenv(const char *name,const char *value,int overwrite){
+  if(!name||!value){Fail(22);return -1;}auto key=pm::String(name),text=pm::String(value);
+  if(key.empty()||key.find('=')!=std::string::npos){Fail(22);return -1;}
+  std::lock_guard<std::recursive_mutex> lock(mutex_);if(!overwrite&&environment_.count(key))return 0;
+  environment_[key]=std::move(text);BuildEnvironment();return 0;
+}
+int LibC::Unsetenv(const char *name){
+  if(!name){Fail(22);return -1;}auto key=pm::String(name);
+  if(key.empty()||key.find('=')!=std::string::npos){Fail(22);return -1;}
+  std::lock_guard<std::recursive_mutex> lock(mutex_);environment_.erase(key);BuildEnvironment();return 0;
+}
+int LibC::RegisterExit(addr_t callback,addr_t argument,addr_t dso,bool plain){
+  if(!runner_||!callback){Fail(22);return -1;}std::lock_guard<std::recursive_mutex> lock(mutex_);
+  try{exits_.push_back({callback,argument,dso,plain,false});}catch(...){Fail(12);return -1;}return 0;
+}
+void LibC::Finalize(addr_t dso){
+  for(;;){Exit entry{};bool found=false;{
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
+    for(auto i=exits_.rbegin();i!=exits_.rend();++i)if(!i->called&&(!dso||i->dso==dso)){i->called=true;entry=*i;found=true;break;}
+  }if(!found)return;
+    try{runner_(entry.callback,entry.plain?std::vector<addr_t>{}:std::vector<addr_t>{entry.argument});}
+    catch(...){
+      char context[224];
+      std::snprintf(context,sizeof(context),"__cxa_finalize callback=%#llx argument=%#llx dso=%#llx filter=%#llx%s: ",
+        static_cast<unsigned long long>(entry.callback),static_cast<unsigned long long>(entry.argument),
+        static_cast<unsigned long long>(entry.dso),static_cast<unsigned long long>(dso),entry.plain?" plain-atexit":"");
+      try{throw;}catch(const std::exception &error){throw std::runtime_error(std::string(context)+error.what());}
+      catch(...){throw std::runtime_error(std::string(context)+"non-standard C++ exception");}
+    }
+  }
+}
+void LibC::Install(recomp::Runtime &runtime){
+  if(installed_)throw std::logic_error("libc imports already installed");
+  Add<char*(int32_t,const char*)>(runtime,"setlocale",[this](auto category,auto name){return SetLocale(category,name);});
+  Add<void(void*,uint64_t,uint64_t,addr_t)>(runtime,"qsort",[this](auto base,auto count,auto size,auto comparator){Sort(base,count,size,comparator);});
+  Add<void*(const void*,const void*,uint64_t,uint64_t,addr_t)>(runtime,"bsearch",[this](auto key,auto base,auto count,auto size,auto comparator){return BinarySearch(key,base,count,size,comparator);});
+  Add<int32_t(const char*,const char*,addr_t,addr_t,addr_t,addr_t)>(runtime,"sscanf",[this](auto input,auto format,auto a,auto b,auto c,auto d){return Scan(input,format,a,b,c,d);});
+  Add<void*(uint64_t)>(runtime,"malloc",[this](auto n){return Malloc(n);});
+  Add<void*(uint64_t,uint64_t)>(runtime,"calloc",[this](auto n,auto s){return Calloc(n,s);});
+  Add<void*(void*,uint64_t)>(runtime,"realloc",[this](auto p,auto n){return Realloc(p,n);});
+  Add<void(void*)>(runtime,"free",[this](auto p){Free(p);});
+  Add<void*(uint64_t,uint64_t)>(runtime,"memalign",[this](auto a,auto n){return Memalign(a,n);});
+  Add<int32_t(void**,uint64_t,uint64_t)>(runtime,"posix_memalign",[this](auto p,auto a,auto n){return PosixMemalign(p,a,n);});
+  Add<void*(uint64_t,uint64_t)>(runtime,"aligned_alloc",[this](auto a,auto n)->void*{if(!a||n%a){Fail(22);return nullptr;}return Memalign(a,n);});
+  for(auto name:{"memcpy","memmove"})Add<void*(void*,const void*,uint64_t)>(runtime,name,pm::Copy);
+  Add<void*(void*,int32_t,uint64_t)>(runtime,"memset",pm::Fill);
+  // Guest memory is identity-mapped host memory: the hot read-only string and
+  // byte helpers (IL2CPP metadata lookups) compare in place instead of copying.
+  // Null keeps the checked path so it still reports the guest fault.
+  Add<int32_t(const void*,const void*,uint64_t)>(runtime,"memcmp",[](auto a,auto b,auto n){if(!n)return 0;if(a&&b)return std::memcmp(a,b,n);auto x=pm::Bytes(a,n),y=pm::Bytes(b,n);return std::memcmp(x.data(),y.data(),n);});
+  Add<const void*(const void*,int32_t,uint64_t)>(runtime,"memchr",[](auto p,auto c,auto n)->const void*{if(!n)return nullptr;auto bytes=pm::Bytes(p,n);auto found=static_cast<const unsigned char*>(std::memchr(bytes.data(),c,n));return found?static_cast<const unsigned char*>(p)+(found-bytes.data()):nullptr;});
+  Add<const void*(const void*,int32_t,uint64_t)>(runtime,"memrchr",[](auto p,auto c,auto n)->const void*{auto bytes=pm::Bytes(p,n);while(n)if(bytes[--n]==static_cast<unsigned char>(c))return static_cast<const unsigned char*>(p)+n;return nullptr;});
+  Add<uint64_t(const char*)>(runtime,"strlen",[](auto s){return s?uint64_t(std::strlen(s)):uint64_t(pm::String(s).size());});
+  Add<uint64_t(const char*,uint64_t)>(runtime,"strnlen",[](auto s,auto n){return uint64_t(pm::String(s,n).size());});
+  for(auto name:{"strcmp","strcoll"})Add<int32_t(const char*,const char*)>(runtime,name,[](auto a,auto b){if(a&&b)return std::strcmp(a,b);auto x=pm::String(a),y=pm::String(b);return std::strcmp(x.c_str(),y.c_str());});
+  Add<int32_t(const char*,const char*,uint64_t)>(runtime,"strncmp",[](auto a,auto b,auto n){if(a&&b)return std::strncmp(a,b,n);auto x=pm::String(a,n),y=pm::String(b,n);return std::strncmp(x.c_str(),y.c_str(),n);});
+  Add<char*(char*,const char*)>(runtime,"strcpy",[](auto a,auto b){auto text=pm::String(b);recomp::WriteGuestMemory(pm::Address(a),text.c_str(),text.size()+1);return a;});
+  Add<char*(char*,const char*,uint64_t)>(runtime,"strncpy",[](auto a,auto b,auto n){auto text=pm::String(b,n);std::vector<char> result(n,0);if(!text.empty())std::memcpy(result.data(),text.data(),text.size());recomp::WriteGuestMemory(pm::Address(a),result.data(),n);return a;});
+  Add<char*(char*,const char*)>(runtime,"strcat",[](auto a,auto b){auto prefix=pm::String(a),text=pm::String(b);recomp::WriteGuestMemory(pm::Address(a)+prefix.size(),text.c_str(),text.size()+1);return a;});
+  Add<char*(char*,const char*,uint64_t)>(runtime,"strncat",[](auto a,auto b,auto n){auto prefix=pm::String(a),text=pm::String(b,n);recomp::WriteGuestMemory(pm::Address(a)+prefix.size(),text.c_str(),text.size()+1);return a;});
+  Add<uint64_t(char*,const char*,uint64_t)>(runtime,"strlcpy",[](auto d,auto s,auto n){auto text=pm::String(s);auto length=text.size();if(n){text.resize(std::min<uint64_t>(length,n-1));recomp::WriteGuestMemory(pm::Address(d),text.c_str(),text.size()+1);}return uint64_t(length);});
+  Add<uint64_t(char*,const char*,uint64_t)>(runtime,"strxfrm",[](auto d,auto s,auto n){auto text=pm::String(s);if(n>text.size())recomp::WriteGuestMemory(pm::Address(d),text.c_str(),text.size()+1);return uint64_t(text.size());});
+  Add<const char*(const char*,int32_t)>(runtime,"strchr",[](auto s,auto c){auto text=pm::String(s);return pm::Locate(s,text,std::strchr(text.c_str(),c));});
+  Add<const char*(const char*,int32_t)>(runtime,"strrchr",[](auto s,auto c){auto text=pm::String(s);return pm::Locate(s,text,std::strrchr(text.c_str(),c));});
+  Add<const char*(const char*,const char*)>(runtime,"strstr",[](auto s,auto t){auto text=pm::String(s),needle=pm::String(t);return pm::Locate(s,text,std::strstr(text.c_str(),needle.c_str()));});
+  Add<const char*(const char*,const char*)>(runtime,"strpbrk",[](auto s,auto t){auto text=pm::String(s),set=pm::String(t);return pm::Locate(s,text,std::strpbrk(text.c_str(),set.c_str()));});
+  Add<uint64_t(const char*,const char*)>(runtime,"strspn",[](auto s,auto t){auto text=pm::String(s),set=pm::String(t);return uint64_t(std::strspn(text.c_str(),set.c_str()));});
+  Add<uint64_t(const char*,const char*)>(runtime,"strcspn",[](auto s,auto t){auto text=pm::String(s),set=pm::String(t);return uint64_t(std::strcspn(text.c_str(),set.c_str()));});
+  for(auto name:{"strdup","strndup"}){
+    auto dup=[this](const char*s,uint64_t n)->char*{auto text=pm::String(s,n);auto d=static_cast<char*>(Malloc(text.size()+1));if(d)recomp::WriteGuestMemory(pm::Address(d),text.c_str(),text.size()+1);return d;};
+    if(std::strcmp(name,"strdup")==0)Add<char*(const char*)>(runtime,name,[dup](auto s){return dup(s,UINT64_MAX);});
+    else Add<char*(const char*,uint64_t)>(runtime,name,dup);
+  }
+  Add<char*(char*,const char*,char**)>(runtime,"strtok_r",[](char*s,const char*sep,char**save)->char*{
+    if(!s)s=pm::Read(save);if(!s)return nullptr;auto text=pm::String(s),set=pm::String(sep);
+    size_t start=std::strspn(text.c_str(),set.c_str());if(start==text.size()){pm::Write(save,s+start);return nullptr;}
+    size_t end=start+std::strcspn(text.c_str()+start,set.c_str());bool delimiter=end<text.size();
+    if(delimiter)pm::Write(s+end,char(0));pm::Write(save,s+end+size_t(delimiter));return s+start;});
+  Add<int32_t(const char*,const char*)>(runtime,"strcasecmp",[](auto a,auto b){auto x=pm::String(a),y=pm::String(b);return CompareCase(x.c_str(),y.c_str(),UINT64_MAX);});
+  Add<int32_t(const char*,const char*,uint64_t)>(runtime,"strncasecmp",[](auto a,auto b,auto n){auto x=pm::String(a,n),y=pm::String(b,n);return CompareCase(x.c_str(),y.c_str(),n);});
+  for(auto name:{"isalnum","isalpha","isblank","iscntrl","isdigit","isgraph","islower","isprint","ispunct","isspace","isupper","isxdigit"}){
+    Add<int32_t(int32_t)>(runtime,name,[name](int32_t c){bool lower=c>='a'&&c<='z',upper=c>='A'&&c<='Z',digit=c>='0'&&c<='9',graph=c>=33&&c<=126;
+      if(!std::strcmp(name,"isalnum"))return int(lower||upper||digit);if(!std::strcmp(name,"isalpha"))return int(lower||upper);
+      if(!std::strcmp(name,"isblank"))return int(c==' '||c=='\t');if(!std::strcmp(name,"iscntrl"))return int((c>=0&&c<32)||c==127);
+      if(!std::strcmp(name,"isdigit"))return int(digit);if(!std::strcmp(name,"isgraph"))return int(graph);
+      if(!std::strcmp(name,"islower"))return int(lower);if(!std::strcmp(name,"isprint"))return int(c>=32&&c<=126);
+      if(!std::strcmp(name,"ispunct"))return int(graph&&!lower&&!upper&&!digit);if(!std::strcmp(name,"isspace"))return int(Space(c));
+      if(!std::strcmp(name,"isupper"))return int(upper);return int(Digit(c)<16);
+    });
+  }
+  Add<int32_t(int32_t)>(runtime,"tolower",Lower);Add<int32_t(int32_t)>(runtime,"toupper",Upper);
+  for(auto name:{"strtol","strtoll","strtoul","strtoull"})Add<uint64_t(const char*,char**,int32_t)>(runtime,name,[this,name](auto s,auto e,auto b){return ParseInteger(s,e,b,std::strcmp(name,"strtoul")&&std::strcmp(name,"strtoull"));});
+  Add<int32_t(const char*)>(runtime,"atoi",[this](auto s){return static_cast<int32_t>(ParseInteger(s,nullptr,10,true));});
+  for(auto name:{"atol","atoll"})Add<uint64_t(const char*)>(runtime,name,[this](auto s){return ParseInteger(s,nullptr,10,true);});
+  Add<double(const char*,char**)>(runtime,"strtod",[this](auto s,auto e){auto r=ParseFloating<double>(s,e);if(r.second)Fail(r.second==ERANGE?34:22);return r.first;});
+  Add<float(const char*,char**)>(runtime,"strtof",[this](auto s,auto e){auto r=ParseFloating<float>(s,e);if(r.second)Fail(r.second==ERANGE?34:22);return r.first;});
+  Add<double(const char*)>(runtime,"atof",[this](auto s){auto r=ParseFloating<double>(s,nullptr);if(r.second)Fail(r.second==ERANGE?34:22);return r.first;});
+  Add<char*(const char*)>(runtime,"getenv",[this](auto n){return Getenv(n);});
+  Add<int32_t(const char*,const char*,int32_t)>(runtime,"setenv",[this](auto n,auto v,auto o){return Setenv(n,v,o);});
+  Add<int32_t(const char*)>(runtime,"unsetenv",[this](auto n){return Unsetenv(n);});
+  Add<int32_t(addr_t,addr_t,addr_t)>(runtime,"__cxa_atexit",[this](auto c,auto a,auto d){return RegisterExit(c,a,d);});
+  Add<void(addr_t)>(runtime,"__cxa_finalize",[this](auto d){Finalize(d);});
+  Add<int32_t(addr_t)>(runtime,"atexit",[this](auto c){return RegisterExit(c,0,0,true);});
+  Add<void()>(runtime,"__stack_chk_fail",[this]{Fatal("stack protector check failed");});
+  Add<void()>(runtime,"abort",[this]{Fatal("abort");});
+  Add<void(int32_t)>(runtime,"exit",[this](auto code){Finalize();std::exit(code);});
+  Add<void(const char*)>(runtime,"android_set_abort_message",[this](auto s){auto message=s?pm::String(s):std::string();std::lock_guard<std::recursive_mutex> lock(mutex_);abort_message_=std::move(message);});
+  Add<uint64_t()>(runtime,"__ctype_get_mb_cur_max",[this]{return LocaleMbCurMax();});
+#define MATH1(name,type) Add<type(type)>(runtime,#name,[this](type x){auto r=Math([](type v){return ::name(v);},x);if(r.second)Fail(r.second==EDOM?33:34);return r.first;})
+#define MATH2(name,type) Add<type(type,type)>(runtime,#name,[this](type x,type y){auto r=Math([](type a,type b){return ::name(a,b);},x,y);if(r.second)Fail(r.second==EDOM?33:34);return r.first;})
+  MATH1(sin,double);MATH1(sinf,float);MATH1(cos,double);MATH1(cosf,float);MATH1(tan,double);MATH1(tanf,float);
+  MATH1(asin,double);MATH1(asinf,float);MATH1(acos,double);MATH1(acosf,float);MATH1(atan,double);MATH1(atanf,float);
+  MATH2(atan2,double);MATH2(atan2f,float);MATH1(exp,double);MATH1(expf,float);MATH1(exp2f,float);
+  MATH1(log,double);MATH1(logf,float);MATH1(log10,double);MATH1(log10f,float);MATH1(log2f,float);MATH1(logb,double);
+  MATH2(pow,double);MATH2(powf,float);MATH1(sqrt,double);MATH1(sqrtf,float);MATH2(hypot,double);
+  MATH2(fmod,double);MATH2(fmodf,float);MATH2(remainderf,float);MATH1(nearbyintf,float);
+#undef MATH1
+#undef MATH2
+  Add<double(double,int32_t)>(runtime,"ldexp",[this](auto x,auto n){auto r=Math([](double a,int b){return std::ldexp(a,b);},x,n);if(r.second)Fail(34);return r.first;});
+  Add<float(float,int32_t)>(runtime,"ldexpf",[this](auto x,auto n){auto r=Math([](float a,int b){return std::ldexp(a,b);},x,n);if(r.second)Fail(34);return r.first;});
+  Add<double(double,int32_t)>(runtime,"scalbn",[this](auto x,auto n){auto r=Math([](double a,int b){return std::scalbn(a,b);},x,n);if(r.second)Fail(34);return r.first;});
+  Add<float(float,int32_t*)>(runtime,"frexpf",[](auto x,auto p){int32_t exponent;auto fraction=std::frexp(x,&exponent);pm::Write(p,exponent);return fraction;});
+  Add<double(double,double*)>(runtime,"modf",[](auto x,auto p){double integral;auto fraction=std::modf(x,&integral);pm::Write(p,integral);return fraction;});
+  Add<float(float,float*)>(runtime,"modff",[](auto x,auto p){float integral;auto fraction=std::modf(x,&integral);pm::Write(p,integral);return fraction;});
+  Add<int32_t()>(runtime,"getpagesize",[this]{
+#ifdef _WIN32
+    SYSTEM_INFO info{};GetSystemInfo(&info);const uint64_t size=info.dwPageSize;
+#else
+    const auto size=::sysconf(_SC_PAGESIZE);
+#endif
+    if(!(size>0&&size<=INT32_MAX))Fatal("invalid host memory page size");return static_cast<int32_t>(size);
+  });
+  Add<addr_t(int32_t,const char*,addr_t)>(runtime,"newlocale",[this](auto mask,auto name,auto base){return NewLocale(mask,name,base);});
+  Add<void(addr_t)>(runtime,"freelocale",[this](auto locale){FreeLocale(locale);});
+  Add<addr_t(addr_t)>(runtime,"uselocale",[this](auto locale){return UseLocale(locale);});
+  Add<int64_t()>(runtime,"clock",[this]{return ProcessClock();});
+  Add<int64_t(int32_t)>(runtime,"sysconf",[this](auto name){return Sysconf(name);});
+  Add<int32_t(addr_t,addr_t)>(runtime,"gettimeofday",[this](auto value,auto zone){return GetTimeOfDay(value,zone);});
+  Add<int32_t()>(runtime,"getpid",[this]{return ProcessId();});
+  Add<int64_t(const char*,void*,uint64_t)>(runtime,"readlink",[this](auto path,auto output,auto size){return ReadLink(path,output,size);});
+  Add<int32_t(addr_t)>(runtime,"uname",[this](addr_t output){return libc_detail::Uname(output,[this](int error){Fail(error);});});
+  // Snapshot only this virtual environment; never mutate the native process TZ.
+  auto calendar=[this]{
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
+    auto at=environment_.find("TZ");
+    return libc_calendar::Calendar([this](int error){Fail(error);},{},at==environment_.end()?std::string():at->second,at!=environment_.end());
+  };
+  Add<int64_t(addr_t)>(runtime,"time",[calendar](addr_t output){libc_calendar::NativeEnvironment native;return calendar().Time(output);});
+  Add<int64_t(addr_t)>(runtime,"mktime",[calendar](addr_t value){libc_calendar::NativeEnvironment native;return calendar().Mktime(value);});
+  Add<addr_t(addr_t)>(runtime,"localtime",[calendar](addr_t value){libc_calendar::NativeEnvironment native;return calendar().Localtime(value);});
+  Add<addr_t(addr_t,addr_t)>(runtime,"localtime_r",[calendar](addr_t value,addr_t output){libc_calendar::NativeEnvironment native;return calendar().LocaltimeR(value,output);});
+  Add<addr_t(addr_t)>(runtime,"gmtime",[calendar](addr_t value){libc_calendar::NativeEnvironment native;return calendar().Gmtime(value);});
+  Add<addr_t(addr_t,addr_t)>(runtime,"gmtime_r",[calendar](addr_t value,addr_t output){libc_calendar::NativeEnvironment native;return calendar().GmtimeR(value,output);});
+  Add<uint64_t(addr_t,uint64_t,addr_t,addr_t)>(runtime,"strftime",[calendar](addr_t output,uint64_t capacity,addr_t format,addr_t value){libc_calendar::NativeEnvironment native;return calendar().Strftime(output,capacity,format,value);});
+  Add<double(int64_t,int64_t)>(runtime,"difftime",[](int64_t a,int64_t b){return libc_calendar::Calendar::Difftime(a,b);});
+  Add<int32_t()>(runtime,"sched_yield",[this]{
+    libc_calendar::NativeEnvironment native;
+#ifdef _WIN32
+    // A zero result means no ready thread was selected, not a failed yield.
+    // Invoke the scheduler once; do not turn this into a sleep or busy wait.
+    (void)::SwitchToThread();
+    return int32_t{0};
+#else
+    const int result=::sched_yield();
+    if(result<0)Fail(errno?errno:5);
+    return static_cast<int32_t>(result);
+#endif
+  });
+  Add<int32_t(int32_t,const char*,addr_t)>(runtime,"inet_pton",[this](int32_t family,const char *source,addr_t output){
+    libc_calendar::NativeEnvironment native;
+    // Android/Linux AF_INET=2, AF_INET6=10. Reject unsupported families before
+    // reading either pointer. This operation does no DNS or socket activity.
+    if(family!=2&&family!=10){Fail(97);return int32_t{-1};}
+    auto text=pm::String(source);
+    // Bionic's dotted-decimal parser accepts leading zeroes as decimal, while
+    // Windows rejects them for AF_INET and Linux rejects them in both families.
+    // Canonicalize a complete four-octet suffix, never hexadecimal/shorthand,
+    // before delegating binary conversion to the real native parser.
+    auto decimal_quad=[](const std::string &source,std::string &canonical){
+      size_t at=0;
+      for(unsigned octet=0;octet<4;++octet){
+        const auto begin=at;unsigned value=0;
+        while(at<source.size()&&source[at]>='0'&&source[at]<='9'){
+          value=value*10+static_cast<unsigned>(source[at++]-'0');
+          if(value>255)return false;
+        }
+        if(at==begin)return false;
+        if(octet)canonical.push_back('.');canonical+=std::to_string(value);
+        if(octet==3)return at==source.size();
+        if(at==source.size()||source[at++]!='.')return false;
+      }
+      return false;
+    };
+    const auto dot=text.find('.');
+    if(family==2||dot!=text.npos){
+      const auto colon=family==10?text.rfind(':',dot):text.npos;
+      const auto first=colon==text.npos?size_t{0}:colon+1;
+      // Bionic scans the first IPv6 dotted-tail component as a hextet until
+      // encountering '.', so its original lexical width cannot exceed four.
+      // Subsequent decimal octets and bare IPv4 do not have this lexical cap.
+      if(family==10&&dot-first>4)return int32_t{0};
+      std::string canonical;
+      if(!decimal_quad(text.substr(first),canonical))return int32_t{0};
+      text.replace(first,text.size()-first,canonical);
+    }
+    std::array<uint8_t,16> staged{};
+    const size_t size=family==2?4:16;
+    int result;
+#ifdef _WIN32
+    struct Module {HMODULE value=nullptr;~Module(){if(value)FreeLibrary(value);}} module;
+    module.value=LoadLibraryExW(L"ws2_32.dll",nullptr,LOAD_LIBRARY_SEARCH_SYSTEM32);
+    if(!module.value)throw std::runtime_error("inet_pton cannot load System32 ws2_32.dll");
+    using Convert=int (WINAPI*)(int,const char*,void*);
+    auto symbol=GetProcAddress(module.value,"inet_pton");
+    Convert convert=nullptr;static_assert(sizeof(convert)==sizeof(symbol));std::memcpy(&convert,&symbol,sizeof(convert));
+    if(!convert)throw std::runtime_error("native inet_pton conversion API unavailable");
+    // The ANSI InetPtonA export is named inet_pton. It needs no WSAStartup.
+    result=convert(family==2?2:23,text.c_str(),staged.data());
+#else
+    result=::inet_pton(family==2?AF_INET:AF_INET6,text.c_str(),staged.data());
+#endif
+    if(result==0)return int32_t{0};
+    if(result!=1)throw std::runtime_error("native inet_pton failed for a qualified address family and owned buffers");
+    if(!output||output>std::numeric_limits<addr_t>::max()-size)throw std::runtime_error("inet_pton output address/range is invalid");
+    bool copied=false;
+    recomp::WithGuestMemoryWrite(output,size,[&]{
+#ifdef _WIN32
+      if(!libc_detail::uname_detail::Writable(output,size))return;
+      SIZE_T count=0;
+      copied=WriteProcessMemory(GetCurrentProcess(),reinterpret_cast<void*>(output),staged.data(),size,&count)&&count==size;
+#else
+      iovec local{staged.data(),size};iovec remote{reinterpret_cast<void*>(output),size};
+      const auto count=::syscall(SYS_process_vm_writev,::getpid(),&local,1,&remote,1,0);
+      copied=count==static_cast<decltype(count)>(size);
+#endif
+    });
+    if(!copied)throw std::runtime_error("inet_pton output is not fully writable");
+    return int32_t{1};
+  });
+  Add<int32_t(const char*,const char*,addr_t,addr_t)>(runtime,"getaddrinfo",[this](auto node,auto service,auto hints,auto output){return ResolveAddresses(node,service,hints,output);});
+  Add<void(addr_t)>(runtime,"freeaddrinfo",[this](auto list){ReleaseAddresses(list);});
+  Add<const char*(int32_t)>(runtime,"gai_strerror",[this](auto error){return GaiStrError(error);});
+  installed_=true;
+}
+}  // namespace bunker::windows

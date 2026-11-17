@@ -1,0 +1,63 @@
+#pragma once
+#include "../runtime/runtime.h"
+#include <array>
+#include <cstdint>
+#include <memory>
+#include <optional>
+#include <string>
+#include <vector>
+
+namespace bunker::windows {
+class EglHost;
+// Typed GLES queries/state, shader/program, GLES2 texture/uniform/FBO APIs
+// and buffer-backed draws. Transfers use tracked snapshots/publication.
+// Core buffer mapping exposes actual ANGLE data addresses until native unmap,
+// data-store replacement, deletion or final share-group retirement. Callers
+// must obey native mapping access/synchronization rules. Retained client
+// vertex arrays and compute execution remain outside the provider scope.
+// Readback is in-bounds RGBA8/default-FBO/no-PBO on owned immutable pbuffers.
+class GlHost {
+ public:
+  struct Query {uint32_t name;uint32_t count;uint32_t count_query=0;};
+  // EglHost must outlive this provider and every active GL call.
+  GlHost(EglHost &, const std::wstring &absolute_dll_directory,
+                  addr_t marker_base=0x7ff450000000ULL);
+  ~GlHost();
+  GlHost(const GlHost&)=delete;
+  GlHost &operator=(const GlHost&)=delete;
+  void Install(recomp::Runtime &);
+  addr_t Marker(const std::string &)const;
+  void Invoke(const std::string &,State &);
+  size_t QueryComponents(uint32_t name);
+  static const std::vector<Query> &Queries();
+  // Every supported typed command, in append-only marker order.
+  static const std::vector<std::string> &Commands();
+  struct FrameDiagnostics {uint64_t calls=0,draw_submissions=0,clear_submissions=0,capture_attempts=0,presented_capture_serial=0;uint32_t presented_native_thread=0;addr_t presented_display=0,presented_context=0,presented_surface=0;bool first_present_png=false,frame_png=false,nonuniform=false;int32_t width=0,height=0;std::string failure;};
+  void EnableFrameDiagnostics(const std::wstring &absolute_png_path);
+  FrameDiagnostics DescribeFrameDiagnostics();
+  struct FrameSnapshotStatus {
+    uint64_t request_serial=0,presented_capture_serial=0,capture_attempts=0;
+    uint32_t presented_native_thread=0;addr_t presented_display=0,presented_context=0,presented_surface=0;
+    bool pending=false,completed=false,nonuniform=false;int32_t width=0,height=0;
+    std::wstring path;std::string failure;
+  };
+  // Requester performs no GL calls. One pending request; a distinct new PNG
+  // is published only by its next matched successful original window swap.
+  // Existing first-frame witness paths/status are never replaced.
+  uint64_t RequestFrameSnapshot(const std::wstring &absolute_new_png_path);
+  FrameSnapshotStatus DescribeFrameSnapshot();
+  // Pair one original eglSwapBuffers ENTER/RETURN on its native thread.
+  // A nonzero ticket owns one pre-swap readback; only its matching EGL_TRUE
+  // return can publish a PNG. Failed/unmatched tickets cannot be reused.
+  uint64_t BeginWindowPresent(addr_t display,addr_t surface);
+  void FinishWindowPresent(uint64_t ticket,addr_t display,addr_t surface,uint32_t actual_result);
+  // Host input helpers: sample a few pixels (surface fractions, y down) of
+  // the next presented window frame, read before its swap. One request at a
+  // time; TakePixelProbe returns the colours once (empty if none yet).
+  void RequestPixelProbe(std::vector<std::pair<float,float>> points);
+  std::optional<std::vector<std::array<uint8_t,4>>> TakePixelProbe();
+ private:
+  struct Impl;
+  std::unique_ptr<Impl> impl_;
+};
+}  // namespace bunker::windows

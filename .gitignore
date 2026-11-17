@@ -1,0 +1,4 @@
+# Local build state: toolchains, lifted objects, linked builds, run logs.
+/work/
+__pycache__/
+*.pyc

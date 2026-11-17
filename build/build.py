@@ -1,0 +1,98 @@
+#!/usr/bin/env python3
+"""Build the game executable: one command.
+
+    python build/build.py --pack PACK_DIR --out OUT_DIR
+
+Compiles the host layer from this repository (build/host_sources.txt), links it
+with the guest objects of a pack (build/make_pack.py) and runs the post-link
+helper inliner. Host objects are rebuilt only when a file they include changed.
+Needs MinGW-w64 g++ (GCC 15) and Python 3.
+"""
+import argparse, concurrent.futures, json, os, shutil, subprocess, sys, time
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent
+# Windows libraries the host layer needs beyond the ones a pack lists.
+HOST_LIBRARIES = ['-lwinmm']
+DEFINES = ['-DADDRESS_SIZE_BITS=64', '-DBUNKER_GAME_COOPERATIVE_POLLS=1', '-DBUNKER_GAME_COLLECTOR_DELIVERY=1']
+
+
+def stale(obj, dep):
+    """True when obj is missing or older than a file in its dependency list."""
+    if not obj.exists() or not dep.exists():
+        return True
+    built = obj.stat().st_mtime
+    names = dep.read_text().replace('\\\n', ' ').split(': ', 1)[-1]
+    for name in names.split():
+        p = Path(name)
+        if not p.exists() or p.stat().st_mtime > built:
+            return True
+    return False
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument('--pack', type=Path, required=True)
+    ap.add_argument('--out', type=Path, required=True)
+    ap.add_argument('--cxx', default=shutil.which('g++') or 'C:/mingw64/bin/g++.exe')
+    ap.add_argument('--jobs', type=int, default=os.cpu_count() or 4)
+    ap.add_argument('--no-inline', action='store_true', help='skip the post-link helper inliner')
+    a = ap.parse_args()
+    pack, out = a.pack.resolve(), a.out.resolve()
+    manifest = json.loads((pack / 'pack.json').read_text())
+    (out / 'host').mkdir(parents=True, exist_ok=True)
+    tool = lambda name: str(Path(a.cxx).with_name(Path(a.cxx).name.replace('g++', name)))
+    flags = ['-std=c++17', '-O2', *DEFINES, f'-I{(pack / "generated").as_posix()}',
+             *[f'-I{(pack / name).as_posix()}' for name in manifest['includes']], '-Wa,-mbig-obj']
+    sources = [line.strip() for line in (ROOT / 'build/host_sources.txt').read_text().splitlines()
+               if line.strip() and not line.startswith('#')]
+    jobs = [('host/game_bootstrap.cpp', out / 'host/game-bootstrap.o', [a.cxx, *flags]),
+            ('runtime/elfload.c', out / 'host/elfload.o', [tool('gcc'), '-O2'])]
+    jobs += [(s, out / 'host' / f'host-{i:03d}.o', [a.cxx, *flags]) for i, s in enumerate(sources)]
+
+    def compile_one(job):
+        source, obj, command = job
+        dep, record = obj.with_suffix('.d'), obj.with_suffix('.cmd')
+        line = ' '.join([*command, source])
+        # Rebuild when an included file changed or the compiler command did.
+        if not stale(obj, dep) and record.exists() and record.read_text() == line:
+            return source, 0, '', False
+        r = subprocess.run([*command, '-MMD', '-MF', str(dep), '-c', str(ROOT / source), '-o', str(obj)],
+                           capture_output=True, text=True)
+        if not r.returncode:
+            record.write_text(line)
+        return source, r.returncode, r.stderr, True
+
+    t0 = time.time()
+    with concurrent.futures.ThreadPoolExecutor(a.jobs) as pool:
+        results = list(pool.map(compile_one, jobs))
+    failed = [(s, e) for s, code, e, _ in results if code]
+    for source, errors in failed:
+        print(f'FAILED {source}\n{errors[-3000:]}', file=sys.stderr)
+    if failed:
+        sys.exit(1)
+    print(f'host: {sum(1 for r in results if r[3])} compiled, {sum(1 for r in results if not r[3])} current '
+          f'({time.time() - t0:.0f}s)')
+
+    exe = out / 'bunker-game-bootstrap.exe'
+    link = [*flags, '-static', *[job[1].as_posix() for job in jobs],
+            *[(pack / 'objects' / name).as_posix() for name in manifest['objects']],
+            (pack / manifest['archive']).as_posix(), *manifest['wraps'], *manifest['libraries'], *HOST_LIBRARIES, '-o', exe.as_posix()]
+    response = out / 'link.rsp'
+    response.write_text('\n'.join(f'"{x}"' for x in link) + '\n')
+    t0 = time.time()
+    subprocess.run([a.cxx, f'@{response.as_posix()}'], check=True)
+    print(f'link: {time.time() - t0:.0f}s')
+    if not a.no_inline:
+        symbols = out / 'symbols.nm'
+        with symbols.open('w') as f:
+            subprocess.run([tool('nm'), '-n', '--defined-only', str(exe)], check=True, stdout=f)
+        r = subprocess.run([sys.executable, str(ROOT / 'recompiler/tools/inline_lifted_helpers.py'), str(exe), '--nm',
+                            str(symbols), '--fpsr-unobserved', '--all-sites', '--inline-stores'],
+                           check=True, capture_output=True, text=True)
+        print('inline: ' + ' | '.join(r.stdout.strip().splitlines()[-2:]))
+    print(exe)
+
+
+if __name__ == '__main__':
+    main()

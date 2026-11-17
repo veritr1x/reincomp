@@ -1,0 +1,1025 @@
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
+#define GL_GLES_PROTOTYPES 0
+#include <GLES3/gl32.h>
+#include <GLES2/gl2ext.h>
+#include "gl_host.h"
+#include "egl_host.h"
+#include "frame_png.h"
+#include "gles_shader_fixups.h"
+#include "../runtime/bridge.h"
+#include "../runtime/guest_memory.h"
+#include "../runtime/fast_tls.h"
+#include "../runtime/fast_fenv.h"
+#include <algorithm>
+#include <atomic>
+#include <cmath>
+#include <cstdio>
+#include <cstdlib>
+#include <cerrno>
+#include <cfenv>
+#include <cstring>
+#include <map>
+#include <unordered_map>
+#include <limits>
+#include <mutex>
+#include <optional>
+#include <set>
+#include <sstream>
+#include <type_traits>
+#include <stdexcept>
+
+namespace bunker::windows {
+namespace {
+// BUNKER_GL_PROBE_DRAW support: shader sources and program attachments are
+// remembered as the guest supplies them, because Unity detaches and deletes
+// shaders right after linking.
+struct ProbeShaderRecord{std::mutex mutex;std::map<GLuint,std::string> sources;std::map<GLuint,std::vector<GLuint>> attached;};
+inline ProbeShaderRecord &ProbeShaders(){static ProbeShaderRecord record;return record;}
+inline bool ProbeShadersEnabled(){static const bool on=[]{const char*v=std::getenv("BUNKER_GL_PROBE_DRAW");return v&&*v;}();return on;}
+struct GlNativeEnvironment {
+  // recomp::fpenv: MXCSR plus the x87 control word; MinGW's feholdexcept and
+  // fesetenv also save/load the whole x87 environment on every GL call.
+  DWORD error=GetLastError();int saved_errno=errno;recomp::fpenv::Saved floating=recomp::fpenv::Hold();
+  ~GlNativeEnvironment(){recomp::fpenv::Restore(floating);errno=saved_errno;SetLastError(error);}
+};
+#define GL_DRAW_API(X) \
+ X(glCreateShader,PFNGLCREATESHADERPROC) X(glShaderSource,PFNGLSHADERSOURCEPROC) \
+ X(glCompileShader,PFNGLCOMPILESHADERPROC) X(glGetShaderiv,PFNGLGETSHADERIVPROC) \
+ X(glGetShaderInfoLog,PFNGLGETSHADERINFOLOGPROC) X(glDeleteShader,PFNGLDELETESHADERPROC) \
+ X(glCreateProgram,PFNGLCREATEPROGRAMPROC) X(glAttachShader,PFNGLATTACHSHADERPROC) \
+ X(glDetachShader,PFNGLDETACHSHADERPROC) X(glLinkProgram,PFNGLLINKPROGRAMPROC) \
+ X(glGetProgramiv,PFNGLGETPROGRAMIVPROC) X(glGetProgramInfoLog,PFNGLGETPROGRAMINFOLOGPROC) \
+ X(glUseProgram,PFNGLUSEPROGRAMPROC) X(glDeleteProgram,PFNGLDELETEPROGRAMPROC) \
+ X(glGenBuffers,PFNGLGENBUFFERSPROC) X(glBindBuffer,PFNGLBINDBUFFERPROC) \
+ X(glBufferData,PFNGLBUFFERDATAPROC) X(glBufferSubData,PFNGLBUFFERSUBDATAPROC) \
+ X(glDeleteBuffers,PFNGLDELETEBUFFERSPROC) X(glGenVertexArrays,PFNGLGENVERTEXARRAYSPROC) \
+ X(glBindVertexArray,PFNGLBINDVERTEXARRAYPROC) X(glDeleteVertexArrays,PFNGLDELETEVERTEXARRAYSPROC) \
+ X(glEnableVertexAttribArray,PFNGLENABLEVERTEXATTRIBARRAYPROC) X(glDisableVertexAttribArray,PFNGLDISABLEVERTEXATTRIBARRAYPROC) \
+ X(glVertexAttribPointer,PFNGLVERTEXATTRIBPOINTERPROC) X(glDrawArrays,PFNGLDRAWARRAYSPROC) \
+ X(glDrawElements,PFNGLDRAWELEMENTSPROC) X(glReadPixels,PFNGLREADPIXELSPROC) X(glPixelStorei,PFNGLPIXELSTOREIPROC)
+// Types and enum names: Khronos GLES registry-generated GLES3/gl32.h (MIT).
+// Counts: GLES3.2 state tables and the pinned ANGLE GetQueryParameterInfo.
+// This table deliberately excludes indexed queries and pointer-valued state.
+const std::vector<GlHost::Query> queries={
+  {GL_MAJOR_VERSION,1},{GL_MINOR_VERSION,1},{GL_NUM_EXTENSIONS,1},
+  {GL_MAX_TEXTURE_SIZE,1},{GL_MAX_CUBE_MAP_TEXTURE_SIZE,1},{GL_MAX_3D_TEXTURE_SIZE,1},
+  {GL_MAX_ARRAY_TEXTURE_LAYERS,1},{GL_MAX_RENDERBUFFER_SIZE,1},{GL_MAX_COLOR_ATTACHMENTS,1},
+  {GL_MAX_DRAW_BUFFERS,1},{GL_MAX_SAMPLES,1},{GL_MAX_VERTEX_ATTRIBS,1},
+  {GL_MAX_VERTEX_UNIFORM_VECTORS,1},{GL_MAX_FRAGMENT_UNIFORM_VECTORS,1},{GL_MAX_VARYING_VECTORS,1},
+  {GL_MAX_VERTEX_UNIFORM_COMPONENTS,1},{GL_MAX_FRAGMENT_UNIFORM_COMPONENTS,1},
+  {GL_MAX_VARYING_COMPONENTS,1},{GL_MAX_VERTEX_OUTPUT_COMPONENTS,1},{GL_MAX_FRAGMENT_INPUT_COMPONENTS,1},
+  {GL_MAX_COMBINED_TEXTURE_IMAGE_UNITS,1},{GL_MAX_VERTEX_TEXTURE_IMAGE_UNITS,1},{GL_MAX_TEXTURE_IMAGE_UNITS,1},
+  {GL_MAX_VERTEX_UNIFORM_BLOCKS,1},{GL_MAX_FRAGMENT_UNIFORM_BLOCKS,1},{GL_MAX_COMBINED_UNIFORM_BLOCKS,1},
+  {GL_MAX_UNIFORM_BUFFER_BINDINGS,1},{GL_MAX_UNIFORM_BLOCK_SIZE,1},{GL_UNIFORM_BUFFER_OFFSET_ALIGNMENT,1},
+  {GL_MAX_COMBINED_VERTEX_UNIFORM_COMPONENTS,1},{GL_MAX_COMBINED_FRAGMENT_UNIFORM_COMPONENTS,1},
+  {GL_MAX_TRANSFORM_FEEDBACK_INTERLEAVED_COMPONENTS,1},{GL_MAX_TRANSFORM_FEEDBACK_SEPARATE_ATTRIBS,1},
+  {GL_MAX_TRANSFORM_FEEDBACK_SEPARATE_COMPONENTS,1},{GL_MIN_PROGRAM_TEXEL_OFFSET,1},{GL_MAX_PROGRAM_TEXEL_OFFSET,1},
+  {GL_MAX_ELEMENT_INDEX,1},{GL_MAX_ELEMENTS_INDICES,1},{GL_MAX_ELEMENTS_VERTICES,1},{GL_MAX_SERVER_WAIT_TIMEOUT,1},
+  {GL_MAX_FRAMEBUFFER_WIDTH,1},{GL_MAX_FRAMEBUFFER_HEIGHT,1},{GL_MAX_FRAMEBUFFER_SAMPLES,1},
+  {GL_MAX_VERTEX_ATTRIB_RELATIVE_OFFSET,1},{GL_MAX_VERTEX_ATTRIB_BINDINGS,1},{GL_MAX_VERTEX_ATTRIB_STRIDE,1},
+  {GL_MAX_VERTEX_ATOMIC_COUNTER_BUFFERS,1},{GL_MAX_VERTEX_ATOMIC_COUNTERS,1},
+  {GL_MAX_VERTEX_IMAGE_UNIFORMS,1},{GL_MAX_VERTEX_SHADER_STORAGE_BLOCKS,1},
+  {GL_MAX_FRAGMENT_ATOMIC_COUNTER_BUFFERS,1},{GL_MAX_FRAGMENT_ATOMIC_COUNTERS,1},
+  {GL_MAX_FRAGMENT_IMAGE_UNIFORMS,1},{GL_MAX_FRAGMENT_SHADER_STORAGE_BLOCKS,1},
+  {GL_MIN_PROGRAM_TEXTURE_GATHER_OFFSET,1},{GL_MAX_PROGRAM_TEXTURE_GATHER_OFFSET,1},
+  {GL_MAX_COMPUTE_WORK_GROUP_INVOCATIONS,1},{GL_MAX_COMPUTE_UNIFORM_BLOCKS,1},
+  {GL_MAX_COMPUTE_TEXTURE_IMAGE_UNITS,1},{GL_MAX_COMPUTE_SHARED_MEMORY_SIZE,1},{GL_MAX_COMPUTE_UNIFORM_COMPONENTS,1},
+  {GL_MAX_COMPUTE_ATOMIC_COUNTER_BUFFERS,1},{GL_MAX_COMPUTE_ATOMIC_COUNTERS,1},
+  {GL_MAX_COMPUTE_IMAGE_UNIFORMS,1},{GL_MAX_COMBINED_COMPUTE_UNIFORM_COMPONENTS,1},
+  {GL_MAX_COMPUTE_SHADER_STORAGE_BLOCKS,1},{GL_MAX_COMBINED_SHADER_OUTPUT_RESOURCES,1},{GL_MAX_UNIFORM_LOCATIONS,1},
+  {GL_MAX_ATOMIC_COUNTER_BUFFER_BINDINGS,1},{GL_MAX_ATOMIC_COUNTER_BUFFER_SIZE,1},
+  {GL_MAX_COMBINED_ATOMIC_COUNTER_BUFFERS,1},{GL_MAX_COMBINED_ATOMIC_COUNTERS,1},
+  {GL_MAX_IMAGE_UNITS,1},{GL_MAX_COMBINED_IMAGE_UNIFORMS,1},
+  {GL_MAX_SHADER_STORAGE_BUFFER_BINDINGS,1},{GL_MAX_COMBINED_SHADER_STORAGE_BLOCKS,1},
+  {GL_SHADER_STORAGE_BUFFER_OFFSET_ALIGNMENT,1},{GL_MAX_SHADER_STORAGE_BLOCK_SIZE,1},
+  {GL_MAX_SAMPLE_MASK_WORDS,1},{GL_MAX_COLOR_TEXTURE_SAMPLES,1},{GL_MAX_DEPTH_TEXTURE_SAMPLES,1},{GL_MAX_INTEGER_SAMPLES,1},
+  {GL_NUM_COMPRESSED_TEXTURE_FORMATS,1},{GL_NUM_SHADER_BINARY_FORMATS,1},{GL_NUM_PROGRAM_BINARY_FORMATS,1},
+  {GL_SHADER_COMPILER,1},{GL_IMPLEMENTATION_COLOR_READ_TYPE,1},{GL_IMPLEMENTATION_COLOR_READ_FORMAT,1},
+  {GL_SUBPIXEL_BITS,1},{GL_SAMPLE_BUFFERS,1},{GL_SAMPLES,1},
+  {GL_PACK_ALIGNMENT,1},{GL_UNPACK_ALIGNMENT,1},{GL_PACK_ROW_LENGTH,1},{GL_PACK_SKIP_ROWS,1},{GL_PACK_SKIP_PIXELS,1},
+  {GL_UNPACK_ROW_LENGTH,1},{GL_UNPACK_IMAGE_HEIGHT,1},{GL_UNPACK_SKIP_ROWS,1},{GL_UNPACK_SKIP_PIXELS,1},{GL_UNPACK_SKIP_IMAGES,1},
+  {GL_CURRENT_PROGRAM,1},{GL_ACTIVE_TEXTURE,1},{GL_VERTEX_ARRAY_BINDING,1},
+  {GL_ARRAY_BUFFER_BINDING,1},{GL_ELEMENT_ARRAY_BUFFER_BINDING,1},{GL_PIXEL_PACK_BUFFER_BINDING,1},{GL_PIXEL_UNPACK_BUFFER_BINDING,1},
+  {GL_FRAMEBUFFER_BINDING,1},{GL_READ_FRAMEBUFFER_BINDING,1},{GL_RENDERBUFFER_BINDING,1},
+  {GL_BLEND,1},{GL_DEPTH_TEST,1},{GL_STENCIL_TEST,1},{GL_SCISSOR_TEST,1},{GL_CULL_FACE,1},{GL_DITHER,1},
+  {GL_RASTERIZER_DISCARD,1},{GL_DEPTH_WRITEMASK,1},{GL_DEPTH_CLEAR_VALUE,1},{GL_LINE_WIDTH,1},
+  {GL_MAX_VIEWPORT_DIMS,2},{GL_ALIASED_LINE_WIDTH_RANGE,2},{GL_ALIASED_POINT_SIZE_RANGE,2},{GL_DEPTH_RANGE,2},
+  {GL_VIEWPORT,4},{GL_SCISSOR_BOX,4},{GL_COLOR_CLEAR_VALUE,4},{GL_BLEND_COLOR,4},{GL_COLOR_WRITEMASK,4},
+  {GL_COMPRESSED_TEXTURE_FORMATS,0,GL_NUM_COMPRESSED_TEXTURE_FORMATS},
+  {GL_SHADER_BINARY_FORMATS,0,GL_NUM_SHADER_BINARY_FORMATS},
+  {GL_PROGRAM_BINARY_FORMATS,0,GL_NUM_PROGRAM_BINARY_FORMATS},
+  {GL_MAX_GEOMETRY_SHADER_STORAGE_BLOCKS,1},
+  {GL_MAX_TESS_CONTROL_SHADER_STORAGE_BLOCKS,1},
+  {GL_MAX_TESS_EVALUATION_SHADER_STORAGE_BLOCKS,1},
+  {0x84ff,1}, // GL_MAX_TEXTURE_MAX_ANISOTROPY_EXT, GLES2/gl2ext.h.
+  {GL_RED_BITS,1},
+  {GL_GREEN_BITS,1},
+  {GL_BLUE_BITS,1},
+  {GL_ALPHA_BITS,1},
+  {GL_DEPTH_BITS,1},
+  {GL_STENCIL_BITS,1},
+};
+const char *const names[]={"glGetString","glGetStringi","glGetIntegerv","glGetFloatv","glGetBooleanv","glGetError",
+#define GL_SCALAR(name, native_type, signature) #name,
+#include "gl_scalar_commands.inc"
+#undef GL_SCALAR
+#define DRAW_NAME(name,type) #name,
+GL_DRAW_API(DRAW_NAME)
+#undef DRAW_NAME
+#define GL_TEXTURE_COMMAND(name,type) #name,
+#include "gl_texture_commands.inc"
+#undef GL_TEXTURE_COMMAND
+#define GL_UNIFORM_COMMAND(name,type) #name,
+#include "gl_uniform_commands.inc"
+#undef GL_UNIFORM_COMMAND
+#define GL_FRAMEBUFFER_COMMAND(name,type) #name,
+#include "gl_framebuffer_commands.inc"
+#undef GL_FRAMEBUFFER_COMMAND
+#define GL_MISC_COMMAND(name,type) #name,
+#include "gl_misc_commands.inc"
+#undef GL_MISC_COMMAND
+#define GL_INDEXED_COMMAND(name,type) #name,
+#include "gl_indexed_commands.inc"
+#undef GL_INDEXED_COMMAND
+#define GL_INTERNALFORMAT_COMMAND(name,type) #name,
+#include "gl_internalformat_commands.inc"
+#undef GL_INTERNALFORMAT_COMMAND
+#define GL_SAMPLER_COMMAND(name,type) #name,
+#include "gl_sampler_commands.inc"
+#undef GL_SAMPLER_COMMAND
+#define GL_BUFFER_INDEXED_COMMAND(name,type) #name,
+#include "gl_buffer_indexed_commands.inc"
+#undef GL_BUFFER_INDEXED_COMMAND
+#define GL_OBJECT_COMMAND(name,native_type,signature) #name,
+#include "gl_object_commands.inc"
+#undef GL_OBJECT_COMMAND
+#define GL_STORAGE_COMMAND(name,native_type,signature) #name,
+#include "gl_storage_commands.inc"
+#undef GL_STORAGE_COMMAND
+#define GL_LABEL_COMMAND(name,type) #name,
+#include "gl_label_commands.inc"
+#undef GL_LABEL_COMMAND
+#define GL_TEXTURE3D_COMMAND(name,type) #name,
+#include "gl_texture3d_commands.inc"
+#undef GL_TEXTURE3D_COMMAND
+#define GL_UNIFORM_BLOCK_COMMAND(name,type) #name,
+#include "gl_uniform_block_commands.inc"
+#undef GL_UNIFORM_BLOCK_COMMAND
+#define GL_PROGRAM_RESOURCE_COMMAND(name,type) #name,
+#include "gl_program_resource_commands.inc"
+#undef GL_PROGRAM_RESOURCE_COMMAND
+#define GL_MAPPING_COMMAND(name,type) #name,
+#include "gl_mapping_commands.inc"
+#undef GL_MAPPING_COMMAND
+"glDrawBuffers",
+"glGetObjectLabel",
+"glGetObjectLabelEXT",
+"glInvalidateFramebuffer",
+"glDiscardFramebufferEXT",
+"glProgramParameteri",
+"glGetProgramBinary",
+"glProgramBinary",
+"glFenceSync",
+"glClientWaitSync",
+"glDeleteSync",
+"glDrawElementsInstanced",
+"glDrawElementsBaseVertex",
+"glDrawElementsBaseVertexOES",
+"glDrawElementsBaseVertexEXT",
+"glDrawElementsInstancedBaseVertex",
+"glDrawElementsInstancedBaseVertexOES",
+"glDrawElementsInstancedBaseVertexEXT",
+"glDrawRangeElementsBaseVertex",
+"glDrawRangeElementsBaseVertexOES",
+"glDrawRangeElementsBaseVertexEXT",
+#define GL_PASSTHROUGH_COMMAND(name,native,type) #name,
+#include "gl_passthrough_commands.inc"
+#undef GL_PASSTHROUGH_COMMAND
+};
+std::string Hex(GLenum value){std::ostringstream out;out<<"0x"<<std::hex<<value;return out.str();}
+template<class T>T Symbol(HMODULE module,const char *name){
+  const auto native=GetProcAddress(module,name);if(!native)throw std::runtime_error(std::string("Missing ANGLE GL symbol: ")+name);
+  T typed;static_assert(sizeof(typed)==sizeof(native));std::memcpy(&typed,&native,sizeof(typed));return typed;
+}
+}
+struct GlHost::Impl {
+  EglHost &egl;
+  PFNGLDRAWBUFFERSPROC drawBuffers=nullptr;
+  addr_t current_context=0;
+  addr_t current_share_group=0;
+  struct MappedRange {addr_t address;size_t length;};
+  using MappedKey=std::pair<addr_t,GLuint>;
+  std::map<MappedKey,MappedRange> mapped_ranges;
+  std::map<addr_t,std::set<GLenum>> pending_errors;
+  HMODULE module=nullptr;addr_t marker;bool installed=false;
+  std::mutex mutex;
+  PFNGLGETSTRINGPROC getString=nullptr;PFNGLGETSTRINGIPROC getStringi=nullptr;
+  PFNGLGETINTEGERVPROC getInteger=nullptr;PFNGLGETFLOATVPROC getFloat=nullptr;
+  PFNGLGETBOOLEANVPROC getBoolean=nullptr;PFNGLGETERRORPROC getError=nullptr;
+  PFNGLGETVERTEXATTRIBIVPROC getVertexAttrib=nullptr;
+#define DRAW_FIELD(name,type) type draw_##name=nullptr;
+  GL_DRAW_API(DRAW_FIELD)
+#undef DRAW_FIELD
+#define GL_TEXTURE_COMMAND(name,type) type texture_##name=nullptr;
+#include "gl_texture_commands.inc"
+#undef GL_TEXTURE_COMMAND
+#define GL_UNIFORM_COMMAND(name,type) type uniform_##name=nullptr;
+#include "gl_uniform_commands.inc"
+#undef GL_UNIFORM_COMMAND
+#define GL_FRAMEBUFFER_COMMAND(name,type) type framebuffer_##name=nullptr;
+#include "gl_framebuffer_commands.inc"
+#undef GL_FRAMEBUFFER_COMMAND
+#define GL_PASSTHROUGH_COMMAND(name,native,type) type pass_##name=nullptr;
+#include "gl_passthrough_commands.inc"
+#undef GL_PASSTHROUGH_COMMAND
+#define GL_MISC_COMMAND(name,type) type misc_##name=nullptr;
+#include "gl_misc_commands.inc"
+#undef GL_MISC_COMMAND
+#define GL_INDEXED_COMMAND(name,type) type indexed_##name=nullptr;
+#include "gl_indexed_commands.inc"
+#undef GL_INDEXED_COMMAND
+#define GL_INTERNALFORMAT_COMMAND(name,type) type internalformat_##name=nullptr;
+#include "gl_internalformat_commands.inc"
+#undef GL_INTERNALFORMAT_COMMAND
+#define GL_SAMPLER_COMMAND(name,type) type sampler_##name=nullptr;
+#include "gl_sampler_commands.inc"
+#undef GL_SAMPLER_COMMAND
+#define GL_BUFFER_INDEXED_COMMAND(name,type) type buffer_indexed_##name=nullptr;
+#include "gl_buffer_indexed_commands.inc"
+#undef GL_BUFFER_INDEXED_COMMAND
+#define GL_UNIFORM_BLOCK_COMMAND(name,type) type uniform_block_##name=nullptr;
+#include "gl_uniform_block_commands.inc"
+#undef GL_UNIFORM_BLOCK_COMMAND
+#define GL_PROGRAM_RESOURCE_COMMAND(name,type) type program_resource_##name=nullptr;
+#include "gl_program_resource_commands.inc"
+#undef GL_PROGRAM_RESOURCE_COMMAND
+#define GL_MAPPING_COMMAND(name,type) type mapping_##name=nullptr;
+#include "gl_mapping_commands.inc"
+#undef GL_MAPPING_COMMAND
+  std::map<std::string,std::unique_ptr<char[]>> strings;
+  std::unordered_map<std::string,std::function<void(State&)>> bridges;
+  std::wstring diagnostic_png;
+  FrameDiagnostics diagnostic;
+  FrameSnapshotStatus snapshot;
+  uint64_t next_snapshot_request=0,snapshot_inflight=0;
+  std::set<std::wstring> snapshot_paths;
+  struct PendingPresent {
+    uint64_t serial=0;DWORD thread=0;addr_t display=0,surface=0,context=0;
+    int32_t width=0,height=0;bool nonuniform=false,candidate=false;
+    uint64_t draws=0,clears=0;std::vector<uint8_t> pixels;
+    bool diagnostic_capture=true;uint64_t snapshot_request=0;std::wstring snapshot_path;
+  };
+  uint64_t next_present_serial=0;
+  std::map<uint64_t,PendingPresent> pending_presents;
+  std::vector<std::pair<float,float>> probe_points;bool probe_pending=false;
+  std::optional<std::vector<std::array<uint8_t,4>>> probe_result;
+  Impl(EglHost &egl,const std::wstring &directory,addr_t marker):egl(egl),marker(marker){
+    static_assert(sizeof(GLboolean)==1&&sizeof(GLint)==4&&sizeof(GLfloat)==4);
+    static_assert(sizeof(GLenum)==4&&sizeof(GLuint)==4&&sizeof(GLsizei)==4&&sizeof(GLchar)==1&&sizeof(GLsizeiptr)==8&&sizeof(GLintptr)==8);
+    if((marker&7)||marker>UINT64_MAX-std::size(names)*8)throw std::invalid_argument("GL marker range/alignment");
+    if(directory.size()<3||directory[1]!=L':'||!(directory[2]==L'\\'||directory[2]==L'/'))throw std::invalid_argument("ANGLE GL DLL directory must be absolute");
+    module=LoadLibraryExW((directory+L"\\libGLESv2.dll").c_str(),nullptr,LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR|LOAD_LIBRARY_SEARCH_SYSTEM32);
+    if(!module)throw std::runtime_error("Cannot load pinned ANGLE GLES DLL");
+    try{
+      if(!egl.UsesGlesModule(module))throw std::invalid_argument("GL and EGL must use the same native GLES module");
+      getString=Symbol<PFNGLGETSTRINGPROC>(module,"glGetString");getStringi=Symbol<PFNGLGETSTRINGIPROC>(module,"glGetStringi");
+      getInteger=Symbol<PFNGLGETINTEGERVPROC>(module,"glGetIntegerv");getFloat=Symbol<PFNGLGETFLOATVPROC>(module,"glGetFloatv");
+      getBoolean=Symbol<PFNGLGETBOOLEANVPROC>(module,"glGetBooleanv");getError=Symbol<PFNGLGETERRORPROC>(module,"glGetError");
+      getVertexAttrib=Symbol<PFNGLGETVERTEXATTRIBIVPROC>(module,"glGetVertexAttribiv");
+#define DRAW_LOAD(name,type) draw_##name=Symbol<type>(module,#name);
+      GL_DRAW_API(DRAW_LOAD)
+#undef DRAW_LOAD
+#define GL_TEXTURE_COMMAND(name,type) texture_##name=Symbol<type>(module,#name);
+#include "gl_texture_commands.inc"
+#undef GL_TEXTURE_COMMAND
+#define GL_UNIFORM_COMMAND(name,type) uniform_##name=Symbol<type>(module,#name);
+#include "gl_uniform_commands.inc"
+#undef GL_UNIFORM_COMMAND
+#define GL_FRAMEBUFFER_COMMAND(name,type) framebuffer_##name=Symbol<type>(module,#name);
+#include "gl_framebuffer_commands.inc"
+#undef GL_FRAMEBUFFER_COMMAND
+#define GL_PASSTHROUGH_COMMAND(name,native,type) pass_##name=Symbol<type>(module,#native);
+#include "gl_passthrough_commands.inc"
+#undef GL_PASSTHROUGH_COMMAND
+#define GL_MISC_COMMAND(name,type) misc_##name=Symbol<type>(module,#name);
+#include "gl_misc_commands.inc"
+#undef GL_MISC_COMMAND
+#define GL_INDEXED_COMMAND(name,type) indexed_##name=Symbol<type>(module,#name);
+#include "gl_indexed_commands.inc"
+#undef GL_INDEXED_COMMAND
+#define GL_INTERNALFORMAT_COMMAND(name,type) internalformat_##name=Symbol<type>(module,#name);
+#include "gl_internalformat_commands.inc"
+#undef GL_INTERNALFORMAT_COMMAND
+#define GL_SAMPLER_COMMAND(name,type) sampler_##name=Symbol<type>(module,#name);
+#include "gl_sampler_commands.inc"
+#undef GL_SAMPLER_COMMAND
+#define GL_BUFFER_INDEXED_COMMAND(name,type) buffer_indexed_##name=Symbol<type>(module,#name);
+#include "gl_buffer_indexed_commands.inc"
+#undef GL_BUFFER_INDEXED_COMMAND
+#define GL_UNIFORM_BLOCK_COMMAND(name,type) uniform_block_##name=Symbol<type>(module,#name);
+#include "gl_uniform_block_commands.inc"
+#undef GL_UNIFORM_BLOCK_COMMAND
+#define GL_PROGRAM_RESOURCE_COMMAND(name,type) program_resource_##name=Symbol<type>(module,#name);
+#include "gl_program_resource_commands.inc"
+#undef GL_PROGRAM_RESOURCE_COMMAND
+#define GL_MAPPING_COMMAND(name,type) mapping_##name=Symbol<type>(module,#name);
+#include "gl_mapping_commands.inc"
+#undef GL_MAPPING_COMMAND
+      drawBuffers=Symbol<PFNGLDRAWBUFFERSPROC>(module,"glDrawBuffers");
+      Bindings();
+      egl.SetStorageRetirementObserver([this]{GlNativeEnvironment environment;std::lock_guard lock(mutex);InvalidateMappings(true);});
+    }catch(...){FreeLibrary(module);throw;}
+  }
+  ~Impl(){egl.SetStorageRetirementObserver({});InvalidateMappings(false);for(const auto &[text,value]:strings)recomp::InvalidateGuestMemory(reinterpret_cast<addr_t>(value.get()),text.size()+1);FreeLibrary(module);}
+  // Per-thread view of EGL state, valid while EglHost::StateGeneration() is
+  // unchanged: contexts, share groups, surfaces and their lifetimes change only
+  // through EGL imports or thread release, which advance the generation.
+  struct ThreadEgl {const Impl *owner=nullptr;uint64_t generation=0;addr_t context=0,share_group=0;void *window=nullptr;};
+  struct ThreadEglTag;
+  static ThreadEgl &CurrentThreadEgl(){
+    static constexpr recomp::ThreadLocalRef<ThreadEgl*,ThreadEglTag> slot{};
+    ThreadEgl *cache=slot;if(!cache){cache=new ThreadEgl;slot=cache;} // One small record per native thread.
+    return *cache;
+  }
+  void *CurrentDpiWindow(){
+    auto &cache=CurrentThreadEgl();
+    if(cache.owner==this&&cache.generation==egl.StateGeneration())return cache.window;
+    return egl.CurrentDpiWindow();
+  }
+  void SelectContext(){
+    auto &cache=CurrentThreadEgl();
+    const auto generation=egl.StateGeneration();
+    if(cache.owner==this&&cache.generation==generation){
+      current_context=cache.context;current_share_group=cache.share_group;return;
+    }
+    SelectContextSlow();
+    cache.window=egl.CurrentDpiWindow();cache.context=current_context;cache.share_group=current_share_group;
+    cache.generation=generation;cache.owner=this;
+  }
+  void SelectContextSlow(){
+    // Provider tokens stay unique even if ANGLE recycles a native pointer.
+    // Stored flags follow a context when it migrates between native threads.
+    current_context=egl.CurrentContextToken();
+    if(!current_context)throw std::runtime_error("GL requires an owned current EGL context");
+    current_share_group=egl.CurrentShareGroupToken();
+    if(!current_share_group)throw std::runtime_error("GL current context has no owned share group");
+    PruneMappings();
+    for(auto at=pending_errors.begin();at!=pending_errors.end();)
+      if(!egl.ContextAlive(at->first))at=pending_errors.erase(at);else ++at;
+  }
+  bool CollectErrors(){
+    bool any=false;for(unsigned n=0;n<32;++n){GLenum value=getError();if(value==GL_NO_ERROR)return any;
+      pending_errors[current_context].insert(value);any=true;}
+    throw std::runtime_error("Native GL error flags did not drain within32 reads");
+  }
+  std::optional<size_t> Components(GLenum name){
+    auto found=std::find_if(queries.begin(),queries.end(),[&](const Query &q){return q.name==name;});
+    if(found==queries.end())throw std::runtime_error("Unsupported GL query output width: "+Hex(name));
+    if(!found->count_query)return found->count;
+    GLint count=-1;CollectErrors();getInteger(found->count_query,&count);if(CollectErrors())return std::nullopt;
+    if(count<0||count>1048576)throw std::runtime_error("Native GL array query count out of bounded range: "+Hex(name));
+    return size_t(count);
+  }
+  addr_t String(const GLubyte *native){
+    if(!native)return 0;
+    std::string text(reinterpret_cast<const char*>(native));
+    auto found=strings.find(text);if(found!=strings.end())return reinterpret_cast<addr_t>(found->second.get());
+    auto copy=std::make_unique<char[]>(text.size()+1);const auto address=reinterpret_cast<addr_t>(copy.get());
+    recomp::WriteGuestMemory(address,text.c_str(),text.size()+1);strings.emplace(text,std::move(copy));return address;
+  }
+  template<class T,class F>void QueryValues(GLenum name,addr_t output,F native){
+    if(!output)throw std::invalid_argument("Null GL query output");
+    auto count=Components(name);if(!count)return;
+    std::vector<T> values(std::max<size_t>(1,*count));CollectErrors();native(name,values.data());
+    if(!CollectErrors()&&*count)recomp::WriteGuestMemory(output,values.data(),*count*sizeof(T));
+  }
+  template<class S,class F>void Bind(const char *name,F function){bridges.emplace(name,recomp::MakeBridge<S>(std::move(function)));}
+  // Pass-through bridges: pointer parameters arrive as guest addresses, which
+  // are the same host addresses; scalars keep their exact GL types.
+  template<class T>struct GuestArgument{using type=T;};
+  template<class T>struct GuestArgument<T*>{using type=addr_t;};
+  template<class T>static T FromGuest(typename GuestArgument<T>::type value){if constexpr(std::is_pointer_v<T>)return reinterpret_cast<T>(value);else return value;}
+  template<class R,class... A>void BindPassthrough(const char *name,R(KHRONOS_APIENTRY *native)(A...)){
+    Bind<R(typename GuestArgument<A>::type...)>(name,[native](typename GuestArgument<A>::type... arguments){return native(FromGuest<A>(arguments)...);});
+  }
+  static constexpr size_t TransferLimit=64*1024*1024;
+  static void Range(addr_t address,size_t size){
+    if(size&&(!address||size>UINT64_MAX-address))throw std::invalid_argument("Invalid guest GL transfer range");
+  }
+  static std::vector<uint8_t> Snapshot(addr_t address,size_t size){
+    if(size>TransferLimit)throw std::runtime_error("GL copied transfer exceeds64MiB scope");
+    Range(address,size);std::vector<uint8_t> bytes(size);
+    if(size)recomp::ReadGuestMemory(bytes.data(),address,size);
+    return bytes;
+  }
+  template<class F>bool Call(F function){CollectErrors();function();return !CollectErrors();}
+  static std::wstring SnapshotPathKey(const std::filesystem::path &path){
+    return std::filesystem::weakly_canonical(path).lexically_normal().wstring();
+  }
+  static bool SameSnapshotPath(const std::wstring &a,const std::wstring &b){
+    return CompareStringOrdinal(a.c_str(),-1,b.c_str(),-1,TRUE)==CSTR_EQUAL;
+  }
+  bool ReservedFirstFramePath(const std::filesystem::path &path)const{
+    if(diagnostic_png.empty())return false;
+    const auto key=SnapshotPathKey(path);const auto first=std::filesystem::path(diagnostic_png);
+    return SameSnapshotPath(key,SnapshotPathKey(first))||SameSnapshotPath(key,SnapshotPathKey(first.parent_path()/L"first-present.png"));
+  }
+  // A few 1x1 reads of the window back buffer before its swap; every touched
+  // read/pack binding and the guest's pending GL errors are restored.
+  void ProbeWindow(addr_t surface){
+    auto extent=egl.CurrentDrawWindowExtent();if(!extent||extent->surface!=surface)return;
+    SelectContext();if(extent->context!=current_context)return;
+    CollectErrors();const auto saved_errors=pending_errors[current_context];
+    const auto *version=getString(GL_VERSION);
+    const bool es3=version&&std::strstr(reinterpret_cast<const char*>(version),"OpenGL ES 3");
+    auto bindFramebuffer=Symbol<PFNGLBINDFRAMEBUFFERPROC>(module,"glBindFramebuffer");
+    PFNGLREADBUFFERPROC readBuffer=es3?Symbol<PFNGLREADBUFFERPROC>(module,"glReadBuffer"):nullptr;
+    GLint framebuffer=0,pack=4,pbo=0,row=0,skiprows=0,skippixels=0,read_buffer=GL_BACK;
+    getInteger(es3?GL_READ_FRAMEBUFFER_BINDING:GL_FRAMEBUFFER_BINDING,&framebuffer);getInteger(GL_PACK_ALIGNMENT,&pack);
+    if(es3){getInteger(GL_PIXEL_PACK_BUFFER_BINDING,&pbo);getInteger(GL_PACK_ROW_LENGTH,&row);getInteger(GL_PACK_SKIP_ROWS,&skiprows);getInteger(GL_PACK_SKIP_PIXELS,&skippixels);}
+    bindFramebuffer(es3?GL_READ_FRAMEBUFFER:GL_FRAMEBUFFER,0);
+    if(es3){getInteger(GL_READ_BUFFER,&read_buffer);readBuffer(GL_BACK);draw_glBindBuffer(GL_PIXEL_PACK_BUFFER,0);draw_glPixelStorei(GL_PACK_ROW_LENGTH,0);draw_glPixelStorei(GL_PACK_SKIP_ROWS,0);draw_glPixelStorei(GL_PACK_SKIP_PIXELS,0);}
+    draw_glPixelStorei(GL_PACK_ALIGNMENT,1);
+    std::vector<std::array<uint8_t,4>> colours;
+    for(const auto &[fx,fy]:probe_points){
+      const GLint x=std::clamp(GLint(fx*float(extent->width)),0,extent->width-1);
+      const GLint y=std::clamp(extent->height-1-GLint(fy*float(extent->height)),0,extent->height-1);
+      std::array<uint8_t,4> rgba{};draw_glReadPixels(x,y,1,1,GL_RGBA,GL_UNSIGNED_BYTE,rgba.data());colours.push_back(rgba);
+    }
+    if(es3){readBuffer(GLenum(read_buffer));draw_glPixelStorei(GL_PACK_ROW_LENGTH,row);draw_glPixelStorei(GL_PACK_SKIP_ROWS,skiprows);draw_glPixelStorei(GL_PACK_SKIP_PIXELS,skippixels);draw_glBindBuffer(GL_PIXEL_PACK_BUFFER,GLuint(pbo));}
+    bindFramebuffer(es3?GL_READ_FRAMEBUFFER:GL_FRAMEBUFFER,GLuint(framebuffer));draw_glPixelStorei(GL_PACK_ALIGNMENT,pack);
+    for(unsigned i=0;i<32&&getError()!=GL_NO_ERROR;++i){}
+    if(saved_errors.empty())pending_errors.erase(current_context);else pending_errors[current_context]=saved_errors;
+    probe_pending=false;probe_result=std::move(colours);
+  }
+  uint64_t CaptureWindow(addr_t display,addr_t surface){
+    const auto thread=GetCurrentThreadId();
+    // There can be only one outstanding original swap on each native thread.
+    // A new ENTER abandons any unmatched previous ticket on that thread.
+    for(auto at=pending_presents.begin();at!=pending_presents.end();)
+      if(at->second.thread==thread){if(snapshot_inflight==at->first)snapshot_inflight=0;at=pending_presents.erase(at);}else ++at;
+    const bool diagnostic_enabled=!diagnostic_png.empty()&&!diagnostic.frame_png;
+    const bool snapshot_capture=snapshot.pending&&!snapshot_inflight;
+    if(!diagnostic_enabled&&!snapshot_capture)return 0;
+    auto extent=egl.CurrentDrawWindowExtent();if(!extent||extent->surface!=surface)return 0;
+    SelectContext();if(extent->context!=current_context)throw std::runtime_error("Capture context changed");
+    if(uint64_t(extent->width)*uint64_t(extent->height)*4>TransferLimit)throw std::runtime_error("Capture exceeds64MiB");
+    const bool diagnostic_capture=diagnostic_enabled&&(!diagnostic.first_present_png||diagnostic.draw_submissions);
+    if(!diagnostic_capture&&!snapshot_capture)return 0;
+    if(next_present_serial==UINT64_MAX)throw std::overflow_error("Capture serial exhausted");
+    const auto serial=++next_present_serial;
+    if(diagnostic_capture)++diagnostic.capture_attempts;
+    if(snapshot_capture)++snapshot.capture_attempts;
+    CollectErrors();const auto saved_errors=pending_errors[current_context];
+    const bool observe_capture=diagnostic_capture&&diagnostic.capture_attempts<=8;
+    struct ErrorRestore {Impl &host;std::set<GLenum> saved;~ErrorRestore(){
+      for(unsigned i=0;i<32&&host.getError()!=GL_NO_ERROR;++i){}
+      if(saved.empty())host.pending_errors.erase(host.current_context);else host.pending_errors[host.current_context]=saved;
+    }} errors{*this,saved_errors};
+    auto check=[&](const char *operation){const auto error=getError();if(error!=GL_NO_ERROR)throw std::runtime_error(std::string(operation)+" GL error="+Hex(error));};
+    const auto *version=getString(GL_VERSION);check("capture version");
+    const bool es3=version&&std::strstr(reinterpret_cast<const char*>(version),"OpenGL ES 3");
+    const auto *vendor=getString(GL_VENDOR),*renderer=getString(GL_RENDERER);check("capture renderer");
+    std::fprintf(stderr,"First frame: readback context=%#llx surface=%#llx %dx%d vendor=%s renderer=%s version=%s\n",(unsigned long long)extent->context,(unsigned long long)extent->surface,extent->width,extent->height,vendor?reinterpret_cast<const char*>(vendor):"",renderer?reinterpret_cast<const char*>(renderer):"",version?reinterpret_cast<const char*>(version):"");
+    // Bounded observation only: no setters, validation calls or guest writes.
+    // Saved original errors remain owned by the unchanged ErrorRestore above.
+    if(observe_capture){
+      GLint draw_fbo=0,read_fbo=0,draw_buffer=GL_NONE,read_buffer=GL_NONE,viewport[4]{},scissor[4]{};
+      GLboolean color_mask[4]{},depth_mask=GL_FALSE,blend=GL_FALSE,cull=GL_FALSE,depth=GL_FALSE,scissor_test=GL_FALSE,stencil=GL_FALSE,rasterizer_discard=GL_FALSE;
+      getInteger(es3?GL_DRAW_FRAMEBUFFER_BINDING:GL_FRAMEBUFFER_BINDING,&draw_fbo);
+      getInteger(es3?GL_READ_FRAMEBUFFER_BINDING:GL_FRAMEBUFFER_BINDING,&read_fbo);
+      if(es3){getInteger(GL_DRAW_BUFFER0,&draw_buffer);getInteger(GL_READ_BUFFER,&read_buffer);getBoolean(GL_RASTERIZER_DISCARD,&rasterizer_discard);}
+      getInteger(GL_VIEWPORT,viewport);getInteger(GL_SCISSOR_BOX,scissor);
+      getBoolean(GL_COLOR_WRITEMASK,color_mask);getBoolean(GL_DEPTH_WRITEMASK,&depth_mask);
+      getBoolean(GL_BLEND,&blend);getBoolean(GL_CULL_FACE,&cull);getBoolean(GL_DEPTH_TEST,&depth);
+      getBoolean(GL_SCISSOR_TEST,&scissor_test);getBoolean(GL_STENCIL_TEST,&stencil);
+      std::fprintf(stderr,"First frame: capture state ticket=%llu original_errors=[",(unsigned long long)serial);
+      bool separator=false;for(const auto error:saved_errors){std::fprintf(stderr,"%s%#x",separator?",":"",unsigned(error));separator=true;}
+      std::fprintf(stderr,"] query_errors=[");
+      // Diagnostic-query errors are not original guest command errors. Consume
+      // them here so the pre-existing capture checks see their original state.
+      separator=false;for(unsigned i=0;i<32;++i){const auto error=getError();if(error==GL_NO_ERROR)break;std::fprintf(stderr,"%s%#x",separator?",":"",unsigned(error));separator=true;}
+      std::fprintf(stderr,"] draw_fbo=%d read_fbo=%d es3=%d draw_buffer=%#x read_buffer=%#x viewport=[%d,%d,%d,%d] scissor=[%d,%d,%d,%d] color_mask=[%u,%u,%u,%u] depth_mask=%u enables=[blend:%u,cull:%u,depth:%u,scissor:%u,stencil:%u,rasterizer_discard:%u]\n",draw_fbo,read_fbo,int(es3),unsigned(draw_buffer),unsigned(read_buffer),viewport[0],viewport[1],viewport[2],viewport[3],scissor[0],scissor[1],scissor[2],scissor[3],unsigned(color_mask[0]),unsigned(color_mask[1]),unsigned(color_mask[2]),unsigned(color_mask[3]),unsigned(depth_mask),unsigned(blend),unsigned(cull),unsigned(depth),unsigned(scissor_test),unsigned(stencil),unsigned(rasterizer_discard));
+    }
+    auto bindFramebuffer=Symbol<PFNGLBINDFRAMEBUFFERPROC>(module,"glBindFramebuffer");
+    PFNGLREADBUFFERPROC readBuffer=es3?Symbol<PFNGLREADBUFFERPROC>(module,"glReadBuffer"):nullptr;
+    GLint framebuffer=0,pack=4,pbo=0,row=0,skiprows=0,skippixels=0,default_read=GL_BACK;
+    getInteger(es3?GL_READ_FRAMEBUFFER_BINDING:GL_FRAMEBUFFER_BINDING,&framebuffer);getInteger(GL_PACK_ALIGNMENT,&pack);
+    if(es3){getInteger(GL_PIXEL_PACK_BUFFER_BINDING,&pbo);getInteger(GL_PACK_ROW_LENGTH,&row);getInteger(GL_PACK_SKIP_ROWS,&skiprows);getInteger(GL_PACK_SKIP_PIXELS,&skippixels);}check("capture saved state");
+    struct StateRestore {
+      Impl &host;PFNGLBINDFRAMEBUFFERPROC bind;PFNGLREADBUFFERPROC read;bool es3;GLint framebuffer,pack,pbo,row,skiprows,skippixels,default_read=GL_BACK;bool bound=false;
+      ~StateRestore(){
+        if(bound){if(es3)read(GLenum(default_read));bind(es3?GL_READ_FRAMEBUFFER:GL_FRAMEBUFFER,GLuint(framebuffer));}
+        host.draw_glPixelStorei(GL_PACK_ALIGNMENT,pack);
+        if(es3){host.draw_glPixelStorei(GL_PACK_ROW_LENGTH,row);host.draw_glPixelStorei(GL_PACK_SKIP_ROWS,skiprows);host.draw_glPixelStorei(GL_PACK_SKIP_PIXELS,skippixels);host.draw_glBindBuffer(GL_PIXEL_PACK_BUFFER,GLuint(pbo));}
+      }
+    } restore{*this,bindFramebuffer,readBuffer,es3,framebuffer,pack,pbo,row,skiprows,skippixels};
+    bindFramebuffer(es3?GL_READ_FRAMEBUFFER:GL_FRAMEBUFFER,0);check("capture default framebuffer");restore.bound=true;
+    if(es3){getInteger(GL_READ_BUFFER,&default_read);check("capture default read state");restore.default_read=default_read;readBuffer(GL_BACK);draw_glBindBuffer(GL_PIXEL_PACK_BUFFER,0);draw_glPixelStorei(GL_PACK_ROW_LENGTH,0);draw_glPixelStorei(GL_PACK_SKIP_ROWS,0);draw_glPixelStorei(GL_PACK_SKIP_PIXELS,0);}
+    draw_glPixelStorei(GL_PACK_ALIGNMENT,1);check("capture pack state");
+    std::vector<uint8_t> pixels(size_t(extent->width)*size_t(extent->height)*4);
+    draw_glReadPixels(0,0,extent->width,extent->height,GL_RGBA,GL_UNSIGNED_BYTE,pixels.data());check("capture read pixels");
+    if(observe_capture){
+      uint8_t minimum[4]={255,255,255,255},maximum[4]{};
+      for(size_t i=0;i<pixels.size();++i){const auto channel=i%4;minimum[channel]=std::min(minimum[channel],pixels[i]);maximum[channel]=std::max(maximum[channel],pixels[i]);}
+      std::fprintf(stderr,"First frame: capture pixels ticket=%llu first_RGBA=[%u,%u,%u,%u] minimum_RGBA=[%u,%u,%u,%u] maximum_RGBA=[%u,%u,%u,%u]\n",(unsigned long long)serial,unsigned(pixels[0]),unsigned(pixels[1]),unsigned(pixels[2]),unsigned(pixels[3]),unsigned(minimum[0]),unsigned(minimum[1]),unsigned(minimum[2]),unsigned(minimum[3]),unsigned(maximum[0]),unsigned(maximum[1]),unsigned(maximum[2]),unsigned(maximum[3]));
+    }
+    bool nonuniform=false;for(size_t i=4;i<pixels.size();i+=4)if(std::memcmp(pixels.data(),pixels.data()+i,4)){nonuniform=true;break;}
+    PendingPresent pending;pending.serial=serial;pending.thread=thread;pending.display=display;
+    pending.surface=surface;pending.context=extent->context;pending.width=extent->width;pending.height=extent->height;
+    pending.nonuniform=nonuniform;pending.candidate=nonuniform&&diagnostic.draw_submissions;
+    pending.diagnostic_capture=diagnostic_capture;
+    if(snapshot_capture){pending.snapshot_request=snapshot.request_serial;pending.snapshot_path=snapshot.path;}
+    pending.draws=diagnostic.draw_submissions;pending.clears=diagnostic.clear_submissions;
+    if(snapshot_capture||pending.candidate||!diagnostic.first_present_png)pending.pixels=std::move(pixels);
+    pending_presents.emplace(serial,std::move(pending));
+    if(snapshot_capture)snapshot_inflight=serial;
+    std::fprintf(stderr,"First frame: capture ticket=%llu native_tid=%lu display=%#llx context=%#llx surface=%#llx nonuniform=%d candidate=%d; awaiting same original swap outcome\n",(unsigned long long)serial,thread,(unsigned long long)display,(unsigned long long)extent->context,(unsigned long long)surface,int(nonuniform),int(nonuniform&&diagnostic.draw_submissions));
+    return serial;
+  }
+  void FinishPresent(uint64_t serial,addr_t display,addr_t surface,uint32_t actual_result){
+    if(!serial)return;
+    auto at=pending_presents.find(serial);if(at==pending_presents.end())return;
+    auto pending=std::move(at->second);pending_presents.erase(at); // consume even a failed/mismatched return
+    const bool snapshot_return=pending.snapshot_request&&snapshot.pending&&snapshot.request_serial==pending.snapshot_request&&snapshot_inflight==serial;
+    if(snapshot_inflight==serial)snapshot_inflight=0;
+    const auto thread=GetCurrentThreadId();bool matched=pending.thread==thread&&pending.display==display&&pending.surface==surface;
+    if(matched){auto extent=egl.CurrentDrawWindowExtent();matched=extent&&extent->context==pending.context&&extent->surface==pending.surface&&extent->width==pending.width&&extent->height==pending.height;}
+    std::fprintf(stderr,"First frame: capture outcome ticket=%llu native_tid=%lu display=%#llx context=%#llx surface=%#llx EGLresult=%u matched=%d candidate=%d\n",(unsigned long long)serial,thread,(unsigned long long)display,(unsigned long long)pending.context,(unsigned long long)surface,actual_result,int(matched),int(pending.candidate));
+    if(!matched||actual_result!=1||pending.pixels.empty()){
+      if(snapshot_return)snapshot.failure=!matched?"Snapshot swap ticket/context mismatch":actual_result!=1?"Snapshot original swap failed":"Snapshot readback unavailable";
+      return;
+    }
+    if(snapshot_return){
+      try{
+        if(ReservedFirstFramePath(std::filesystem::path(pending.snapshot_path)))throw std::runtime_error("Snapshot path is reserved for first-frame witness");
+        WriteFramePng(std::filesystem::path(pending.snapshot_path),uint32_t(pending.width),uint32_t(pending.height),pending.pixels);
+        snapshot.pending=false;snapshot.completed=true;snapshot.failure.clear();snapshot.presented_capture_serial=serial;
+        snapshot.presented_native_thread=thread;snapshot.presented_display=display;snapshot.presented_context=pending.context;snapshot.presented_surface=surface;
+        snapshot.width=pending.width;snapshot.height=pending.height;snapshot.nonuniform=pending.nonuniform;
+        std::fprintf(stderr,"Frame snapshot: PNG=%s request=%llu ticket=%llu native_tid=%lu display=%#llx context=%#llx surface=%#llx %dx%d nonuniform=%d same_original_swap_EGL_TRUE=1\n",std::filesystem::path(pending.snapshot_path).u8string().c_str(),(unsigned long long)pending.snapshot_request,(unsigned long long)serial,thread,(unsigned long long)display,(unsigned long long)pending.context,(unsigned long long)surface,pending.width,pending.height,int(pending.nonuniform));
+      }catch(const std::exception &error){snapshot.pending=false;snapshot.completed=false;snapshot.failure=error.what();std::fprintf(stderr,"Frame snapshot: write failed request=%llu %s\n",(unsigned long long)pending.snapshot_request,error.what());}
+    }
+    if(!pending.diagnostic_capture||diagnostic.frame_png)return;
+    std::filesystem::path path(diagnostic_png);
+    if(!pending.candidate){if(diagnostic.first_present_png)return;path=path.parent_path()/L"first-present.png";}
+    WriteFramePng(path,uint32_t(pending.width),uint32_t(pending.height),pending.pixels);
+    diagnostic.first_present_png=true;diagnostic.width=pending.width;diagnostic.height=pending.height;
+    diagnostic.nonuniform=pending.nonuniform;diagnostic.failure.clear();
+    if(pending.candidate){diagnostic.frame_png=true;diagnostic.presented_capture_serial=serial;
+      diagnostic.presented_native_thread=thread;diagnostic.presented_display=display;
+      diagnostic.presented_context=pending.context;diagnostic.presented_surface=surface;}
+    std::fprintf(stderr,"First frame: PNG=%s ticket=%llu native_tid=%lu display=%#llx context=%#llx surface=%#llx draws=%llu clears=%llu nonuniform=%d candidate=%d same_original_swap_EGL_TRUE=1\n",path.u8string().c_str(),(unsigned long long)serial,thread,(unsigned long long)display,(unsigned long long)pending.context,(unsigned long long)surface,(unsigned long long)pending.draws,(unsigned long long)pending.clears,int(pending.nonuniform),int(pending.candidate));
+  }
+
+  GLint Integer(GLenum name){
+    GLint value=0;if(!Call([&]{getInteger(name,&value);}))throw std::runtime_error("Internal GL state query failed: "+Hex(name));return value;
+  }
+  void ShaderSource(GLuint shader,GLsizei count,addr_t strings,addr_t lengths){
+    if(count<=0){draw_glShaderSource(shader,count,nullptr,nullptr);return;}
+    if(count>4096)throw std::runtime_error("GL shader source exceeds4096 strings");
+    std::vector<addr_t> pointers(count);std::vector<GLint> sizes(count,-1);
+    Range(strings,size_t(count)*8);recomp::ReadGuestMemory(pointers.data(),strings,size_t(count)*8);
+    if(lengths){Range(lengths,size_t(count)*4);recomp::ReadGuestMemory(sizes.data(),lengths,size_t(count)*4);}
+    std::vector<std::vector<GLchar>> owned(count);std::vector<const GLchar*> native(count);size_t total=0;
+    for(GLsizei i=0;i<count;++i){
+      if(sizes[i]>=0){
+        if(size_t(sizes[i])>TransferLimit-total)throw std::runtime_error("GL shader source exceeds64MiB");
+        auto bytes=Snapshot(pointers[i],size_t(sizes[i]));owned[i].assign(bytes.begin(),bytes.end());total+=bytes.size();
+      }else{
+        for(;;){
+          if(total==TransferLimit)throw std::runtime_error("Unterminated/oversized GL shader source");
+          Range(pointers[i],owned[i].size()+1);GLchar c;recomp::ReadGuestMemory(&c,pointers[i]+owned[i].size(),1);
+          if(!c)break;
+          owned[i].push_back(c);++total;
+        }
+        sizes[i]=static_cast<GLint>(owned[i].size());
+      }
+      // ANGLE parses HLSLcc's 3.40282347e+38 as +inf; see gles_shader_fixups.h.
+      {std::string text(owned[i].begin(),owned[i].end());
+        if(gles_fixups::ClampFloatMaxLiterals(text)){owned[i].assign(text.begin(),text.end());sizes[i]=static_cast<GLint>(owned[i].size());}}
+      owned[i].push_back(0);native[i]=owned[i].data();
+    }
+    draw_glShaderSource(shader,count,native.data(),sizes.data());
+    if(ProbeShadersEnabled()){std::string text;for(GLsizei i=0;i<count;++i)text.append(native[i],size_t(sizes[i]));
+      if(text.find("_Lut2D_Params")!=std::string::npos){static int saved=0;const auto file="gl-probe-lut-shader"+std::to_string(shader)+"-"+std::to_string(saved++)+".glsl";
+        if(FILE*f=std::fopen(file.c_str(),"wb")){std::fwrite(text.data(),1,text.size(),f);std::fclose(f);}
+        std::fprintf(stderr,"GL draw probe: wrote %s (%zu bytes)\n",file.c_str(),text.size());}
+      auto &record=ProbeShaders();std::lock_guard lock(record.mutex);record.sources[shader]=std::move(text);}
+  }
+  static size_t ObjectComponents(bool program,GLenum pname){
+    if(!program){switch(pname){case GL_SHADER_TYPE:case GL_DELETE_STATUS:case GL_COMPILE_STATUS:case GL_INFO_LOG_LENGTH:case GL_SHADER_SOURCE_LENGTH:return 1;}}
+    else{switch(pname){
+      case GL_COMPUTE_WORK_GROUP_SIZE:return 3;
+      case GL_DELETE_STATUS:case GL_LINK_STATUS:case GL_VALIDATE_STATUS:case GL_INFO_LOG_LENGTH:case GL_ATTACHED_SHADERS:
+      case GL_ACTIVE_ATTRIBUTES:case GL_ACTIVE_ATTRIBUTE_MAX_LENGTH:case GL_ACTIVE_UNIFORMS:case GL_ACTIVE_UNIFORM_MAX_LENGTH:
+      case GL_PROGRAM_BINARY_RETRIEVABLE_HINT:case GL_PROGRAM_BINARY_LENGTH:case GL_ACTIVE_UNIFORM_BLOCKS:case GL_ACTIVE_UNIFORM_BLOCK_MAX_NAME_LENGTH:
+      case GL_TRANSFORM_FEEDBACK_BUFFER_MODE:case GL_TRANSFORM_FEEDBACK_VARYINGS:case GL_TRANSFORM_FEEDBACK_VARYING_MAX_LENGTH:return 1;
+    }}
+    throw std::runtime_error("Unsupported GL object query output width: "+Hex(pname));
+  }
+  template<class F>void ObjectQuery(GLuint object,GLenum pname,addr_t output,bool program,F native){
+    const auto count=ObjectComponents(program,pname);Range(output,count*4);GLint values[3]{};
+    if(Call([&]{native(object,pname,values);}))recomp::WriteGuestMemory(output,values,count*4);
+  }
+  template<class F>void InfoLog(GLuint object,GLsizei capacity,addr_t length,addr_t output,F native){
+    if(capacity<0){GLsizei dummy=0;GLchar byte=0;native(object,capacity,&dummy,&byte);return;}
+    if(size_t(capacity)>TransferLimit)throw std::runtime_error("GL info log exceeds64MiB");
+    if(length)Range(length,4);
+    if(capacity)Range(output,capacity);
+    std::vector<GLchar> bytes(std::max<GLsizei>(capacity,1));GLsizei written=-1;
+    if(!Call([&]{native(object,capacity,&written,bytes.data());}))return;
+    if(written<0||(capacity?written>=capacity:written!=0))throw std::runtime_error("Invalid native GL info log length");
+    if(capacity)recomp::WriteGuestMemory(output,bytes.data(),size_t(written)+1);
+    if(length)recomp::WriteGuestMemory(length,&written,4);
+  }
+  template<class F>void Generate(GLsizei count,addr_t output,F native){
+    if(count<=0){GLuint dummy=0;native(count,&dummy);return;}
+    if(size_t(count)>TransferLimit/4)throw std::runtime_error("GL name output exceeds64MiB");
+    Range(output,size_t(count)*4);std::vector<GLuint> values(count);
+    if(Call([&]{native(count,values.data());}))recomp::WriteGuestMemory(output,values.data(),size_t(count)*4);
+  }
+  template<class F>void DeleteNames(GLsizei count,addr_t input,F native){
+    if(count<=0){GLuint dummy=0;native(count,&dummy);return;}
+    auto bytes=Snapshot(input,size_t(count)*4);std::vector<GLuint> names(count);std::memcpy(names.data(),bytes.data(),bytes.size());native(count,names.data());
+  }
+  void Upload(GLenum target,int64_t size,addr_t data,GLenum usage){
+    std::vector<uint8_t> bytes;if(size>0&&data)bytes=Snapshot(data,static_cast<uint64_t>(size));
+    const auto key=BoundMappedKey(target);
+    if(Call([&]{draw_glBufferData(target,size,bytes.empty()?nullptr:bytes.data(),usage);})&&key)RetireMapping(*key);
+  }
+  void SubUpload(GLenum target,int64_t offset,int64_t size,addr_t data){
+    if(offset<0||size<=0){draw_glBufferSubData(target,offset,size,nullptr);return;}
+    auto bytes=Snapshot(data,static_cast<uint64_t>(size));draw_glBufferSubData(target,offset,size,bytes.data());
+  }
+  void DrawBuffers(GLsizei count,addr_t input){
+    // ANGLE validates negative/over-limit counts and nonzero null pointers
+    // before reading the array. Zero also belongs to native FBO validation.
+    if(count<=0||!input){drawBuffers(count,nullptr);return;}
+    const GLint maximum=Integer(GL_MAX_DRAW_BUFFERS);
+    if(maximum<=0)throw std::runtime_error("Invalid native maximum draw-buffer count");
+    if(count>maximum){drawBuffers(count,nullptr);return;}
+    auto bytes=Snapshot(input,static_cast<size_t>(count)*sizeof(GLenum));
+    std::vector<GLenum> values(static_cast<size_t>(count));
+    std::memcpy(values.data(),bytes.data(),bytes.size());
+    drawBuffers(count,values.data());
+  }
+  void ProgramBinary(GLuint program,GLenum format,addr_t input,GLsizei length,PFNGLPROGRAMBINARYPROC native){
+    // The pinned driver converts a negative length to size_t without validating
+    // it. Such a span cannot be copied under the checked guest-memory contract.
+    if(length<0)throw std::runtime_error("Negative program-binary input length is outside checked transfer scope");
+    if(!length){native(program,format,nullptr,0);return;}
+    auto bytes=Snapshot(input,static_cast<size_t>(length));
+    native(program,format,bytes.data(),length);
+  }
+  void GetProgramBinary(GLuint program,GLsizei capacity,addr_t length,addr_t format,addr_t output,PFNGLGETPROGRAMBINARYPROC native){
+    // ANGLE's serializer writes format first, binary bytes second, length last.
+    // Insufficient capacity writes format and length=0 even while raising an error.
+    std::vector<uint8_t> bytes;
+    if(capacity>0&&output){
+      if(static_cast<size_t>(capacity)>TransferLimit)throw std::runtime_error("Program-binary output exceeds64MiB scope");
+      bytes.resize(static_cast<size_t>(capacity));
+    }
+    // Neither sentinel can be a result from the pinned ANGLE serializer:
+    // its sole format is GL_PROGRAM_BINARY_ANGLE (0x93a6), lengths are nonnegative.
+    GLenum native_format=GL_NONE;GLsizei written=-1;
+    const bool okay=Call([&]{native(program,capacity,&written,&native_format,bytes.empty()?nullptr:bytes.data());});
+    if(okay&&(native_format==GL_NONE||written<0))throw std::runtime_error("Invalid native program-binary outputs");
+    if(written>0&&!bytes.empty()&&static_cast<size_t>(written)>bytes.size())throw std::runtime_error("Native program-binary length exceeds staging capacity");
+    if(native_format!=GL_NONE&&format)Range(format,sizeof(GLenum));
+    if(written>0&&!bytes.empty())Range(output,static_cast<size_t>(written));
+    if(written>=0&&length)Range(length,sizeof(GLsizei));
+    if(native_format!=GL_NONE&&format)recomp::WriteGuestMemory(format,&native_format,sizeof(native_format));
+    if(written>0&&!bytes.empty())recomp::WriteGuestMemory(output,bytes.data(),static_cast<size_t>(written));
+    if(written>=0&&length)recomp::WriteGuestMemory(length,&written,sizeof(written));
+  }
+  template<class Native>void FramebufferHint(GLenum target,GLsizei count,addr_t input,bool core,Native native){
+    // Native target/count validation precedes all attachment-array reads.
+    // Repeated attachments are valid; the API has no maximum list count.
+    const bool valid_target=target==GL_FRAMEBUFFER||(core&&(target==GL_READ_FRAMEBUFFER||target==GL_DRAW_FRAMEBUFFER));
+    if(!valid_target||count<=0){native(target,count,nullptr);return;}
+    auto bytes=Snapshot(input,static_cast<size_t>(count)*sizeof(GLenum));
+    std::vector<GLenum> attachments(static_cast<size_t>(count));
+    std::memcpy(attachments.data(),bytes.data(),bytes.size());
+    native(target,count,attachments.data());
+  }
+  void VertexBuffers(){
+    const GLint count=Integer(GL_MAX_VERTEX_ATTRIBS);if(count<0||count>4096)throw std::runtime_error("GL vertex attribute count outside scope");
+    for(GLint i=0;i<count;++i){GLint enabled=0,buffer=0;
+      if(!Call([&]{getVertexAttrib(i,GL_VERTEX_ATTRIB_ARRAY_ENABLED,&enabled);}))throw std::runtime_error("Cannot inspect native vertex array");
+      if(enabled){if(!Call([&]{getVertexAttrib(i,GL_VERTEX_ATTRIB_ARRAY_BUFFER_BINDING,&buffer);}))throw std::runtime_error("Cannot inspect vertex buffer ownership");
+        if(!buffer)throw std::runtime_error("CPU client vertex arrays are outside typed GL scope");}
+    }
+  }
+  void IndexedDrawBuffers(){
+    VertexBuffers();
+    if(!Integer(GL_ELEMENT_ARRAY_BUFFER_BINDING))throw std::runtime_error("Indexed draw requires a GPU EBO; CPU index pointers unsupported");
+  }
+  void Pixels(GLint x,GLint y,GLsizei width,GLsizei height,GLenum format,GLenum type,addr_t output){
+    // Other formats, framebuffer-object reads and PBO packs (output is then a
+    // buffer offset) go straight to ANGLE: guest memory is identity-mapped.
+    if(format!=GL_RGBA||type!=GL_UNSIGNED_BYTE||Integer(GL_READ_FRAMEBUFFER_BINDING)||Integer(GL_PIXEL_PACK_BUFFER_BINDING)){
+      draw_glReadPixels(x,y,width,height,format,type,reinterpret_cast<void*>(output));return;
+    }
+    auto surface=egl.CurrentReadPbufferExtent();if(!surface||surface->context!=current_context)throw std::runtime_error("GL readback requires a live owned read pbuffer");
+    if(width<=0||height<=0){uint8_t byte=0;Call([&]{draw_glReadPixels(x,y,width,height,format,type,&byte);});return;}
+    if(x<0||y<0||int64_t(x)+width>surface->width||int64_t(y)+height>surface->height)throw std::runtime_error("Clipped/out-of-bounds GL readback footprint is unsupported");
+    const GLint alignment=Integer(GL_PACK_ALIGNMENT),row_length=Integer(GL_PACK_ROW_LENGTH),skip_rows=Integer(GL_PACK_SKIP_ROWS),skip_pixels=Integer(GL_PACK_SKIP_PIXELS);
+    if((alignment!=1&&alignment!=2&&alignment!=4&&alignment!=8)||row_length<0||skip_rows<0||skip_pixels<0)throw std::runtime_error("Invalid native GL pack state");
+    const uint64_t row_bytes=uint64_t(width)*4;
+    const uint64_t stride=(uint64_t(row_length?row_length:width)*4+alignment-1)&~uint64_t(alignment-1);
+    auto add=[](uint64_t a,uint64_t b){if(a>TransferLimit||b>TransferLimit-a)throw std::runtime_error("GL pixel pack footprint exceeds64MiB");return a+b;};
+    auto rows=[&](uint64_t count){if(count&&stride>TransferLimit/count)throw std::runtime_error("GL pixel pack row span exceeds64MiB");return count*stride;};
+    const uint64_t prefix=add(rows(skip_rows),uint64_t(skip_pixels)*4);
+    const uint64_t span=add(add(prefix,rows(height-1)),row_bytes);
+    Range(output,static_cast<size_t>(span));std::vector<uint8_t> pixels(span);
+    if(!Call([&]{draw_glReadPixels(x,y,width,height,format,type,pixels.data());}))return;
+    if(stride<=row_bytes)recomp::WriteGuestMemory(output+prefix,pixels.data()+prefix,size_t(span-prefix));
+    else for(GLsizei row=0;row<height;++row){const auto offset=prefix+uint64_t(row)*stride;recomp::WriteGuestMemory(output+offset,pixels.data()+offset,size_t(row_bytes));}
+  }
+#include "gl_texture_impl.inc"
+#include "gl_uniform_impl.inc"
+#include "gl_framebuffer_impl.inc"
+#include "gl_misc_impl.inc"
+#include "gl_indexed_impl.inc"
+#include "gl_internalformat_impl.inc"
+#include "gl_sampler_impl.inc"
+#include "gl_buffer_indexed_impl.inc"
+#include "gl_label_impl.inc"
+#include "gl_texture3d_impl.inc"
+#include "gl_uniform_block_impl.inc"
+#include "gl_program_resource_impl.inc"
+#include "gl_mapping_impl.inc"
+  void Bindings(){
+    // Scalar commands delegate validation/error flags to the same current
+    // ANGLE context. They neither drain errors nor expose driver pointers.
+#define GL_SCALAR(name, native_type, signature) {using GuestSignature=signature;static_assert(std::is_same_v<native_type,GuestSignature*>);Bind<signature>(#name,Symbol<native_type>(module,#name));}
+#include "gl_scalar_commands.inc"
+#undef GL_SCALAR
+    Bind<GLuint(GLenum)>("glCreateShader",draw_glCreateShader);
+    Bind<void(GLuint,GLsizei,addr_t,addr_t)>("glShaderSource",[this](auto s,auto n,auto strings,auto lengths){ShaderSource(s,n,strings,lengths);});
+    Bind<void(GLuint)>("glCompileShader",draw_glCompileShader);Bind<void(GLuint)>("glDeleteShader",draw_glDeleteShader);
+    Bind<void(GLuint,GLenum,addr_t)>("glGetShaderiv",[this](auto s,auto p,auto out){ObjectQuery(s,p,out,false,draw_glGetShaderiv);});
+    Bind<void(GLuint,GLsizei,addr_t,addr_t)>("glGetShaderInfoLog",[this](auto s,auto n,auto length,auto out){InfoLog(s,n,length,out,draw_glGetShaderInfoLog);});
+    Bind<GLuint()>("glCreateProgram",draw_glCreateProgram);Bind<void(GLuint,GLuint)>("glAttachShader",[this](GLuint program,GLuint shader){
+      if(ProbeShadersEnabled()){auto &record=ProbeShaders();std::lock_guard lock(record.mutex);record.attached[program].push_back(shader);}
+      draw_glAttachShader(program,shader);});Bind<void(GLuint,GLuint)>("glDetachShader",draw_glDetachShader);
+    Bind<void(GLuint)>("glLinkProgram",draw_glLinkProgram);Bind<void(GLuint)>("glUseProgram",draw_glUseProgram);Bind<void(GLuint)>("glDeleteProgram",draw_glDeleteProgram);
+    Bind<void(GLuint,GLenum,addr_t)>("glGetProgramiv",[this](auto s,auto p,auto out){ObjectQuery(s,p,out,true,draw_glGetProgramiv);});
+    Bind<void(GLuint,GLsizei,addr_t,addr_t)>("glGetProgramInfoLog",[this](auto s,auto n,auto length,auto out){InfoLog(s,n,length,out,draw_glGetProgramInfoLog);});
+    Bind<void(GLsizei,addr_t)>("glGenBuffers",[this](auto n,auto out){Generate(n,out,draw_glGenBuffers);});
+    Bind<void(GLsizei,addr_t)>("glDeleteBuffers",[this](auto n,auto in){DeleteMappedBuffers(n,in);});
+    Bind<void(GLenum,GLuint)>("glBindBuffer",draw_glBindBuffer);
+    Bind<void(GLenum,int64_t,addr_t,GLenum)>("glBufferData",[this](auto t,auto n,auto in,auto u){Upload(t,n,in,u);});
+    Bind<void(GLenum,int64_t,int64_t,addr_t)>("glBufferSubData",[this](auto t,auto o,auto n,auto in){SubUpload(t,o,n,in);});
+    Bind<void(GLsizei,addr_t)>("glGenVertexArrays",[this](auto n,auto out){Generate(n,out,draw_glGenVertexArrays);});
+    Bind<void(GLsizei,addr_t)>("glDeleteVertexArrays",[this](auto n,auto in){DeleteNames(n,in,draw_glDeleteVertexArrays);});
+    Bind<void(GLuint)>("glBindVertexArray",draw_glBindVertexArray);Bind<void(GLuint)>("glEnableVertexAttribArray",draw_glEnableVertexAttribArray);Bind<void(GLuint)>("glDisableVertexAttribArray",draw_glDisableVertexAttribArray);
+    Bind<void(GLuint,GLint,GLenum,GLboolean,GLsizei,addr_t)>("glVertexAttribPointer",[this](auto i,auto n,auto t,auto normal,auto stride,auto offset){
+      if(!Integer(GL_ARRAY_BUFFER_BINDING))throw std::runtime_error("VertexAttribPointer requires a GPU VBO; CPU client pointers unsupported");
+      draw_glVertexAttribPointer(i,n,t,normal,stride,reinterpret_cast<const void*>(offset));});
+    Bind<void(GLenum,GLint,GLsizei)>("glDrawArrays",[this](auto mode,auto first,auto count){VertexBuffers();draw_glDrawArrays(mode,first,count);});
+    Bind<void(GLenum,GLsizei,GLenum,addr_t)>("glDrawElements",[this](auto mode,auto count,auto type,auto offset){VertexBuffers();
+      if(!Integer(GL_ELEMENT_ARRAY_BUFFER_BINDING))throw std::runtime_error("DrawElements requires a GPU EBO; CPU index pointers unsupported");
+      draw_glDrawElements(mode,count,type,reinterpret_cast<const void*>(offset));});
+    Bind<void(GLint,GLint,GLsizei,GLsizei,GLenum,GLenum,addr_t)>("glReadPixels",[this](auto x,auto y,auto w,auto h,auto f,auto t,auto out){Pixels(x,y,w,h,f,t,out);});
+    Bind<void(GLenum,GLint)>("glPixelStorei",draw_glPixelStorei);
+    Bind<addr_t(uint32_t)>("glGetString",[this](GLenum name){CollectErrors();const auto native=getString(name);CollectErrors();return String(native);});
+    Bind<addr_t(uint32_t,uint32_t)>("glGetStringi",[this](GLenum name,GLuint index){CollectErrors();const auto native=getStringi(name,index);CollectErrors();return String(native);});
+    Bind<void(uint32_t,addr_t)>("glGetIntegerv",[this](GLenum name,addr_t out){QueryValues<GLint>(name,out,getInteger);});
+    Bind<void(uint32_t,addr_t)>("glGetFloatv",[this](GLenum name,addr_t out){QueryValues<GLfloat>(name,out,getFloat);});
+    Bind<void(uint32_t,addr_t)>("glGetBooleanv",[this](GLenum name,addr_t out){QueryValues<GLboolean>(name,out,getBoolean);});
+    Bind<uint32_t()>("glGetError",[this]{CollectErrors();auto at=pending_errors.find(current_context);if(at==pending_errors.end())return GLenum(GL_NO_ERROR);
+      const GLenum value=*at->second.begin();at->second.erase(at->second.begin());if(at->second.empty())pending_errors.erase(at);return value;});
+    BindTextureCommands();
+    BindUniformCommands();
+    BindFramebufferCommands();
+    BindMiscCommands();
+#define GL_PASSTHROUGH_COMMAND(name,native,type) BindPassthrough(#name,pass_##name);
+#include "gl_passthrough_commands.inc"
+#undef GL_PASSTHROUGH_COMMAND
+    BindIndexedCommands();
+    BindInternalFormatCommands();
+    BindSamplerCommands();
+    BindIndexedBufferCommands();
+#define GL_OBJECT_COMMAND(name,native_type,signature) {using GuestSignature=signature;static_assert(std::is_same_v<native_type,GuestSignature*>);Bind<signature>(#name,Symbol<native_type>(module,#name));}
+#include "gl_object_commands.inc"
+#undef GL_OBJECT_COMMAND
+#define GL_STORAGE_COMMAND(name,native_type,signature) {using GuestSignature=signature;static_assert(std::is_same_v<native_type,GuestSignature*>);Bind<signature>(#name,Symbol<native_type>(module,#name));}
+#include "gl_storage_commands.inc"
+#undef GL_STORAGE_COMMAND
+    BindLabelCommands();
+    BindTexture3DCommands();
+    BindUniformBlockCommands();
+    BindProgramResourceCommands();
+    BindMappingCommands();
+    Bind<void(GLsizei,addr_t)>("glDrawBuffers",[this](GLsizei n,addr_t input){DrawBuffers(n,input);});
+    static_assert(sizeof(GLsync)==sizeof(addr_t)&&sizeof(GLuint64)==8);
+    const auto fenceSync=Symbol<PFNGLFENCESYNCPROC>(module,"glFenceSync");
+    Bind<addr_t(GLenum,GLbitfield)>("glFenceSync",[fenceSync](GLenum condition,GLbitfield flags){return reinterpret_cast<addr_t>(fenceSync(condition,flags));});
+    const auto clientWaitSync=Symbol<PFNGLCLIENTWAITSYNCPROC>(module,"glClientWaitSync");
+    Bind<GLenum(addr_t,GLbitfield,GLuint64)>("glClientWaitSync",[clientWaitSync](addr_t sync,GLbitfield flags,GLuint64 timeout){return clientWaitSync(reinterpret_cast<GLsync>(sync),flags,timeout);});
+    const auto deleteSync=Symbol<PFNGLDELETESYNCPROC>(module,"glDeleteSync");
+    Bind<void(addr_t)>("glDeleteSync",[deleteSync](addr_t sync){deleteSync(reinterpret_cast<GLsync>(sync));});
+    Bind<void(GLuint,GLenum,GLint)>("glProgramParameteri",Symbol<PFNGLPROGRAMPARAMETERIPROC>(module,"glProgramParameteri"));
+    const auto getBinary=Symbol<PFNGLGETPROGRAMBINARYPROC>(module,"glGetProgramBinary");
+    Bind<void(GLuint,GLsizei,addr_t,addr_t,addr_t)>("glGetProgramBinary",[this,getBinary](GLuint p,GLsizei n,addr_t length,addr_t format,addr_t output){GetProgramBinary(p,n,length,format,output,getBinary);});
+    const auto setBinary=Symbol<PFNGLPROGRAMBINARYPROC>(module,"glProgramBinary");
+    Bind<void(GLuint,GLenum,addr_t,GLsizei)>("glProgramBinary",[this,setBinary](GLuint p,GLenum format,addr_t input,GLsizei n){ProgramBinary(p,format,input,n,setBinary);});
+    const auto invalidate=Symbol<PFNGLINVALIDATEFRAMEBUFFERPROC>(module,"glInvalidateFramebuffer");
+    Bind<void(GLenum,GLsizei,addr_t)>("glInvalidateFramebuffer",[this,invalidate](GLenum target,GLsizei n,addr_t input){FramebufferHint(target,n,input,true,invalidate);});
+    const auto discard=Symbol<PFNGLDISCARDFRAMEBUFFEREXTPROC>(module,"glDiscardFramebufferEXT");
+    Bind<void(GLenum,GLsizei,addr_t)>("glDiscardFramebufferEXT",[this,discard](GLenum target,GLsizei n,addr_t input){FramebufferHint(target,n,input,false,discard);});
+    const auto indexedInstanced=Symbol<PFNGLDRAWELEMENTSINSTANCEDPROC>(module,"glDrawElementsInstanced");
+    Bind<void(GLenum,GLsizei,GLenum,addr_t,GLsizei)>("glDrawElementsInstanced",[this,indexedInstanced](auto mode,auto count,auto type,auto offset,auto instances){
+      IndexedDrawBuffers();indexedInstanced(mode,count,type,reinterpret_cast<const void*>(offset),instances);});
+    for(const char *name:{"glDrawElementsBaseVertex","glDrawElementsBaseVertexOES","glDrawElementsBaseVertexEXT"}){
+      const auto native=Symbol<PFNGLDRAWELEMENTSBASEVERTEXPROC>(module,name);
+      Bind<void(GLenum,GLsizei,GLenum,addr_t,GLint)>(name,[this,native](auto mode,auto count,auto type,auto offset,auto base){
+        IndexedDrawBuffers();native(mode,count,type,reinterpret_cast<const void*>(offset),base);});
+    }
+    for(const char *name:{"glDrawElementsInstancedBaseVertex","glDrawElementsInstancedBaseVertexOES","glDrawElementsInstancedBaseVertexEXT"}){
+      const auto native=Symbol<PFNGLDRAWELEMENTSINSTANCEDBASEVERTEXPROC>(module,name);
+      Bind<void(GLenum,GLsizei,GLenum,addr_t,GLsizei,GLint)>(name,[this,native](auto mode,auto count,auto type,auto offset,auto instances,auto base){
+        IndexedDrawBuffers();native(mode,count,type,reinterpret_cast<const void*>(offset),instances,base);});
+    }
+    for(const char *name:{"glDrawRangeElementsBaseVertex","glDrawRangeElementsBaseVertexOES","glDrawRangeElementsBaseVertexEXT"}){
+      const auto native=Symbol<PFNGLDRAWRANGEELEMENTSBASEVERTEXPROC>(module,name);
+      Bind<void(GLenum,GLuint,GLuint,GLsizei,GLenum,addr_t,GLint)>(name,[this,native](auto mode,auto start,auto end,auto count,auto type,auto offset,auto base){
+        IndexedDrawBuffers();native(mode,start,end,count,type,reinterpret_cast<const void*>(offset),base);});
+    }
+  }
+};
+GlHost::GlHost(EglHost &egl,const std::wstring &directory,addr_t marker):impl_(std::make_unique<Impl>(egl,directory,marker)){}
+GlHost::~GlHost()=default;
+const std::vector<GlHost::Query> &GlHost::Queries(){return queries;}
+const std::vector<std::string> &GlHost::Commands(){static const std::vector<std::string> commands(std::begin(names),std::end(names));return commands;}
+size_t GlHost::QueryComponents(uint32_t name){std::lock_guard lock(impl_->mutex);auto dpi=impl_->egl.CurrentWindowDpiScope();impl_->SelectContext();auto count=impl_->Components(name);if(!count)throw std::runtime_error("Native GL query-size error");return *count;}
+addr_t GlHost::Marker(const std::string &name)const{for(size_t i=0;i<std::size(names);++i)if(name==names[i])return impl_->marker+i*8;throw std::runtime_error("Unsupported typed GL resolver signature: "+name);}
+void GlHost::Invoke(const std::string &name,State &state){GlNativeEnvironment environment;std::unique_lock lock(impl_->mutex);std::optional<WindowDpiScope> dpi;if(auto window=impl_->CurrentDpiWindow())dpi.emplace(window);auto found=impl_->bridges.find(name);if(found==impl_->bridges.end())throw std::invalid_argument("Unsupported GL import: "+name);impl_->SelectContext();
+  if(!impl_->diagnostic_png.empty()){++impl_->diagnostic.calls;if(impl_->diagnostic.calls<=24||impl_->diagnostic.calls%1000==0)std::fprintf(stderr,"First frame: GL call=%llu %s context=%#llx\n",(unsigned long long)impl_->diagnostic.calls,name.c_str(),(unsigned long long)impl_->current_context);}
+  // A native client wait may block; its immutable bridge uses only the current
+  // thread's native context. Leave other contexts free to make progress.
+  // Native ANGLE retains its own share-group synchronization and object lifetime.
+  if(name=="glClientWaitSync"){auto call=found->second;lock.unlock();call(state);return;}
+  static const bool check_errors=[]{const char*v=std::getenv("BUNKER_GL_CHECK");return v&&*v&&std::strcmp(v,"0");}();
+  const bool checking=check_errors&&impl_->current_context&&name!="glGetError";
+  std::set<GLenum> saved_errors;
+  if(checking){impl_->CollectErrors();saved_errors.swap(impl_->pending_errors[impl_->current_context]);}
+  // Opt-in BUNKER_GL_PROBE: periodically, before a window of framebuffer
+  // switches, read back five pixels of the target being left. Read-only for
+  // the guest: bindings are restored and probe errors are discarded.
+  static const bool probing=[]{const char*v=std::getenv("BUNKER_GL_PROBE");return v&&*v&&std::strcmp(v,"0");}();
+  // BUNKER_GL_PROBE_DRAW=WxH: describe the program state of draws into a
+  // framebuffer whose viewport is WxH (uniform values and sampler textures).
+  static const std::string probe_draw=[]{const char*v=std::getenv("BUNKER_GL_PROBE_DRAW");return std::string(v?v:"");}();
+  if(!probe_draw.empty()&&impl_->current_context&&(name=="glDrawArrays"||name=="glDrawElements")){
+    static uint64_t frames_seen=0;GLint vp[4]={};impl_->getInteger(GL_VIEWPORT,vp);
+    // "u:NAME" selects draws whose current program has an active uniform NAME.
+    bool selected=false;
+    if(probe_draw.rfind("u:",0)==0){if(HMODULE gles=GetModuleHandleA("libGLESv2.dll")){GLint current=0;impl_->getInteger(GL_CURRENT_PROGRAM,&current);
+        if(current)selected=reinterpret_cast<PFNGLGETUNIFORMLOCATIONPROC>(GetProcAddress(gles,"glGetUniformLocation"))(current,probe_draw.c_str()+2)>=0;}}
+    else selected=std::to_string(vp[2])+"x"+std::to_string(vp[3])==probe_draw;
+    if(selected&&(frames_seen++%600)==300)if(HMODULE gles=GetModuleHandleA("libGLESv2.dll")){
+      auto get_program=reinterpret_cast<PFNGLGETPROGRAMIVPROC>(GetProcAddress(gles,"glGetProgramiv"));auto active=reinterpret_cast<PFNGLGETACTIVEUNIFORMPROC>(GetProcAddress(gles,"glGetActiveUniform"));
+      auto locate=reinterpret_cast<PFNGLGETUNIFORMLOCATIONPROC>(GetProcAddress(gles,"glGetUniformLocation"));auto get_f=reinterpret_cast<PFNGLGETUNIFORMFVPROC>(GetProcAddress(gles,"glGetUniformfv"));auto get_i=reinterpret_cast<PFNGLGETUNIFORMIVPROC>(GetProcAddress(gles,"glGetUniformiv"));
+      GLint program=0,count=0,draw=0,mask[4]={},blend=0;impl_->getInteger(GL_CURRENT_PROGRAM,&program);impl_->getInteger(GL_DRAW_FRAMEBUFFER_BINDING,&draw);impl_->getInteger(GL_COLOR_WRITEMASK,mask);impl_->getInteger(GL_BLEND,&blend);
+      std::string out;
+      if(program){get_program(program,GL_ACTIVE_UNIFORMS,&count);
+        for(GLint u=0;u<count;++u){char n[128]={};GLsizei len=0;GLint size=0;GLenum type=0;active(program,u,sizeof n,&len,&size,&type,n);const GLint at=locate(program,n);char b[768];
+          if(type==GL_SAMPLER_2D||type==GL_SAMPLER_3D||type==GL_SAMPLER_CUBE||type==GL_SAMPLER_2D_ARRAY||type==GL_SAMPLER_2D_SHADOW){GLint unit=0;get_i(program,at,&unit);GLint saved=0,tex=0;impl_->getInteger(GL_ACTIVE_TEXTURE,&saved);
+            auto set_active=reinterpret_cast<PFNGLACTIVETEXTUREPROC>(GetProcAddress(gles,"glActiveTexture"));set_active(GL_TEXTURE0+unit);impl_->getInteger(type==GL_SAMPLER_3D?GL_TEXTURE_BINDING_3D:type==GL_SAMPLER_2D_ARRAY?GL_TEXTURE_BINDING_2D_ARRAY:type==GL_SAMPLER_CUBE?GL_TEXTURE_BINDING_CUBE_MAP:GL_TEXTURE_BINDING_2D,&tex);set_active(saved);
+            GLint w=0,h=0,format=0;std::string texel;
+            if(tex&&type==GL_SAMPLER_2D){auto level=reinterpret_cast<PFNGLGETTEXLEVELPARAMETERIVPROC>(GetProcAddress(gles,"glGetTexLevelParameteriv"));
+              set_active(GL_TEXTURE0+unit);level(GL_TEXTURE_2D,0,GL_TEXTURE_WIDTH,&w);level(GL_TEXTURE_2D,0,GL_TEXTURE_HEIGHT,&h);level(GL_TEXTURE_2D,0,GL_TEXTURE_INTERNAL_FORMAT,&format);set_active(saved);
+              if(w>0&&h>0){auto gen=reinterpret_cast<PFNGLGENFRAMEBUFFERSPROC>(GetProcAddress(gles,"glGenFramebuffers"));auto bind=reinterpret_cast<PFNGLBINDFRAMEBUFFERPROC>(GetProcAddress(gles,"glBindFramebuffer"));
+                auto attach=reinterpret_cast<PFNGLFRAMEBUFFERTEXTURE2DPROC>(GetProcAddress(gles,"glFramebufferTexture2D"));auto drop=reinterpret_cast<PFNGLDELETEFRAMEBUFFERSPROC>(GetProcAddress(gles,"glDeleteFramebuffers"));
+                auto read=reinterpret_cast<PFNGLREADPIXELSPROC>(GetProcAddress(gles,"glReadPixels"));auto error=reinterpret_cast<PFNGLGETERRORPROC>(GetProcAddress(gles,"glGetError"));
+                GLint previous=0;impl_->getInteger(GL_READ_FRAMEBUFFER_BINDING,&previous);GLuint fbo=0;gen(1,&fbo);bind(GL_READ_FRAMEBUFFER,fbo);attach(GL_READ_FRAMEBUFFER,GL_COLOR_ATTACHMENT0,GL_TEXTURE_2D,GLuint(tex),0);
+                const bool is_float=format==GL_RGBA16F||format==GL_RGBA32F||format==GL_R11F_G11F_B10F||format==GL_R16F||format==GL_RG16F||format==GL_R32F;
+                const GLint xs[3]={0,w/2,w-1},ys[3]={0,h/2,h-1};GLenum e=GL_NO_ERROR;
+                for(int k=0;k<3;++k){float px[4]={-1,-1,-1,-1};
+                  if(is_float)read(xs[k],ys[k],1,1,GL_RGBA,GL_FLOAT,px);else{uint8_t u8[4]={};read(xs[k],ys[k],1,1,GL_RGBA,GL_UNSIGNED_BYTE,u8);for(int c=0;c<4;++c)px[c]=u8[c]/255.f;}
+                  if(!e)e=error();char t[96];std::snprintf(t,sizeof t," (%d,%d)=(%.3g,%.3g,%.3g,%.3g)",xs[k],ys[k],double(px[0]),double(px[1]),double(px[2]),double(px[3]));texel+=t;}
+                if(e)texel+=" readerr";
+                bind(GL_READ_FRAMEBUFFER,GLuint(previous));drop(1,&fbo);while(error()!=GL_NO_ERROR){}}}
+            std::snprintf(b,sizeof b," %s[sampler unit=%d tex=%d %dx%d fmt=%#x%s]",n,unit,tex,w,h,format,texel.c_str());}
+          else{float f[16]={};get_f(program,at,f);std::snprintf(b,sizeof b," %s=(%g,%g,%g,%g)",n,double(f[0]),double(f[1]),double(f[2]),double(f[3]));}
+          out+=b;}}
+      std::fprintf(stderr,"GL draw probe: %s fbo=%d program=%d mask=%d%d%d%d blend=%d uniforms:%s\n",name.c_str(),draw,program,mask[0],mask[1],mask[2],mask[3],blend,out.c_str());
+      // Once per program, write the attached shader sources next to the
+      // working directory as gl-probe-program<P>-shader<S>.glsl.
+      static std::vector<GLint> dumped;
+      if(program&&std::find(dumped.begin(),dumped.end(),program)==dumped.end()){dumped.push_back(program);
+        std::vector<std::pair<GLuint,std::string>> sources;
+        {auto &record=ProbeShaders();std::lock_guard lock(record.mutex);for(GLuint id:record.attached[GLuint(program)])sources.emplace_back(id,record.sources[id]);}
+        if(sources.empty())std::fprintf(stderr,"GL draw probe: no recorded shaders for program %d\n",program);
+        for(const auto &[id,text]:sources){const int len=int(text.size());
+          const auto file="gl-probe-program"+std::to_string(program)+"-shader"+std::to_string(id)+".glsl";
+          if(FILE*f=std::fopen(file.c_str(),"wb")){std::fwrite(text.data(),1,text.size(),f);std::fclose(f);}
+          std::fprintf(stderr,"GL draw probe: wrote %s (%d bytes)\n",file.c_str(),int(len));}
+      }
+    }
+  }
+  if(probing&&checking){
+    static uint64_t probe_calls=0;static int probe_left=0;
+    if(++probe_calls%600000==0){probe_left=90;std::fprintf(stderr,"GL probe: window begins\n");}
+    if(probe_left>0&&(name=="glBindFramebuffer"||name=="glInvalidateFramebuffer")){--probe_left;auto &I=*impl_;
+      GLint draw=0,read=0,pack=0,read_buffer=0,vp[4]={},type=0,object=0,fmt=0,ty=0;
+      I.getInteger(GL_DRAW_FRAMEBUFFER_BINDING,&draw);I.getInteger(GL_READ_FRAMEBUFFER_BINDING,&read);I.getInteger(GL_PIXEL_PACK_BUFFER_BINDING,&pack);I.getInteger(GL_READ_BUFFER,&read_buffer);I.getInteger(GL_VIEWPORT,vp);
+      if(draw){I.framebuffer_glGetFramebufferAttachmentParameteriv(GL_DRAW_FRAMEBUFFER,GL_COLOR_ATTACHMENT0,GL_FRAMEBUFFER_ATTACHMENT_OBJECT_TYPE,&type);I.framebuffer_glGetFramebufferAttachmentParameteriv(GL_DRAW_FRAMEBUFFER,GL_COLOR_ATTACHMENT0,GL_FRAMEBUFFER_ATTACHMENT_OBJECT_NAME,&object);}
+      I.framebuffer_glBindFramebuffer(GL_READ_FRAMEBUFFER,draw);if(pack)I.draw_glBindBuffer(GL_PIXEL_PACK_BUFFER,0);
+      I.pass_glReadBuffer(draw?GL_COLOR_ATTACHMENT0:GL_BACK);
+      I.getInteger(GL_IMPLEMENTATION_COLOR_READ_FORMAT,&fmt);I.getInteger(GL_IMPLEMENTATION_COLOR_READ_TYPE,&ty);
+      std::string pixels;const double at[5][2]={{.5,.5},{.25,.25},{.75,.75},{.25,.75},{.75,.25}};
+      const bool float_target=ty==GL_FLOAT||ty==GL_HALF_FLOAT||ty==0x8c3b;
+      for(const auto&p:at){const GLint x=vp[0]+GLint(vp[2]*p[0]),y=vp[1]+GLint(vp[3]*p[1]);char b[96];
+        if(float_target){float f[4]={};I.draw_glReadPixels(x,y,1,1,GL_RGBA,GL_FLOAT,f);std::snprintf(b,sizeof b," (%.3g,%.3g,%.3g,%.3g)",f[0],f[1],f[2],f[3]);}
+        else{unsigned char px[16]={};I.draw_glReadPixels(x,y,1,1,GL_RGBA,GL_UNSIGNED_BYTE,px);std::snprintf(b,sizeof b," %02x%02x%02x%02x",px[0],px[1],px[2],px[3]);}
+        pixels+=b;}
+      I.pass_glReadBuffer(read_buffer);I.framebuffer_glBindFramebuffer(GL_READ_FRAMEBUFFER,read);if(pack)I.draw_glBindBuffer(GL_PIXEL_PACK_BUFFER,pack);
+      std::set<GLenum> probe_errors;I.CollectErrors();probe_errors.swap(I.pending_errors[I.current_context]);
+      std::string errs;for(GLenum e:probe_errors){char b[16];std::snprintf(b,sizeof b," %#x",e);errs+=b;}
+      std::fprintf(stderr,"GL probe: before %s fbo=%d attach_type=%#x obj=%d vp=%d,%d %dx%d impl_read=%#x/%#x rgba8:%s errors:%s\n",name.c_str(),draw,type,object,vp[0],vp[1],vp[2],vp[3],fmt,ty,pixels.c_str(),errs.c_str());
+    }
+  }
+  if(name.size()>4&&(name[2]=='L'||name[2]=='P'||name[2]=='D')&&(name=="glLinkProgram"||name=="glProgramBinary"||name=="glDeleteProgram"))
+    impl_->ForgetUniforms(GLuint(state.gpr.x0.qword));
+  found->second(state);
+  // Opt-in: report native errors raised by each import (first few per name).
+  // Collected errors stay pending for the guest's own glGetError.
+  static std::map<std::string,uint64_t> histogram;
+  if(check_errors){static uint64_t total=0;++histogram[name];
+    if(++total%300000==0){std::string line;for(const auto&[n,c]:histogram)line+=" "+n+"="+std::to_string(c);std::fprintf(stderr,"GL check histogram (last 300000 calls):%s\n",line.c_str());histogram.clear();}}
+  if(checking){
+    // Non-finite float inputs point at guest arithmetic, not GL state.
+    auto scan=[&](addr_t data,uint64_t floats,const char*what){
+      if(!data||!floats||floats>(1u<<20))return;const auto*f=reinterpret_cast<const float*>(data);
+      for(uint64_t i=0;i<floats;++i)if(!std::isfinite(f[i])){static std::map<std::string,unsigned> nan_reported;
+        char key[96];std::snprintf(key,sizeof key,"nonfinite:%s:%#llx",name.c_str(),(unsigned long long)state.gpr.x0.qword);++histogram[key];
+        if(nan_reported[key]++<3){
+          // Name the uniform: search the current program's active uniforms.
+          std::string uniform="?";
+          if(name.rfind("glUniform",0)==0)if(HMODULE gles=GetModuleHandleA("libGLESv2.dll")){
+            auto get_program=reinterpret_cast<PFNGLGETPROGRAMIVPROC>(GetProcAddress(gles,"glGetProgramiv"));auto active=reinterpret_cast<PFNGLGETACTIVEUNIFORMPROC>(GetProcAddress(gles,"glGetActiveUniform"));auto locate=reinterpret_cast<PFNGLGETUNIFORMLOCATIONPROC>(GetProcAddress(gles,"glGetUniformLocation"));
+            GLint program=0,count=0;impl_->getInteger(GL_CURRENT_PROGRAM,&program);
+            if(program&&get_program&&active&&locate){get_program(program,GL_ACTIVE_UNIFORMS,&count);
+              for(GLint u=0;u<count;++u){char n[128]={};GLsizei len=0;GLint size=0;GLenum type=0;active(program,u,sizeof n,&len,&size,&type,n);if(locate(program,n)==GLint(state.gpr.x0.qword)){uniform=n;break;}}
+              uniform+=" program="+std::to_string(program);}}
+          std::string all;for(uint64_t k=0;k<floats&&k<16;++k){char b[24];std::snprintf(b,sizeof b," %g",double(f[k]));all+=b;}
+          std::fprintf(stderr,"GL check: %s %s has non-finite float[%llu] (x0=%#llx uniform=%s) values:%s\n",name.c_str(),what,(unsigned long long)i,(unsigned long long)state.gpr.x0.qword,uniform.c_str(),all.c_str());}
+        return;}};
+    const auto x1=state.gpr.x1.qword,x2=state.gpr.x2.qword,x3=state.gpr.x3.qword;
+    if(name=="glTexSubImage2D"){static uint64_t uploads=0;if(uploads++%300==0){
+      const addr_t pixels=*reinterpret_cast<const addr_t*>(state.gpr.sp.qword);GLint texture=0;impl_->getInteger(GL_TEXTURE_BINDING_2D,&texture);
+      std::string bytes;if(pixels)for(int k=0;k<48;++k){char b[4];std::snprintf(b,sizeof b,"%02x",reinterpret_cast<const unsigned char*>(pixels)[k]);bytes+=b;if(k%8==7)bytes+=' ';}
+      if(pixels&&state.gpr.x7.qword==GL_HALF_FLOAT&&state.gpr.x5.qword==2&&state.gpr.x4.qword==128){bytes+=" row1:";
+        for(int x=0;x<128;x+=16){const auto*h=reinterpret_cast<const uint16_t*>(pixels)+(128+x)*4;char b[64];
+          auto half=[](uint16_t v){const int e=(v>>10)&31,m=v&1023;float r=e?std::ldexp(1.f+m/1024.f,e-15):std::ldexp(m/1024.f,-14);return (v&0x8000)?-r:r;};
+          std::snprintf(b,sizeof b," x%d=(%.3g,%.3g,%.3g,%.3g)",x,half(h[0]),half(h[1]),half(h[2]),half(h[3]));bytes+=b;}}
+      std::fprintf(stderr,"GL check: glTexSubImage2D tex=%d level=%llu off=%llu,%llu size=%llux%llu format=%#llx type=%#llx pixels=%#llx first48: %s\n",texture,(unsigned long long)x1,(unsigned long long)x2,(unsigned long long)x3,(unsigned long long)state.gpr.x4.qword,(unsigned long long)state.gpr.x5.qword,(unsigned long long)state.gpr.x6.qword,(unsigned long long)state.gpr.x7.qword,(unsigned long long)pixels,bytes.c_str());}}
+    if(name=="glUniform4fv")scan(x2,x1*4,"values");else if(name=="glUniform3fv")scan(x2,x1*3,"values");
+    else if(name=="glUniform2fv")scan(x2,x1*2,"values");else if(name=="glUniform1fv")scan(x2,x1,"values");
+    else if(name=="glUniformMatrix4fv")scan(state.gpr.x3.qword,x1*16,"matrix");
+    else if(name=="glBufferSubData"&&!(x2&3))scan(x3,x2/4,"data");
+    impl_->CollectErrors();auto &now=impl_->pending_errors[impl_->current_context];static std::map<std::string,unsigned> reported;
+    for(GLenum e:now)if(reported[name]++<8)std::fprintf(stderr,"GL check: %s raised %#x context=%#llx\n",name.c_str(),unsigned(e),(unsigned long long)impl_->current_context);
+    now.insert(saved_errors.begin(),saved_errors.end());
+  }
+  if(!impl_->diagnostic_png.empty()){if(name=="glDrawArrays"||name=="glDrawElements"||name=="glDrawElementsInstanced"||name=="glDrawElementsBaseVertex"||name=="glDrawElementsBaseVertexOES"||name=="glDrawElementsBaseVertexEXT"||name=="glDrawElementsInstancedBaseVertex"||name=="glDrawElementsInstancedBaseVertexOES"||name=="glDrawElementsInstancedBaseVertexEXT"||name=="glDrawRangeElementsBaseVertex"||name=="glDrawRangeElementsBaseVertexOES"||name=="glDrawRangeElementsBaseVertexEXT")++impl_->diagnostic.draw_submissions;if(name=="glClear")++impl_->diagnostic.clear_submissions;}}
+void GlHost::EnableFrameDiagnostics(const std::wstring &path){std::lock_guard lock(impl_->mutex);if(path.empty()||!std::filesystem::path(path).is_absolute())throw std::invalid_argument("Absolute frame PNG path required");
+  if(!impl_->snapshot_paths.empty()){const auto first=std::filesystem::path(path);for(const auto &key:impl_->snapshot_paths)if(Impl::SameSnapshotPath(key,Impl::SnapshotPathKey(first))||Impl::SameSnapshotPath(key,Impl::SnapshotPathKey(first.parent_path()/L"first-present.png")))throw std::invalid_argument("First-frame PNG path is already reserved by a snapshot");}
+  impl_->diagnostic_png=path;}
+GlHost::FrameDiagnostics GlHost::DescribeFrameDiagnostics(){std::lock_guard lock(impl_->mutex);return impl_->diagnostic;}
+uint64_t GlHost::RequestFrameSnapshot(const std::wstring &path){GlNativeEnvironment environment;std::lock_guard lock(impl_->mutex);
+  const std::filesystem::path output(path);
+  if(path.empty()||path.find(L'\0')!=std::wstring::npos||!output.is_absolute())throw std::invalid_argument("Absolute new snapshot PNG path required");
+  if(impl_->snapshot.pending)throw std::logic_error("A frame snapshot request is already pending");
+  if(impl_->ReservedFirstFramePath(output))throw std::invalid_argument("Snapshot cannot replace first-frame witness PNG");
+  if(std::filesystem::exists(output))throw std::invalid_argument("Preserve existing snapshot PNG");
+  if(impl_->next_snapshot_request==UINT64_MAX)throw std::overflow_error("Snapshot request serial exhausted");
+  auto key=Impl::SnapshotPathKey(output);FrameSnapshotStatus next;next.request_serial=++impl_->next_snapshot_request;next.pending=true;next.path=path;
+  impl_->snapshot=std::move(next);impl_->snapshot_paths.insert(std::move(key));return impl_->snapshot.request_serial;
+}
+GlHost::FrameSnapshotStatus GlHost::DescribeFrameSnapshot(){GlNativeEnvironment environment;std::lock_guard lock(impl_->mutex);return impl_->snapshot;}
+void GlHost::RequestPixelProbe(std::vector<std::pair<float,float>> points){std::lock_guard lock(impl_->mutex);
+  impl_->probe_points=std::move(points);impl_->probe_result.reset();impl_->probe_pending=!impl_->probe_points.empty();}
+std::optional<std::vector<std::array<uint8_t,4>>> GlHost::TakePixelProbe(){std::lock_guard lock(impl_->mutex);
+  auto result=std::move(impl_->probe_result);impl_->probe_result.reset();return result;}
+uint64_t GlHost::BeginWindowPresent(addr_t display,addr_t surface){std::lock_guard lock(impl_->mutex);
+  const int saved_errno=errno;const DWORD saved_error=GetLastError();const auto environment=recomp::fpenv::Hold();
+  struct Restore{int error;DWORD native_error;recomp::fpenv::Saved environment;~Restore(){recomp::fpenv::Restore(environment);errno=error;SetLastError(native_error);}} restore{saved_errno,saved_error,environment};
+  auto dpi=impl_->egl.CurrentWindowDpiScope();
+  if(impl_->probe_pending){try{impl_->ProbeWindow(surface);}catch(const std::exception &e){impl_->probe_pending=false;std::fprintf(stderr,"Pixel probe failed: %s\n",e.what());}}
+  try{return impl_->CaptureWindow(display,surface);}catch(const std::exception &e){if(!impl_->diagnostic_png.empty()&&!impl_->diagnostic.frame_png)impl_->diagnostic.failure=e.what();if(impl_->snapshot.pending)impl_->snapshot.failure=e.what();std::fprintf(stderr,"First frame: capture failed: %s\n",e.what());return 0;}}
+void GlHost::FinishWindowPresent(uint64_t ticket,addr_t display,addr_t surface,uint32_t actual_result){std::lock_guard lock(impl_->mutex);
+  const int saved_errno=errno;const DWORD saved_error=GetLastError();const auto environment=recomp::fpenv::Hold();
+  struct Restore{int error;DWORD native_error;recomp::fpenv::Saved environment;~Restore(){recomp::fpenv::Restore(environment);errno=error;SetLastError(native_error);}} restore{saved_errno,saved_error,environment};
+  auto dpi=impl_->egl.CurrentWindowDpiScope();
+  const auto pending=impl_->pending_presents.find(ticket);const bool snapshot_only=pending!=impl_->pending_presents.end()&&!pending->second.diagnostic_capture;
+  try{impl_->FinishPresent(ticket,display,surface,actual_result);}catch(const std::exception &e){if(!snapshot_only)impl_->diagnostic.failure=e.what();if(impl_->snapshot.pending)impl_->snapshot.failure=e.what();std::fprintf(stderr,"First frame: capture completion failed: %s\n",e.what());}}
+
+void GlHost::Install(recomp::Runtime &runtime){if(impl_->installed)throw std::logic_error("GL imports already installed");for(const auto *name:names)runtime.AddImport(Marker(name),[this,name,key=std::string(name)](State &state){try{Invoke(key,state);}catch(const std::exception &e){std::fprintf(stderr,"GL %s: %s\n",name,e.what());std::abort();}});impl_->installed=true;}
+}  // namespace bunker::windows
+#undef GL_DRAW_API

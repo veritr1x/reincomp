@@ -1,0 +1,62 @@
+diff --git a/lib/Arch/AArch64/Semantics/BINARY.cpp b/lib/Arch/AArch64/Semantics/BINARY.cpp
+index df233a3..a70b78f 100644
+--- a/lib/Arch/AArch64/Semantics/BINARY.cpp
++++ b/lib/Arch/AArch64/Semantics/BINARY.cpp
+@@ -572,6 +572,33 @@ MAKE_FP_PAIRWISE_OP(FADDP, FAdd, 64)
+ #undef MAKE_FP_VECTOR_OP
+ #undef MAKE_FP_PAIRWISE_OP
+ 
++// Indexed FMUL fast path. With FZ and DN clear, round-to-nearest-even, and two
++// finite operands, the fused a*b+(sign-matched zero) below has exactly the
++// correctly rounded IEEE product, which is what ordinary vector FMUL computes
++// through CheckedFloatBinOp (same FPSR flag collection). NaN, infinity and
++// non-default FPCR modes keep the exact fused path.
++// Exact fused path for NaN, infinity and non-default FPCR modes.
++template <typename T>
++ALWAYS_INLINE T IndexedFMulExact(State &state, T lhs, T rhs) {
++  constexpr T sign = T(1) << (sizeof(T) * 8 - 1);
++  return IndexedFusedFPBits<T>(state, T((lhs ^ rhs) & sign), lhs, rhs);
++}
++
++template <typename T, typename F, typename Op>
++ALWAYS_INLINE T IndexedFMulBits(State &state, T lhs, T rhs, Op op) {
++  constexpr unsigned fraction_bits = sizeof(T) == 4 ? 23 : 52;
++  constexpr T sign = T(1) << (sizeof(T) * 8 - 1);
++  constexpr T exponent = T(~(sign | ((T(1) << fraction_bits) - 1)));
++  if (!state.fpcr.fz && !state.fpcr.dn &&
++      state.fpcr.rmode == kFPURoundToNearestEven &&
++      (lhs & exponent) != exponent && (rhs & exponent) != exponent) {
++    const F product = CheckedFloatBinOp(state, op, __builtin_bit_cast(F, lhs),
++                                        __builtin_bit_cast(F, rhs));
++    return __builtin_bit_cast(T, product);
++  }
++  return IndexedFMulExact<T>(state, lhs, rhs);
++}
++
+ // Indexed FMUL only. A signed product-zero accumulator makes the exact fused
+ // helper equivalent to multiply, including -0 for every rounding mode. This
+ // reuses ARM NaN/FZ/DN/tininess rules without touching ordinary FMUL or FMADD.
+@@ -580,11 +607,10 @@ MAKE_FP_PAIRWISE_OP(FADDP, FAdd, 64)
+   DEF_SEM(FMUL_ELEM_V##size, V128W dst, S src1, V128 src2, I64 idx) { \
+     const auto vec1 = UReadV##size(src1); \
+     const auto elem = UReadV##size(src2).elems[Read(idx)]; \
+-    constexpr uint##size##_t sign = uint##size##_t(1) << (size - 1); \
+     auto res = UClearV##size(UReadV##size(dst)); \
+     _Pragma("unroll") for (size_t i = 0; i < NumVectorElems(V{}); ++i) { \
+       const auto lhs = vec1.elems[i]; \
+-      res.elems[i] = IndexedFusedFPBits<uint##size##_t>(state, (lhs ^ elem) & sign, lhs, elem); \
++      res.elems[i] = IndexedFMulBits<uint##size##_t, float##size##_t>(state, lhs, elem, FMul##size); \
+     } \
+     UWriteV##size(dst, res); \
+     return memory; \
+@@ -594,9 +620,8 @@ MAKE_FP_PAIRWISE_OP(FADDP, FAdd, 64)
+           I64 idx) { \
+     const auto val = UReadV##size(src1).elems[0]; \
+     const auto elem = UReadV##size(src2).elems[Read(idx)]; \
+-    constexpr uint##size##_t sign = uint##size##_t(1) << (size - 1); \
+     auto res = UClearV##size(UReadV##size(dst)); \
+-    res.elems[0] = IndexedFusedFPBits<uint##size##_t>(state, (val ^ elem) & sign, val, elem); \
++    res.elems[0] = IndexedFMulBits<uint##size##_t, float##size##_t>(state, val, elem, FMul##size); \
+     UWriteV##size(dst, res); \
+     return memory; \
+   }
