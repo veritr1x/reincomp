@@ -1,0 +1,10 @@
+[
+ {"address": "0x82831ca8", "bytes": "1f2003d5",
+  "why": "Purchases: do not leave for the purchasing-unavailable path when the store was never initialized."},
+ {"address": "0x82834028", "bytes": "751600b4",
+  "why": "Purchases: with no store controller, take the cancelled-return path instead of faulting."},
+ {"address": "0x82831cac", "bytes": "19000014",
+  "why": "Purchases: skip the purchasing alert and its dialog."},
+ {"address": "0x82830834", "bytes": "1f2003d5",
+  "why": "Purchases: store initialization answers at once instead of waiting about 8 s for Google Play."}
+]

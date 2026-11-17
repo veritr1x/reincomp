@@ -16,6 +16,16 @@ include a `licenses/` folder with the texts named below.
 | Remill (headers and semantics) | linked into the executable | Apache-2.0 | Remill's `LICENSE` |
 | Lunar Tear server | `bunker-server.exe`, from Bunker's releases | see Bunker's `THIRD-PARTY.md` | Bunker |
 
+## In this repository
+
+`third_party/` holds headers only, plus one small static library:
+
+| Folder | From | License |
+| --- | --- | --- |
+| `third_party/remill-include/` | Remill | Apache-2.0 |
+| `third_party/zlib/` | zlib: `zlib.h`, `zconf.h` and `libz-inflate.a`, zlib's inflate code built for MinGW-w64 | zlib license |
+| `third_party/angle-include/` | ANGLE: the Khronos EGL, GLES and KHR headers | Apache-2.0 and MIT (Khronos) |
+
 ## Before sharing a release folder
 
 - Check the 13 texts collected with ANGLE against the third-party parts its

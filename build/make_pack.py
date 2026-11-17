@@ -1,18 +1,18 @@
 #!/usr/bin/env python3
-"""Collect the game-derived inputs of a linked build into one portable folder.
+"""Make a pack from lifted objects.
 
-    python build/make_pack.py LINK_RESPONSE BUILD_DIR PACK_DIR
+    python build/make_pack.py --out PACK_DIR LIFT_DIR [LIFT_DIR ...]
 
-LINK_RESPONSE is an existing build's game-bootstrap-link.rsp; BUILD_DIR holds
-its generated headers (game_traces.h and so on). The pack gets every guest
-object in link order, those headers, the third-party include folders and
-libz, and pack.json, which build.py reads. A pack is made from the game's own
-code: keep it out of this repository.
+Each LIFT_DIR is an output folder of recompiler/lift_all.py (one per library).
+The pack gets every object and pack.json, which lists them in link order.
+Heads that lift_all added on its own are appended to game/heads-*.txt, so the
+build knows them. A pack is made from the game's own code: keep it out of this
+repository.
 """
-import hashlib, json, os, re, shutil, sys
+import argparse, json, os, shutil
 from pathlib import Path
 
-HOST = re.compile(r'(host-\d+|game-bootstrap|elfload)\.o$')
+ROOT = Path(__file__).resolve().parent.parent
 
 
 def place(source, target):
@@ -22,42 +22,37 @@ def place(source, target):
         shutil.copy2(source, target)
 
 
+def heads_file(address):
+    return ROOT / ('game/heads-unity.txt' if address < 0x80000000 else 'game/heads-il2cpp.txt')
+
+
+def add_heads(addresses):
+    """Merge addresses into the committed head lists. Returns how many were new."""
+    new = 0
+    for path in {heads_file(x) for x in addresses}:
+        have = {int(line, 16) for line in path.read_text().split()}
+        mine = {x for x in addresses if heads_file(x) == path}
+        new += len(mine - have)
+        path.write_text(''.join(f'{x:#x}\n' for x in sorted(have | mine)), newline='\n')
+    return new
+
+
 def main():
-    response, build, pack = Path(sys.argv[1]), Path(sys.argv[2]), Path(sys.argv[3])
-    args = [a.strip().strip('"') for a in response.read_text().split() if a.strip()]
-    (pack / 'objects').mkdir(parents=True)
-    (pack / 'generated').mkdir()
-    objects, wraps, libraries, includes, archive = [], [], [], [], None
-    for a in args:
-        if a.endswith('.o'):
-            if HOST.search(a):
-                continue
-            name = f'{len(objects):05d}-{Path(a).name}'
-            place(a, pack / 'objects' / name)
-            objects.append(name)
-        elif a.endswith('.a'):
-            archive = a
-        elif a.startswith('-Wl,--wrap='):
-            wraps.append(a)
-        elif a.startswith('-l'):
-            libraries.append(a)
-        elif a.startswith('-I'):
-            includes.append(Path(a[2:]))
-    for header in sorted(build.glob('*.h')):
-        shutil.copy2(header, pack / 'generated' / header.name)
-    for folder in includes:
-        if folder.name.endswith('-include') and not (pack / folder.name).exists():
-            shutil.copytree(folder, pack / folder.name)
-    shutil.copy2(archive, pack / Path(archive).name)
-    digest = hashlib.sha256()
-    for name in objects:
-        digest.update(name.encode() + b'\0' + hashlib.sha256((pack / 'objects' / name).read_bytes()).digest())
-    manifest = {'objects': objects, 'objects_sha256': digest.hexdigest(), 'archive': Path(archive).name,
-                'wraps': wraps, 'libraries': libraries,
-                'generated': sorted(p.name for p in (pack / 'generated').iterdir()),
-                'includes': sorted(p.name for p in pack.iterdir() if p.name.endswith('-include'))}
-    (pack / 'pack.json').write_text(json.dumps(manifest, indent=1) + '\n')
-    print(f'{len(objects)} guest objects, {len(wraps)} wraps -> {pack}')
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument('--out', type=Path, required=True)
+    ap.add_argument('lift', type=Path, nargs='+')
+    a = ap.parse_args()
+    (a.out / 'objects').mkdir(parents=True)
+    objects, added = [], []
+    for folder in a.lift:
+        result = json.loads((folder / 'result.json').read_text())
+        added += [int(x, 16) for x in result.get('added', [])]
+        for name in result['objects']:
+            target = f'{folder.name}-{name}'
+            place(folder / name, a.out / 'objects' / target)
+            objects.append(target)
+    (a.out / 'pack.json').write_text(json.dumps({'objects': objects}, indent=1) + '\n')
+    print(f'{len(objects)} objects -> {a.out}; {add_heads(added)} heads added to game/')
 
 
 if __name__ == '__main__':

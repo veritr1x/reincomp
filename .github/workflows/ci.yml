@@ -1,0 +1,55 @@
+# Checks what can be checked without any game file: the host layer compiles,
+# the launcher builds, and the Python tools parse.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  host:
+    name: Host layer compiles
+    runs-on: windows-2025
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: msys2/setup-msys2@v2
+        id: msys2
+        with:
+          msystem: UCRT64
+          install: mingw-w64-ucrt-x86_64-gcc
+      # No pack and no link: this compiles every host source against game/ and third_party/.
+      - name: Compile
+        shell: bash
+        run: |
+          gxx="$(cygpath -m '${{ steps.msys2.outputs.msys2-location }}')/ucrt64/bin/g++.exe"
+          "$gxx" --version | head -n 1
+          PATH="$(dirname "$gxx"):$PATH" python build/build.py --compile-only --out out --cxx "$gxx"
+
+  launcher:
+    name: Launcher builds
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25.8"
+          cache: false
+      - run: |
+          cd launcher
+          test -z "$(gofmt -l .)"
+          GOOS=windows GOARCH=amd64 go vet .
+          GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -o ../out/reincomp.exe .
+
+  tools:
+    name: Python tools parse
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - run: python3 -m compileall -q build recompiler

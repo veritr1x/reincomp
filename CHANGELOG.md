@@ -4,6 +4,41 @@ What changed, newest first, by date and area.
 
 ## 2026-11-18
 
+### Build from your own APK
+- New: `python build/from_apk.py` goes from the game APK to a folder to play
+  from, in one command. It recompiles the game's two libraries on your PC,
+  builds the executable and assembles the folder.
+- New: the pack of recompiled code is regenerated, not obtained. `game/` holds
+  what describes the game without holding any of its code: where each
+  recompiled function starts (about 608,000 addresses), three headers and the
+  code patches. `recompiler/lift_all.py` lifts a whole library from them.
+- New: the recompiler runs natively on Windows. No Linux or WSL is needed.
+  `recompiler/windows/build_toolchain.py` builds the lifter (AArch64 only),
+  its semantics and the instrumenter with LLVM 18 and MSVC.
+- A pack is now only objects. The trace table is written from the address
+  lists at build time, and the Remill, zlib and ANGLE headers are in
+  `third_party/`.
+- `build.py --compile-only` compiles the host layer with no pack.
+- The pinned Remill revision is the one the working build was lifted with
+  (3fd14f3, plus the indexed-fmul patch).
+
+### Game
+- In-app purchases: the four code patches the phone build applies to the
+  purchase flow are applied before the code is recompiled
+  (`game/patches.json`). Not tried in the shop yet.
+
+### Launcher
+- New: the first start imports the resource dump and the master data when
+  they are next to `reincomp.exe`, with progress. It uses Bunker's own import
+  (`bunker-server import`).
+- New: `-export-save` and `-import-save` back up and restore the save, in
+  Bunker's backup format: a save moves between a phone and the PC either way.
+
+### CI
+- New: every push compiles the host layer, builds the launcher and parses the
+  Python tools. A tagged release builds the Windows toolchain and the launcher
+  and attaches them.
+
 ### Sound
 - New: the game has sound. Unity's audio (FMOD) plays through a native version
   of its Android audio device class, to the Windows sound device, at 44.1 kHz

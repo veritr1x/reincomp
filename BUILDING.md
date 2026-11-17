@@ -1,74 +1,94 @@
 # Building
 
-## The game executable
+Everything here runs on Windows. No Linux or WSL is needed.
 
-```sh
-python build/build.py --pack <pack folder> --out <output folder>
+## What to install
+
+| What | For |
+| --- | --- |
+| Python 3.12 | the build scripts |
+| LLVM 18.1.8 for Windows (`clang+llvm-18.1.8-x86_64-pc-windows-msvc`, from LLVM's releases) | compiling the recompiled code; it must be version 18 |
+| MinGW-w64 GCC 15 (`g++` on `PATH`) | compiling and linking the game executable |
+| The toolchain: `remill-lift.exe`, `aarch64.bc`, `poll-instrument.exe` | recompiling the game's libraries. From a release's toolchain zip, or built as below |
+| Go 1.25 | only to build the launcher yourself |
+
+## From the APK to a folder to play from
+
+```
+python build/from_apk.py --apk <your APK> --toolchain <toolchain folder> --clang <LLVM 18>/bin/clang.exe --deps <deps folder> --launcher reincomp.exe --server bunker-server.exe --out <folder>
 ```
 
-This compiles the host layer (the sources in `build/host_sources.txt`, the
-game's entry point and the ELF loader), links it with the recompiled game
-objects of a **pack**, and runs the post-link helper inliner. A clean build
-takes about a minute on a 14-core machine; later builds recompile only the
-files whose includes changed.
+It runs these steps, each of which can also be run by hand. An interrupted run
+continues where it stopped.
 
-You need MinGW-w64 GCC 15 (`g++` on `PATH`, or `--cxx <path>`) and Python 3.
+1. **Check the APK** and take `libunity.so` and `libil2cpp.so` out of it.
+2. **Recompile both libraries** (`recompiler/lift_all.py`). Each library is
+   lifted from its list of trace heads in `game/`, in shards of 128, with the
+   code patches of `game/patches.json` applied first. About 45 minutes on a
+   14-core machine: 4,749 shards.
+3. **Collect the pack** (`build/make_pack.py`): the objects, in link order.
+4. **Build the executable** (`build/build.py --pack <pack> --out <folder>`):
+   compiles the host layer, links it with the pack, and runs the post-link
+   helper inliner. About a minute; later builds recompile only what changed.
+5. **Assemble the folder** (`build/make_release.py`).
 
-## The pack
+`--deps`, `--launcher` and `--server` are optional: without them it stops at
+the game executable.
 
-A pack is the game-derived half of the build:
+The deps folder holds what ships beside the game: `angle/` (ANGLE's
+`libEGL.dll`, `libGLESv2.dll` and the DLLs they need),
+`FirebaseCppApp-9_6_0.dll`, `grpc_csharp_ext.x64.dll` and `licenses/`
+([THIRD-PARTY.md](THIRD-PARTY.md)). The server is Bunker's `bunker-server`
+for Windows, from Bunker's releases. The launcher's import and save commands
+need a server newer than Bunker 1.12.10; until Bunker's next release, build
+it from Bunker's `desktop-pods` branch and pass `--unpinned-server`. The deps folder is not published
+anywhere yet: ANGLE has to be built with this project's presentation patch,
+and the two DLLs come from the Firebase C++ SDK 9.6.0 and the Grpc.Core 2.26.0
+package.
 
-- `objects/`: the recompiled game objects, in link order
-- `generated/`: the headers made with them (`game_traces.h` and three more)
-- `remill-include/`, `zlib-include/`, `angle-include/`, `libz-inflate.a`
-- `pack.json`: the list `build.py` reads
+A pack is made from the game's own code. Keep it, and anything built from it,
+out of this repository.
 
-`python build/make_pack.py <link response> <build folder> <pack folder>`
-collects a pack from an existing build. A pack is made from the game's own
-code, so it is never committed here.
+## The toolchain
 
-When the game stops on code that was never lifted ("unresolved indirect
-target"), lift it and add it to the pack:
+```
+python recompiler/windows/build_toolchain.py --llvm <LLVM 18 folder> --work <work folder> --out <toolchain folder>
+```
 
-```sh
-python3 recompiler/tools/lift_new_traces.py --lib <library> --bias <base> \n  --traces-h <pack>/generated/game_traces.h --seeds seeds.json --out <folder> \n  --lifter <remill-lift> --semantics <aarch64.bc> --poll <poll-instrument>
+Run it from a Visual Studio developer prompt (MSVC and the Windows SDK), with
+`cmake`, `ninja` and `git` on `PATH`. It fetches the Remill fork at its pinned
+commit, gflags and glog, and builds in about three minutes:
+
+- `remill-lift.exe`, the lifter, for AArch64 only
+- `aarch64.bc`, the lifter's instruction semantics
+- `poll-instrument.exe`, which prepares lifted code for the runtime
+
+The release workflow builds the same three files.
+
+## When the game stops on code that was never recompiled
+
+The log says `unresolved indirect target at 0x...`. Lift that address and add
+it:
+
+```
+python recompiler/tools/lift_new_traces.py --lib <library> --bias <base> --traces-h <build folder>/generated/game_traces.h --seeds seeds.json --out <folder> --lifter <remill-lift> --semantics <aarch64.bc> --poll <poll-instrument>
 python build/add_traces.py <pack> <folder>/result.json
 ```
 
-`recompiler/tools/find_code_pointers.py` and `find_resume_points.py` produce
-seed lists for whole regions ahead of time.
-
-**Making a pack from an APK is not one command.** `recompiler/compile.py`
-plans and lifts a library, and `recompiler/tools/relift_shards.sh` relifts
-shards with the instrumenter, but no script takes an APK to the full object
-set and its generated headers.
-
-## The recompiler toolchain
-
-`recompiler/remill/fetch.sh` clones the Remill fork into `work/remill-src`;
-`recompiler/remill/dev.sh` builds and tests it in a container. The lifter and
-its semantics must be built and kept as a matching pair. The instrumenter is
-built with `python recompiler/build_poll_instrument.py`. The recompiler runs
-on Linux or WSL with LLVM/Clang 18 and the Python packages in
-`recompiler/requirements.txt`.
+`add_traces.py` also adds the new heads to `game/`, so the next full build
+includes them. `recompiler/tools/find_code_pointers.py` and
+`find_resume_points.py` produce seed lists for whole regions ahead of time.
 
 ## The launcher
 
-```sh
+```
 cd launcher
-CGO_ENABLED=0 go build -trimpath -ldflags "-s -w -X main.version=<version>" -o reincomp.exe .
+go build -trimpath -ldflags "-s -w -X main.version=<version>" -o reincomp.exe .
 ```
 
-## The release folder
+## Checking a change without the game
 
-```sh
-python build/make_release.py --exe <game exe> --launcher <reincomp.exe> \
-  --deps <dependency folder> --server <bunker-server.exe> --out <folder>
-```
-
-The dependency folder holds `angle/` (libEGL.dll and the rest),
-`FirebaseCppApp-9_6_0.dll`, `grpc_csharp_ext.x64.dll` and `licenses/`
-([THIRD-PARTY.md](THIRD-PARTY.md)). The server is the file pinned in
-`bunker.lock.json`, from Bunker's releases.
+`python build/build.py --compile-only --out <folder>` compiles the whole host
+layer and stops. It needs no pack; CI runs it on every push.
 
 `work/` is ignored: keep toolchains, packs and builds there.

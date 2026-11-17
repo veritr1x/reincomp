@@ -14,15 +14,30 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 GAME_FILES = ['FirebaseCppApp-9_6_0.dll', 'grpc_csharp_ext.x64.dll']
 ANGLE = ['libEGL.dll', 'libGLESv2.dll']
+README = '''re[in]comp
+
+1. Put these three files of yours in this folder:
+     your game APK (any name ending in .apk)
+     20240404193219.bin.e (the master data)
+     resource_dump_android.7z (the resource dump)
+2. Run reincomp.exe. The first start prepares and imports them: about 20 GB, several minutes.
+
+reincomp.exe -export-save backup.zip   writes a backup of your save
+reincomp.exe -import-save backup.zip   restores one (also one made by Bunker on a phone)
+reincomp.exe -nosound                  plays without sound
+
+Saves, logs and the imported files are kept in the data folder here.
+'''
 
 
 def main():
     ap = argparse.ArgumentParser()
     for name in ('exe', 'launcher', 'deps', 'server', 'out'):
         ap.add_argument('--' + name, type=Path, required=True)
+    ap.add_argument('--unpinned-server', action='store_true', help='accept a server build other than the pinned release (to test one)')
     a = ap.parse_args()
     pin = json.loads((ROOT / 'bunker.lock.json').read_text())['bunker']['server']['windows-x86_64']['sha256']
-    if hashlib.sha256(a.server.read_bytes()).hexdigest() != pin:
+    if not a.unpinned_server and hashlib.sha256(a.server.read_bytes()).hexdigest() != pin:
         sys.exit('The server file is not the one pinned in bunker.lock.json')
     for name in ANGLE:
         if not (a.deps / 'angle' / name).is_file():
@@ -39,13 +54,7 @@ def main():
     shutil.copytree(a.deps / 'licenses', out / 'licenses')
     shutil.copy2(ROOT / 'LICENSE', out / 'licenses/LICENSE.reincomp.txt')
     shutil.copy2(ROOT / 'THIRD-PARTY.md', out / 'licenses/THIRD-PARTY.md')
-    (out / 'README.txt').write_text(
-        're[in]comp\n\n'
-        '1. Put your game APK in this folder (any name ending in .apk).\n'
-        '2. Run reincomp.exe. The first start prepares the game files; that takes about a minute.\n\n'
-        'The server needs the imported game files. If they are not in data\\assets, start it as\n'
-        '    reincomp.exe -assets <folder>\n\n'
-        'Saves, logs and prepared files are kept in the data folder here.\n', newline='\r\n')
+    (out / 'README.txt').write_text(README, newline='\r\n')
     print(out)
 
 

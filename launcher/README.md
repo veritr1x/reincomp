@@ -15,9 +15,19 @@ reincomp/
   licenses/
 ```
 
-The player adds their game APK (any name) next to `reincomp.exe` and runs it.
-`data/` appears beside it: the prepared APK, the two game libraries, saves,
-game storage and the two logs.
+The player adds three files of their own next to `reincomp.exe` and runs it:
+the game APK (any name), `20240404193219.bin.e` and
+`resource_dump_android.7z`. `data/` appears beside it: the prepared APK, the
+two game libraries, the imported game files, saves, game storage and the two
+logs.
+
+## Importing the game files
+
+When `data/assets` holds no imported files, the launcher runs
+`bunker-server import` on the dump and the master data it finds beside itself
+and shows the progress. The dump is extracted next to any earlier files and
+swapped in only when complete. `-assets <folder>` uses a folder imported
+elsewhere instead.
 
 ## What "prepare" does
 
@@ -35,12 +45,13 @@ Every other APK entry is copied as stored. No code changes.
 - `-fps <n|game>`, `-render <WxH>`: frame rate target and render size.
 - `-nosound`: turn the game's sound off.
 - `-prepare`: prepare the game files, then stop.
+- `-export-save <file.zip>`, `-import-save <file>`: back up or restore the save, then stop.
 
 ## Limits
 
-- The server needs the game files already imported and the master data
-  patched, as Bunker's phone app does in its own setup. `bunker-server` has no
-  import command, so `-assets` must point at a folder prepared another way.
+- The master data is installed as supplied. On a phone, Pod Programs then
+  adjusts it (the events calendar, language layers); that step is not part of
+  this launcher.
 - The game window is fixed at 1280x720.
 
 ## Build

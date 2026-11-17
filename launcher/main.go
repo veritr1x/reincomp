@@ -17,6 +17,7 @@ import (
 	"bufio"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -50,6 +51,9 @@ var settings = []struct {
 
 var libraries = []string{"libil2cpp.so", "libunity.so"}
 
+// The master data file the server reads.
+const masterName = "20240404193219.bin.e"
+
 // The ports the game's server profile expects: Bunker's 8003, 8080 and 3000 plus this.
 const portOffset = "30000"
 
@@ -58,10 +62,18 @@ func main() {
 	fps := flag.String("fps", "game", "frame rate target: a number, or \"game\" for the game's own")
 	render := flag.String("render", "", "render size, such as 3840x2160 (default: the window's)")
 	silent := flag.Bool("nosound", false, "turn the game's sound off")
+	exportSave := flag.String("export-save", "", "write a backup of the save to this .zip, then stop")
+	importSave := flag.String("import-save", "", "replace the save with this backup (.zip, or a game.db), then stop")
 	prepareOnly := flag.Bool("prepare", false, "prepare the game files, then stop")
 	flag.Parse()
 	sound = !*silent
-	if e := run(*assets, *fps, *render, *prepareOnly); e != nil {
+	e := error(nil)
+	if *exportSave != "" || *importSave != "" {
+		e = saves(*exportSave, *importSave)
+	} else {
+		e = run(*assets, *fps, *render, *prepareOnly)
+	}
+	if e != nil {
 		fmt.Fprintln(os.Stderr, "\n"+e.Error())
 		if !*prepareOnly {
 			fmt.Fprintln(os.Stderr, "\nPress Enter to close.")
@@ -101,8 +113,8 @@ func run(assets, fps, render string, prepareOnly bool) error {
 	if assets == "" {
 		assets = filepath.Join(data, "assets")
 	}
-	if _, e := os.Stat(assets); e != nil {
-		return fmt.Errorf("The game files the server serves were not found at %s.\nPass their folder with -assets.", assets)
+	if e := importFiles(root, server, assets); e != nil {
+		return e
 	}
 
 	fmt.Println("Starting the server...")
@@ -161,6 +173,82 @@ func run(assets, fps, render string, prepareOnly bool) error {
 	play.Stdout, play.Stderr = gameLog, gameLog
 	if e := play.Run(); e != nil {
 		return fmt.Errorf("The game stopped: %v. See %s.", e, gameLog.Name())
+	}
+	return nil
+}
+
+// saves keeps or restores the player's save with the server's own commands
+// (bunker-server saves). The backup is the phone app's format, so a save
+// moves between a phone and this computer either way.
+func saves(exportTo, importFrom string) error {
+	self, e := os.Executable()
+	if e != nil {
+		return e
+	}
+	root := filepath.Dir(self)
+	server := filepath.Join(root, "server", "bunker-server.exe")
+	data := filepath.Join(root, "data", "server")
+	arguments := []string{"saves", "export", "-data", data, "-out", exportTo}
+	if importFrom != "" {
+		arguments = []string{"saves", "import", "-data", data, "-from", importFrom}
+	}
+	out, e := exec.Command(server, arguments...).CombinedOutput()
+	if e != nil {
+		return fmt.Errorf("%s", strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(string(out)), "bunker-server: ")))
+	}
+	if importFrom != "" {
+		fmt.Println("The save was restored. The one it replaced is kept in data\\server.before-import.")
+	} else {
+		fmt.Println("The save was written to " + exportTo)
+	}
+	return nil
+}
+
+// importFiles puts the player's resource dump and master data where the server
+// reads them, the first time: both are looked for next to this program. The
+// server's own import does the work (bunker-server import).
+func importFiles(root, server, assets string) error {
+	if _, e := os.Stat(filepath.Join(assets, "assets", "revisions", "0")); e == nil {
+		if _, e := os.Stat(filepath.Join(assets, "assets", "release", masterName)); e == nil {
+			return nil
+		}
+	}
+	first := func(patterns ...string) string {
+		for _, pattern := range patterns {
+			if found, _ := filepath.Glob(filepath.Join(root, pattern)); len(found) > 0 {
+				return found[0]
+			}
+		}
+		return ""
+	}
+	dump, master := first("resource_dump*.7z", "resource_dump*.zip"), first(masterName)
+	if dump == "" || master == "" {
+		return fmt.Errorf("Put these two files next to this program, then start it again:\n  %s (the master data)\n  resource_dump_android.7z (the resource dump)\nOr pass a folder that already holds the imported game files with -assets.", masterName)
+	}
+	fmt.Println("Importing the game files (once; about 20 GB, several minutes)...")
+	run := exec.Command(server, "import", "-assets", assets, "-master", master, "-dump", dump)
+	out, e := run.StdoutPipe()
+	if e != nil {
+		return e
+	}
+	var problem strings.Builder
+	run.Stderr = &problem
+	if e := run.Start(); e != nil {
+		return e
+	}
+	lines := bufio.NewScanner(out)
+	for lines.Scan() {
+		var state struct {
+			Step        string
+			Done, Total int64
+		}
+		if json.Unmarshal(lines.Bytes(), &state) == nil && state.Total > 0 {
+			fmt.Printf("\r  %3d%%", state.Done*100/state.Total)
+		}
+	}
+	fmt.Println()
+	if e := run.Wait(); e != nil {
+		return fmt.Errorf("The game files were not imported: %s", strings.TrimSpace(problem.String()))
 	}
 	return nil
 }

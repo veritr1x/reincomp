@@ -1,0 +1,84 @@
+# A release holds what a player needs besides their own game files, and nothing
+# made from the game: the launcher, and the recompiler's toolchain for Windows
+# (lifter, semantics, instrumenter). Runs for a tag such as v0.3.0.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  toolchain:
+    name: Toolchain for Windows
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: ilammy/msvc-dev-cmd@v1
+      - uses: seanmiddleditch/gha-setup-ninja@v5
+      - uses: actions/cache@v4
+        id: llvm
+        with:
+          path: llvm18
+          key: llvm-18.1.8-windows-msvc
+      - name: Fetch LLVM 18
+        if: steps.llvm.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          curl -sSL -o llvm18.tar.xz "https://github.com/llvm/llvm-project/releases/download/llvmorg-18.1.8/clang+llvm-18.1.8-x86_64-pc-windows-msvc.tar.xz"
+          echo "22c5907db053026cc2a8ff96d21c0f642a90d24d66c23c6d28ee7b1d572b82e8  llvm18.tar.xz" | sha256sum --check
+          mkdir llvm18 && tar -xf llvm18.tar.xz -C llvm18 --strip-components=1 && rm llvm18.tar.xz
+      - name: Build the lifter, its semantics and the instrumenter
+        run: python recompiler/windows/build_toolchain.py --llvm llvm18 --work work --out toolchain
+      - uses: actions/upload-artifact@v4
+        with:
+          name: toolchain
+          path: toolchain
+
+  launcher:
+    name: Launcher
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25.8"
+          cache: false
+      - run: |
+          cd launcher
+          GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -trimpath \
+            -ldflags "-s -w -X main.version=${GITHUB_REF_NAME#v}" -o ../out/reincomp.exe .
+      - uses: actions/upload-artifact@v4
+        with:
+          name: launcher
+          path: out
+
+  release:
+    name: GitHub Release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [toolchain, launcher]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: parts
+      - name: Package
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          mkdir dist
+          (cd parts/toolchain && zip -q -r "../../dist/reincomp-toolchain-$version-windows-x86_64.zip" .)
+          cp parts/launcher/reincomp.exe "dist/reincomp-$version.exe"
+          awk -v v="## $version" '$0 ~ "^## " { on = index($0, v) == 1 } on' CHANGELOG.md > dist/notes.md
+      - name: Create the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" dist/*.zip dist/*.exe --title "re[in]comp ${GITHUB_REF_NAME#v}" --notes-file dist/notes.md --verify-tag

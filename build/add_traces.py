@@ -1,14 +1,17 @@
 #!/usr/bin/env python3
-"""Add newly lifted functions to a pack.
+"""Add newly lifted functions to a pack, or take them out again.
 
     python build/add_traces.py PACK_DIR RESULT.json [RESULT.json ...]
+    python build/add_traces.py --remove PACK_DIR RESULT.json [RESULT.json ...]
 
 Each RESULT.json comes from recompiler/tools/lift_new_traces.py. Its objects
-are appended to the pack's link list and its new heads are registered in
-generated/game_traces.h (kTraces stays sorted by address).
+join the pack's link list and its new heads join game/heads-*.txt.
 """
-import hashlib, json, re, shutil, sys
+import argparse, json, re, shutil, sys
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from make_pack import heads_file, add_heads  # noqa: E402
 
 
 def windows_path(p):
@@ -17,38 +20,34 @@ def windows_path(p):
 
 
 def main():
-    pack = Path(sys.argv[1])
-    manifest = json.loads((pack / 'pack.json').read_text())
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument('--remove', action='store_true')
+    ap.add_argument('pack', type=Path)
+    ap.add_argument('results', type=Path, nargs='+')
+    a = ap.parse_args()
+    manifest = json.loads((a.pack / 'pack.json').read_text())
     heads, objects = set(), []
-    for result in sys.argv[2:]:
-        v = json.loads(Path(result).read_text())
+    for result in a.results:
+        v = json.loads(result.read_text())
         heads |= {int(x, 16) for x in v['new_heads']}
         objects += [Path(windows_path(o)) for o in v['objects']]
-    if not heads:
-        print('no new heads')
-        return
-    header = pack / 'generated/game_traces.h'
-    text = header.read_text()
-    start = text.index('static const recomp::Trace kTraces[] = {')
-    end = text.index('};', start)
-    table = {int(m.group(1), 16): m.group(0) for m in re.finditer(r'\{(0x[0-9a-f]+),\s*sub_[0-9a-f]+\}', text[start:end])}
-    assert len(table) == text.count('{0x', start, end), 'unrecognized kTraces entries'
-    assert not heads & set(table), 'new heads already registered'
-    for h in heads:
-        table[h] = f'{{{h:#x},sub_{h:x}}}'
-    decls = ''.join(f'extern "C" Memory *sub_{h:x}(State &,addr_t,Memory *);\n' for h in sorted(heads))
-    body = 'static const recomp::Trace kTraces[] = {\n' + ''.join(f'  {table[h]},\n' for h in sorted(table))
-    header.write_text(text[:start] + decls + body + text[end:])
-    for source in objects:
-        name = f'{len(manifest["objects"]):05d}-{source.parent.name}-{source.name}'
-        shutil.copy2(source, pack / 'objects' / name)
-        manifest['objects'].append(name)
-    digest = hashlib.sha256()
-    for name in manifest['objects']:
-        digest.update(name.encode() + b'\0' + hashlib.sha256((pack / 'objects' / name).read_bytes()).digest())
-    manifest['objects_sha256'] = digest.hexdigest()
-    (pack / 'pack.json').write_text(json.dumps(manifest, indent=1) + '\n')
-    print(f'registered {len(heads)} new heads from {len(objects)} objects')
+    names = {o: f'{o.parent.name}-{o.name}' for o in objects}
+    if a.remove:
+        drop = set(names.values())
+        for name in drop & set(manifest['objects']):
+            (a.pack / 'objects' / name).unlink()
+        manifest['objects'] = [n for n in manifest['objects'] if n not in drop]
+        for path in {heads_file(x) for x in heads}:
+            keep = [x for x in (int(line, 16) for line in path.read_text().split()) if x not in heads]
+            path.write_text(''.join(f'{x:#x}\n' for x in keep), newline='\n')
+        print(f'removed {len(drop)} objects and {len(heads)} heads')
+    else:
+        for source, name in names.items():
+            if name not in manifest['objects']:
+                shutil.copy2(source, a.pack / 'objects' / name)
+                manifest['objects'].append(name)
+        print(f'added {len(names)} objects; {add_heads(sorted(heads))} new heads in game/')
+    (a.pack / 'pack.json').write_text(json.dumps(manifest, indent=1) + '\n')
 
 
 if __name__ == '__main__':
