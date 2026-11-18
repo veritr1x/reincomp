@@ -8,7 +8,11 @@
     "sha256": "32b09e0eee7f499ba2869df1270139ec24705ee231dd8650c17e25eeac108822"
   },
   "launcher": {
-    "url": "https://github.com/veritr1x/reincomp/releases/download/v0.1.0/reincomp-0.1.0.exe",
-    "sha256": "e74ec7a56c7fb00b87dbc501385c5a56697119112f8505af2faacc4cc6729828"
+    "url": "https://github.com/veritr1x/reincomp/releases/download/v0.1.1/reincomp-0.1.1.exe",
+    "sha256": "6091e1ba8f4e1fdbfb0b160fcbd613361f6f206274f599463cb2766fc8df0cda"
+  },
+  "pods": {
+    "url": "https://github.com/veritr1x/reincomp/releases/download/v0.1.1/reincomp-pods-0.1.1-windows-x86_64.zip",
+    "sha256": "fc86a71135fd4d5ba8e89e4f13fcd914c93bbc84a15b1e477d83e19c2b4e54bb"
   }
 }
