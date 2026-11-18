@@ -1,6 +1,16 @@
 # Changelog
 
-What changed, newest first, by date and area.
+What changed, newest first, by date and area. A release's heading comes
+above the dated sections it holds.
+
+## 0.1.0 (2026-11-18)
+
+The first release. It holds the launcher, `reincomp.exe`, and the recompiler's
+toolchain for Windows (the lifter, its semantics and the instrumenter), and
+nothing made from the game: the game executable is built on your PC from your
+own APK with `python build/from_apk.py`. See README.md for what you need and
+BUILDING.md for the steps. Windows x86-64 only; the game plays with sound at
+about 35 to 45 fps, and can freeze during a loading pause.
 
 ## 2026-11-18
 
