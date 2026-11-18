@@ -39,8 +39,8 @@ continues where it stopped.
 5. **Assemble the folder** (`build/make_release.py`).
 
 **The Bunker in the game.** For Ctrl+B to show the Bunker's pages, the folder
-needs a `pods` folder, which is not a download yet. Make it once and pass it
-with `--pods <folder>`, or copy it in as `pods` afterwards:
+needs a `pods` folder. The build downloads it, as the pods zip of the 0.1.1
+release. To make your own and pass it with `--pods <folder>`:
 
 ```
 python build/make_pods.py --python <python-3.12-embed-amd64.zip> --bunker <Bunker checkout> --loader <WebView2Loader.dll> --out <folder>
@@ -62,7 +62,7 @@ They are a zip on this project's 0.1.0 release. ANGLE is built with this
 project's patches, which are in `third_party/angle/` with the pins of its
 sources; the other two DLLs come from the Firebase C++ SDK 9.6.0 and the
 Grpc.Core 2.26.0 package. The server is Bunker's `bunker-server` for Windows,
-from the Bunker release pinned in `bunker.lock.json` (1.12.12; the launcher
+from the Bunker release pinned in `bunker.lock.json` (1.12.13; the launcher
 needs its import and save commands, and 1.12.11 refuses a save made by another
 version); `--unpinned-server` accepts
 another build.

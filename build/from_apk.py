@@ -8,7 +8,7 @@ around them. Nothing it makes from the game leaves OUT_DIR.
 
   1. checks the APK and takes libunity.so and libil2cpp.so out of it
   2. downloads what it was not given: the toolchain, the files that ship
-     beside the game, the launcher and the server
+     beside the game, the launcher, the server and the Bunker's pages
   3. lifts both libraries from the trace heads in game/ (recompiler/lift_all.py): the long step
   4. collects the objects into a pack (build/make_pack.py)
   5. builds the game executable (build/build.py)
@@ -20,8 +20,9 @@ and is skipped when already done, so an interrupted run continues.
 
 The downloads are this project's release files (release.lock.json) and
 Bunker's server (bunker.lock.json), each checked against its pinned hash.
---toolchain, --deps, --launcher and --server take your own instead, and
---no-download stops at the game executable when one of them is missing.
+--toolchain, --deps, --launcher, --server and --pods take your own instead,
+and --no-download stops at the game executable when one of the first four is
+missing.
 """
 import argparse, hashlib, json, shutil, subprocess, sys, time, urllib.request, zipfile
 from pathlib import Path
@@ -91,7 +92,7 @@ def main():
     ap.add_argument('--deps', type=Path, help='your own folder of files that ship beside the game (see make_release.py)')
     ap.add_argument('--launcher', type=Path, help='your own reincomp.exe')
     ap.add_argument('--server', type=Path, help='your own bunker-server.exe')
-    ap.add_argument('--pods', type=Path, help='the folder from build/make_pods.py: Ctrl+B then shows the Bunker in the game')
+    ap.add_argument('--pods', type=Path, help='your own folder from build/make_pods.py, which serves the Bunker shown with Ctrl+B')
     ap.add_argument('--unpinned-server', action='store_true', help='accept a server build other than the pinned release')
     ap.add_argument('--no-download', action='store_true', help='download nothing; use only what is given')
     ap.add_argument('--out', type=Path, required=True)
@@ -130,6 +131,8 @@ def main():
     step('Building the game', build + (['--cxx', a.cxx] if a.cxx else []))
     exe = work / 'build/bunker-game-bootstrap.exe'
     deps, launcher, server = part('deps'), part('launcher'), part('server')
+    # The Bunker's pages are optional: a folder without them plays, and Ctrl+B does nothing.
+    pods = a.pods or (None if a.no_download or 'pods' not in pins() else download(work / 'downloads', 'pods'))
     if not (deps and launcher and server):
         print(f'The game executable is {exe}\nGive --deps, --launcher and --server to assemble the folder to play from.')
         return
@@ -138,7 +141,7 @@ def main():
         sys.exit(f'{folder} already exists: move it away first.')
     step('Assembling the folder', [sys.executable, ROOT / 'build/make_release.py', '--exe', exe, '--launcher', launcher,
                                    '--deps', deps, '--server', server, '--out', folder,
-                                   *(['--pods', a.pods] if a.pods else []),
+                                   *(['--pods', pods] if pods else []),
                                    *(['--unpinned-server'] if a.unpinned_server else [])])
     print(f'\nDone. Put your game APK, {json.dumps("20240404193219.bin.e")} and the resource dump in\n  {folder}\nand run reincomp.exe.')
 

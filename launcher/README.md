@@ -66,8 +66,6 @@ Every other APK entry is copied as stored. No code changes.
 - The master data is installed as supplied. On a phone, Pod Programs then
   adjusts it (the events calendar, language layers); that step is not part of
   this launcher.
-- The `pods/` folder is not downloaded by the build yet: it is made with
-  `build/make_pods.py`.
 - The game window is fixed at 1280x720.
 
 ## Build

@@ -3,16 +3,15 @@
 What changed, newest first, by date and area. A release's heading comes
 above the dated sections it holds.
 
-## 0.1.0 (2026-11-18)
+## 0.1.1 (2026-11-18)
 
-The first release. It holds the launcher, `reincomp.exe`, and the recompiler's
-toolchain for Windows (the lifter, its semantics and the instrumenter), and
-nothing made from the game: the game executable is built on your PC from your
-own APK with `python build/from_apk.py`. See README.md for what you need and
-BUILDING.md for the steps. Windows x86-64 only; the game plays with sound at
-about 35 to 45 fps, and can freeze during a loading pause.
+Ctrl+B in the game opens the Bunker (Pod Programs) in a pane over the game.
+The build downloads what serves its pages along with the rest, so a folder
+built from your APK has it without further steps. It needs the Microsoft Edge
+WebView2 Runtime, which Windows 11 has. Little of the Bunker is tested on a
+PC yet.
 
-## 2026-11-18
+## 2026-11-18 (after 0.1.0)
 
 ### The Bunker in the game
 - New: Ctrl+B in the game window opens the Bunker's pages (Pod Programs) in
@@ -26,13 +25,31 @@ about 35 to 45 fps, and can freeze during a loading pause.
   for them.
 - New: `build/make_pods.py` makes that folder: Python 3.12, the packages
   Pod Programs needs, Bunker's pages at the pinned release, and
-  `WebView2Loader.dll`, with their license texts. `make_release.py` and
-  `from_apk.py` take it with `--pods`; it is not a download yet.
+  `WebView2Loader.dll`, with their license texts. `make_release.py` takes
+  it with `--pods`.
 - Checked in the game at the title screen: the pane opens and closes with
   Ctrl+B from the game and from inside the pane, the Pod Programs home page
   shows, and a backup made through the pages was written. Not checked:
   clicking through the pages in the pane, the pages' Close, and a save edit
   while playing.
+
+- The build downloads that folder too, as the pods zip of the 0.1.1 release
+  pinned in `release.lock.json`; `--pods` takes your own instead. The zip was
+  checked against the released 1.12.13 server: its pages are served, and Deck
+  Builder refuses a save nobody has played with a message.
+- The pinned server is Bunker 1.12.13, whose Deck Builder no longer restarts
+  the server over and over on a save nobody has played yet.
+
+## 0.1.0 (2026-11-18)
+
+The first release. It holds the launcher, `reincomp.exe`, and the recompiler's
+toolchain for Windows (the lifter, its semantics and the instrumenter), and
+nothing made from the game: the game executable is built on your PC from your
+own APK with `python build/from_apk.py`. See README.md for what you need and
+BUILDING.md for the steps. Windows x86-64 only; the game plays with sound at
+about 35 to 45 fps, and can freeze during a loading pause.
+
+## 2026-11-18
 
 ### Build from your own APK
 - The build needs only the APK and clang: `python build/from_apk.py --apk
