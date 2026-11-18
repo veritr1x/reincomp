@@ -15,6 +15,16 @@ about 35 to 45 fps, and can freeze during a loading pause.
 ## 2026-11-18
 
 ### Build from your own APK
+- The build needs only the APK and clang: `python build/from_apk.py --apk
+  <APK> --clang <clang.exe> --out <folder>`. It downloads the toolchain, the
+  launcher and the files that ship beside the game from this project's
+  release, and the server from Bunker's, each checked against a pinned hash
+  (`release.lock.json`, `bunker.lock.json`). `--no-download` turns that off.
+- New on the 0.1.0 release: the deps zip, with ANGLE, the Firebase and gRPC
+  DLLs and the license texts of everything in them (gRPC and what it links,
+  the MinGW-w64 and GCC runtimes, Firebase's third-party notices).
+- New: `third_party/angle/` holds the three patches ANGLE is built with, the
+  pins of its sources and the build's configuration.
 - New: `python build/from_apk.py` goes from the game APK to a folder to play
   from, in one command. It recompiles the game's two libraries on your PC,
   builds the executable and assembles the folder.

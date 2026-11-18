@@ -9,19 +9,25 @@ Everything here runs on Windows. No Linux or WSL is needed.
 | Python 3.12 | the build scripts |
 | LLVM 18.1.8 for Windows (`clang+llvm-18.1.8-x86_64-pc-windows-msvc`, from LLVM's releases) | compiling the recompiled code; it must be version 18 |
 | MinGW-w64 GCC 15 (`g++` on `PATH`) | compiling and linking the game executable |
-| The toolchain: `remill-lift.exe`, `aarch64.bc`, `poll-instrument.exe` | recompiling the game's libraries. From a release's toolchain zip, or built as below |
+| Microsoft Visual C++ Redistributable 2015-2022 | the Firebase and gRPC DLLs beside the game need it; most PCs have it |
 | Go 1.25 | only to build the launcher yourself |
+
+The recompiler's toolchain (`remill-lift.exe`, `aarch64.bc`,
+`poll-instrument.exe`) is downloaded by the build; building it yourself is
+described below.
 
 ## From the APK to a folder to play from
 
 ```
-python build/from_apk.py --apk <your APK> --toolchain <toolchain folder> --clang <LLVM 18>/bin/clang.exe --deps <deps folder> --launcher reincomp.exe --server bunker-server.exe --out <folder>
+python build/from_apk.py --apk <your APK> --clang <LLVM 18>/bin/clang.exe --out <folder>
 ```
 
 It runs these steps, each of which can also be run by hand. An interrupted run
 continues where it stopped.
 
 1. **Check the APK** and take `libunity.so` and `libil2cpp.so` out of it.
+   **Download** the toolchain, the deps, the launcher and the server, each
+   checked against its hash in `release.lock.json` or `bunker.lock.json`.
 2. **Recompile both libraries** (`recompiler/lift_all.py`). Each library is
    lifted from its list of trace heads in `game/`, in shards of 128, with the
    code patches of `game/patches.json` applied first. About 45 minutes on a
@@ -32,19 +38,20 @@ continues where it stopped.
    helper inliner. About a minute; later builds recompile only what changed.
 5. **Assemble the folder** (`build/make_release.py`).
 
-`--deps`, `--launcher` and `--server` are optional: without them it stops at
-the game executable.
+`--toolchain`, `--deps`, `--launcher` and `--server` take your own in place
+of a download. With `--no-download` nothing is fetched, and the build stops at
+the game executable unless all of them are given.
 
-The deps folder holds what ships beside the game: `angle/` (ANGLE's
-`libEGL.dll`, `libGLESv2.dll` and the DLLs they need),
-`FirebaseCppApp-9_6_0.dll`, `grpc_csharp_ext.x64.dll` and `licenses/`
-([THIRD-PARTY.md](THIRD-PARTY.md)). The server is Bunker's `bunker-server`
-for Windows, from the Bunker release pinned in `bunker.lock.json` (1.12.11,
-the first with the import and save commands the launcher uses);
-`--unpinned-server` accepts another build. The deps folder is not published
-anywhere yet: ANGLE has to be built with this project's presentation patch,
-and the two DLLs come from the Firebase C++ SDK 9.6.0 and the Grpc.Core 2.26.0
-package.
+The deps are what ships beside the game: `angle/` (ANGLE's `libEGL.dll`,
+`libGLESv2.dll` and the DLLs they need), `FirebaseCppApp-9_6_0.dll`,
+`grpc_csharp_ext.x64.dll` and `licenses/` ([THIRD-PARTY.md](THIRD-PARTY.md)).
+They are a zip on this project's 0.1.0 release. ANGLE is built with this
+project's patches, which are in `third_party/angle/` with the pins of its
+sources; the other two DLLs come from the Firebase C++ SDK 9.6.0 and the
+Grpc.Core 2.26.0 package. The server is Bunker's `bunker-server` for Windows,
+from the Bunker release pinned in `bunker.lock.json` (1.12.11, the first with
+the import and save commands the launcher uses); `--unpinned-server` accepts
+another build.
 
 A pack is made from the game's own code. Keep it, and anything built from it,
 out of this repository.

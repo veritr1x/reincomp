@@ -1,0 +1,743 @@
+--- a/src/image_util/loadimage.h
++++ b/src/image_util/loadimage.h
+@@ -809,6 +809,7 @@
+                           size_t depth,
+                           uint32_t blockWidth,
+                           uint32_t blockHeight,
++                          bool isSRGB,
+                           const uint8_t *input,
+                           size_t inputRowPitch,
+                           size_t inputDepthPitch,
+@@ -816,7 +817,7 @@
+                           size_t outputRowPitch,
+                           size_t outputDepthPitch);
+ 
+-template <size_t blockWidth, size_t blockHeight>
++template <size_t blockWidth, size_t blockHeight, bool isSRGB = false>
+ inline void LoadASTCToRGBA8(const ImageLoadContext &context,
+                             size_t width,
+                             size_t height,
+--- a/src/image_util/loadimage.inc
++++ b/src/image_util/loadimage.inc
+@@ -430,7 +430,7 @@
+     }
+ }
+ 
+-template <size_t blockWidth, size_t blockHeight>
++template <size_t blockWidth, size_t blockHeight, bool isSRGB>
+ inline void LoadASTCToRGBA8(const ImageLoadContext &context,
+                             size_t width,
+                             size_t height,
+@@ -442,7 +442,7 @@
+                             size_t outputRowPitch,
+                             size_t outputDepthPitch)
+ {
+-    LoadASTCToRGBA8Inner(context, width, height, depth, blockWidth, blockHeight, input, inputRowPitch,
++    LoadASTCToRGBA8Inner(context, width, height, depth, blockWidth, blockHeight, isSRGB, input, inputRowPitch,
+                          inputDepthPitch, output, outputRowPitch, outputDepthPitch);
+ }
+ 
+--- a/src/image_util/loadimage_astc.cpp
++++ b/src/image_util/loadimage_astc.cpp
+@@ -18,6 +18,7 @@
+                           size_t depth,
+                           uint32_t blockWidth,
+                           uint32_t blockHeight,
++                          bool isSRGB,
+                           const uint8_t *input,
+                           size_t inputRowPitch,
+                           size_t inputDepthPitch,
+@@ -42,12 +43,17 @@
+     // Space needed for 16 bytes of output per compressed block
+     size_t blockSize = blockCountX * blockCountY * 16;
+ 
+-    int32_t result =
+-        decompressor.decompress(context.singleThreadPool, context.multiThreadPool, imgWidth,
+-                                imgHeight, blockWidth, blockHeight, input, blockSize, output);
+-    if (result != 0)
++    for (size_t slice = 0; slice < depth; ++slice)
+     {
+-        WARN() << "ASTC decompression failed: " << decompressor.getStatusString(result);
++        int32_t result =
++            decompressor.decompress(context.singleThreadPool, context.multiThreadPool, imgWidth,
++                                    imgHeight, blockWidth, blockHeight, input, blockSize, output, isSRGB);
++        if (result != 0)
++        {
++            WARN() << "ASTC decompression failed: " << decompressor.getStatusString(result);
++        }
++        input += inputDepthPitch;
++        output += outputDepthPitch;
+     }
+ }
+ }  // namespace angle
+--- a/src/image_util/AstcDecompressor.h
++++ b/src/image_util/AstcDecompressor.h
+@@ -56,7 +56,7 @@
+                                uint32_t blockHeight,
+                                const uint8_t *input,
+                                size_t inputLength,
+-                               uint8_t *output) = 0;
++                               uint8_t *output, bool isSRGB = false) = 0;
+ 
+     // Returns an error string for a given status code. Will always return non-null.
+     virtual const char *getStatusString(int32_t statusCode) const = 0;
+--- a/src/image_util/AstcDecompressor.cpp
++++ b/src/image_util/AstcDecompressor.cpp
+@@ -44,13 +44,12 @@
+ // Returns nullptr in case of error.
+ AstcencContextUniquePtr MakeDecoderContext(uint32_t blockWidth,
+                                            uint32_t blockHeight,
++                                           bool isSRGB,
+                                            astcenc_error *error)
+ {
+     astcenc_config config = {};
+     *error =
+-        // TODO(gregschlom): Do we need a special case for sRGB images? (And pass
+-        //                   ASTCENC_PRF_LDR_SRGB here?)
+-        astcenc_config_init(ASTCENC_PRF_LDR, blockWidth, blockHeight, 1, ASTCENC_PRE_FASTEST,
++        astcenc_config_init(isSRGB ? ASTCENC_PRF_LDR_SRGB : ASTCENC_PRF_LDR, blockWidth, blockHeight, 1, ASTCENC_PRE_FASTEST,
+                             ASTCENC_FLG_DECOMPRESS_ONLY, &config);
+     if (*error != ASTCENC_SUCCESS)
+     {
+@@ -73,7 +72,7 @@
+ {
+     astcenc_error error;
+     // Try getting an arbitrary context. If it works, the decompressor is available.
+-    AstcencContextUniquePtr context = MakeDecoderContext(5, 5, &error);
++    AstcencContextUniquePtr context = MakeDecoderContext(5, 5, false, &error);
+     return context != nullptr;
+ }
+ 
+@@ -96,12 +95,12 @@
+     // Returns a context object for a given ASTC block size, along with the error code if the
+     // context initialization failed.
+     // In this case, the context will be null, and the status code will be non-zero.
+-    std::pair<astcenc_context *, astcenc_error> get(uint32_t blockWidth, uint32_t blockHeight)
+-    {
+-        Value &value = mContexts[{blockWidth, blockHeight}];
++    std::pair<astcenc_context *, astcenc_error> get(uint32_t blockWidth, uint32_t blockHeight, bool isSRGB)
++    {
++        Value &value = mContexts[{blockWidth, blockHeight, isSRGB}];
+         if (value.context == nullptr)
+         {
+-            value.context = MakeDecoderContext(blockWidth, blockHeight, &value.error);
++            value.context = MakeDecoderContext(blockWidth, blockHeight, isSRGB, &value.error);
+         }
+         return {value.context.get(), value.error};
+     }
+@@ -112,10 +111,11 @@
+     {
+         uint32_t blockWidth;
+         uint32_t blockHeight;
++        bool isSRGB;
+ 
+         bool operator==(const Key &other) const
+         {
+-            return blockWidth == other.blockWidth && blockHeight == other.blockHeight;
++            return blockWidth == other.blockWidth && blockHeight == other.blockHeight && isSRGB == other.isSRGB;
+         }
+     };
+ 
+@@ -131,7 +131,7 @@
+         std::size_t operator()(const Key &k) const
+         {
+             // blockWidth and blockHeight are < 256 (actually, < 16), so this is safe
+-            return k.blockWidth << 8 | k.blockHeight;
++            return (static_cast<size_t>(k.isSRGB) << 16) | (k.blockWidth << 8) | k.blockHeight;
+         }
+     };
+ 
+@@ -192,13 +192,13 @@
+                        const uint32_t blockHeight,
+                        const uint8_t *input,
+                        size_t inputLength,
+-                       uint8_t *output) override
++                       uint8_t *output, bool isSRGB) override
+     {
+         // A given astcenc context can only decompress one image at a time, which we why we keep
+         // this mutex locked the whole time.
+         std::lock_guard global_lock(mMutex);
+ 
+-        auto [context, context_status] = mContextCache->get(blockWidth, blockHeight);
++        auto [context, context_status] = mContextCache->get(blockWidth, blockHeight, isSRGB);
+         if (context_status != ASTCENC_SUCCESS)
+             return context_status;
+ 
+--- a/src/image_util/AstcDecompressorNoOp.cpp
++++ b/src/image_util/AstcDecompressorNoOp.cpp
+@@ -27,7 +27,7 @@
+                        uint32_t blockHeight,
+                        const uint8_t *astcData,
+                        size_t astcDataLength,
+-                       uint8_t *output) override
++                       uint8_t *output, bool isSRGB) override
+     {
+         return -1;
+     }
+--- a/src/libANGLE/renderer/load_functions_data.json
++++ b/src/libANGLE/renderer/load_functions_data.json
+@@ -420,7 +420,7 @@
+       "GL_UNSIGNED_INT": "LoadToNative<GLuint, 1>"
+     }
+   },
+-  "GL_BGRX8_ANGLEX" : {
++  "GL_BGRX8_ANGLEX": {
+     "B8G8R8X8_UNORM": {
+       "GL_UNSIGNED_BYTE": "LoadToNative3To4<GLubyte, 0xFF>"
+     },
+@@ -428,7 +428,7 @@
+       "GL_UNSIGNED_BYTE": "LoadToNative3To4<GLubyte, 0xFF>"
+     }
+   },
+-  "GL_BGRX8_SRGB_ANGLEX" : {
++  "GL_BGRX8_SRGB_ANGLEX": {
+     "B8G8R8X8_UNORM_SRGB": {
+       "GL_UNSIGNED_BYTE": "LoadToNative3To4<GLubyte, 0xFF>"
+     },
+@@ -436,7 +436,7 @@
+       "GL_UNSIGNED_BYTE": "LoadToNative3To4<GLubyte, 0xFF>"
+     }
+   },
+-  "GL_RGBX8_ANGLE" : {
++  "GL_RGBX8_ANGLE": {
+     "R8G8B8X8_UNORM": {
+       "GL_UNSIGNED_BYTE": "LoadToNative3To4<GLubyte, 0xFF>"
+     },
+@@ -444,7 +444,7 @@
+       "GL_UNSIGNED_BYTE": "LoadToNative3To4<GLubyte, 0xFF>"
+     }
+   },
+-  "GL_RGBX8_SRGB_ANGLEX" : {
++  "GL_RGBX8_SRGB_ANGLEX": {
+     "R8G8B8X8_UNORM_SRGB": {
+       "GL_UNSIGNED_BYTE": "LoadToNative3To4<GLubyte, 0xFF>"
+     },
+@@ -482,115 +482,115 @@
+       "GL_UNSIGNED_INT_2_10_10_10_REV": "LoadBGR10A2ToRGB10A2"
+     }
+   },
+-  "GL_BGRA8_SRGB_ANGLEX" : {
+-     "B8G8R8A8_UNORM_SRGB": {
++  "GL_BGRA8_SRGB_ANGLEX": {
++    "B8G8R8A8_UNORM_SRGB": {
+       "GL_UNSIGNED_BYTE": "LoadToNative<GLubyte, 4>"
+-     }
+-  },
+-  "GL_A1RGB5_ANGLEX" : {
++    }
++  },
++  "GL_A1RGB5_ANGLEX": {
+     "A1R5G5B5_UNORM": {
+       "GL_UNSIGNED_BYTE": "LoadRGB5A1ToRGBA8",
+       "GL_UNSIGNED_SHORT_1_5_5_5_REV_EXT": "LoadToNative<GLushort, 1>"
+     }
+   },
+-  "GL_R8_SSCALED_ANGLEX" : {
+-    "NONE": {
+-      "GL_UNSIGNED_BYTE": "UnreachableLoadFunction"
+-    }
+-  },
+-  "GL_RG8_SSCALED_ANGLEX" : {
+-    "NONE": {
+-      "GL_UNSIGNED_BYTE": "UnreachableLoadFunction"
+-    }
+-  },
+-  "GL_RGB8_SSCALED_ANGLEX" : {
+-    "NONE": {
+-      "GL_UNSIGNED_BYTE": "UnreachableLoadFunction"
+-    }
+-  },
+-  "GL_RGBA8_SSCALED_ANGLEX" : {
+-    "NONE": {
+-      "GL_UNSIGNED_BYTE": "UnreachableLoadFunction"
+-    }
+-  },
+-  "GL_R8_USCALED_ANGLEX" : {
+-    "NONE": {
+-      "GL_UNSIGNED_BYTE": "UnreachableLoadFunction"
+-    }
+-  },
+-  "GL_RG8_USCALED_ANGLEX" : {
+-    "NONE": {
+-      "GL_UNSIGNED_BYTE": "UnreachableLoadFunction"
+-    }
+-  },
+-  "GL_RGB8_USCALED_ANGLEX" : {
+-    "NONE": {
+-      "GL_UNSIGNED_BYTE": "UnreachableLoadFunction"
+-    }
+-  },
+-  "GL_RGBA8_USCALED_ANGLEX" : {
+-    "NONE": {
+-      "GL_UNSIGNED_BYTE": "UnreachableLoadFunction"
+-    }
+-  },
+-  "GL_R16_SSCALED_ANGLEX" : {
+-    "NONE": {
+-      "GL_UNSIGNED_BYTE": "UnreachableLoadFunction"
+-    }
+-  },
+-  "GL_RG16_SSCALED_ANGLEX" : {
+-    "NONE": {
+-      "GL_UNSIGNED_BYTE": "UnreachableLoadFunction"
+-    }
+-  },
+-  "GL_RGB16_SSCALED_ANGLEX" : {
+-    "NONE": {
+-      "GL_UNSIGNED_BYTE": "UnreachableLoadFunction"
+-    }
+-  },
+-  "GL_RGBA16_SSCALED_ANGLEX" : {
+-    "NONE": {
+-      "GL_UNSIGNED_BYTE": "UnreachableLoadFunction"
+-    }
+-  },
+-  "GL_R16_USCALED_ANGLEX" : {
+-    "NONE": {
+-      "GL_UNSIGNED_BYTE": "UnreachableLoadFunction"
+-    }
+-  },
+-  "GL_RG16_USCALED_ANGLEX" : {
+-    "NONE": {
+-      "GL_UNSIGNED_BYTE": "UnreachableLoadFunction"
+-    }
+-  },
+-  "GL_RGB16_USCALED_ANGLEX" : {
+-    "NONE": {
+-      "GL_UNSIGNED_BYTE": "UnreachableLoadFunction"
+-    }
+-  },
+-  "GL_RGBA16_USCALED_ANGLEX" : {
+-    "NONE": {
+-      "GL_UNSIGNED_BYTE": "UnreachableLoadFunction"
+-    }
+-  },
+-  "GL_RGB10_A2_SINT_ANGLEX" : {
++  "GL_R8_SSCALED_ANGLEX": {
++    "NONE": {
++      "GL_UNSIGNED_BYTE": "UnreachableLoadFunction"
++    }
++  },
++  "GL_RG8_SSCALED_ANGLEX": {
++    "NONE": {
++      "GL_UNSIGNED_BYTE": "UnreachableLoadFunction"
++    }
++  },
++  "GL_RGB8_SSCALED_ANGLEX": {
++    "NONE": {
++      "GL_UNSIGNED_BYTE": "UnreachableLoadFunction"
++    }
++  },
++  "GL_RGBA8_SSCALED_ANGLEX": {
++    "NONE": {
++      "GL_UNSIGNED_BYTE": "UnreachableLoadFunction"
++    }
++  },
++  "GL_R8_USCALED_ANGLEX": {
++    "NONE": {
++      "GL_UNSIGNED_BYTE": "UnreachableLoadFunction"
++    }
++  },
++  "GL_RG8_USCALED_ANGLEX": {
++    "NONE": {
++      "GL_UNSIGNED_BYTE": "UnreachableLoadFunction"
++    }
++  },
++  "GL_RGB8_USCALED_ANGLEX": {
++    "NONE": {
++      "GL_UNSIGNED_BYTE": "UnreachableLoadFunction"
++    }
++  },
++  "GL_RGBA8_USCALED_ANGLEX": {
++    "NONE": {
++      "GL_UNSIGNED_BYTE": "UnreachableLoadFunction"
++    }
++  },
++  "GL_R16_SSCALED_ANGLEX": {
++    "NONE": {
++      "GL_UNSIGNED_BYTE": "UnreachableLoadFunction"
++    }
++  },
++  "GL_RG16_SSCALED_ANGLEX": {
++    "NONE": {
++      "GL_UNSIGNED_BYTE": "UnreachableLoadFunction"
++    }
++  },
++  "GL_RGB16_SSCALED_ANGLEX": {
++    "NONE": {
++      "GL_UNSIGNED_BYTE": "UnreachableLoadFunction"
++    }
++  },
++  "GL_RGBA16_SSCALED_ANGLEX": {
++    "NONE": {
++      "GL_UNSIGNED_BYTE": "UnreachableLoadFunction"
++    }
++  },
++  "GL_R16_USCALED_ANGLEX": {
++    "NONE": {
++      "GL_UNSIGNED_BYTE": "UnreachableLoadFunction"
++    }
++  },
++  "GL_RG16_USCALED_ANGLEX": {
++    "NONE": {
++      "GL_UNSIGNED_BYTE": "UnreachableLoadFunction"
++    }
++  },
++  "GL_RGB16_USCALED_ANGLEX": {
++    "NONE": {
++      "GL_UNSIGNED_BYTE": "UnreachableLoadFunction"
++    }
++  },
++  "GL_RGBA16_USCALED_ANGLEX": {
++    "NONE": {
++      "GL_UNSIGNED_BYTE": "UnreachableLoadFunction"
++    }
++  },
++  "GL_RGB10_A2_SINT_ANGLEX": {
+     "R10G10B10A2_SINT": {
+       "GL_UNSIGNED_BYTE": "LoadRGB10A2ToRGBA8",
+       "GL_UNSIGNED_INT_2_10_10_10_REV": "LoadToNative<GLuint, 1>"
+     }
+   },
+-  "GL_RGB10_A2_SNORM_ANGLEX" : {
++  "GL_RGB10_A2_SNORM_ANGLEX": {
+     "R10G10B10A2_SNORM": {
+       "GL_UNSIGNED_BYTE": "LoadRGB10A2ToRGBA8",
+       "GL_UNSIGNED_INT_2_10_10_10_REV": "LoadToNative<GLuint, 1>"
+     }
+   },
+-  "GL_RGB10_A2_SSCALED_ANGLEX" : {
+-    "NONE": {
+-      "GL_UNSIGNED_BYTE": "UnreachableLoadFunction"
+-    }
+-  },
+-  "GL_RGB10_A2_USCALED_ANGLEX" : {
++  "GL_RGB10_A2_SSCALED_ANGLEX": {
++    "NONE": {
++      "GL_UNSIGNED_BYTE": "UnreachableLoadFunction"
++    }
++  },
++  "GL_RGB10_A2_USCALED_ANGLEX": {
+     "NONE": {
+       "GL_UNSIGNED_BYTE": "UnreachableLoadFunction"
+     }
+@@ -767,7 +767,7 @@
+     }
+   },
+   "GL_RGB565": {
+-    "R5G6B5_UNORM" : {
++    "R5G6B5_UNORM": {
+       "GL_UNSIGNED_BYTE": "LoadRGB8ToBGR565",
+       "GL_UNSIGNED_SHORT_5_6_5": "LoadToNative<GLushort, 1>",
+       "GL_UNSIGNED_INT_2_10_10_10_REV_EXT": "LoadRGB10A2ToRGB565"
+@@ -1128,7 +1128,7 @@
+       "GL_UNSIGNED_BYTE": "LoadCompressedToNative<4, 4, 1, 16>"
+     },
+     "R8G8B8A8_UNORM_SRGB": {
+-      "GL_UNSIGNED_BYTE": "LoadASTCToRGBA8<4, 4>"
++      "GL_UNSIGNED_BYTE": "LoadASTCToRGBA8<4, 4, true>"
+     }
+   },
+   "GL_COMPRESSED_SRGB8_ALPHA8_ASTC_5x4_KHR": {
+@@ -1136,7 +1136,7 @@
+       "GL_UNSIGNED_BYTE": "LoadCompressedToNative<5, 4, 1, 16>"
+     },
+     "R8G8B8A8_UNORM_SRGB": {
+-      "GL_UNSIGNED_BYTE": "LoadASTCToRGBA8<5, 4>"
++      "GL_UNSIGNED_BYTE": "LoadASTCToRGBA8<5, 4, true>"
+     }
+   },
+   "GL_COMPRESSED_SRGB8_ALPHA8_ASTC_5x5_KHR": {
+@@ -1144,7 +1144,7 @@
+       "GL_UNSIGNED_BYTE": "LoadCompressedToNative<5, 5, 1, 16>"
+     },
+     "R8G8B8A8_UNORM_SRGB": {
+-      "GL_UNSIGNED_BYTE": "LoadASTCToRGBA8<5, 5>"
++      "GL_UNSIGNED_BYTE": "LoadASTCToRGBA8<5, 5, true>"
+     }
+   },
+   "GL_COMPRESSED_SRGB8_ALPHA8_ASTC_6x5_KHR": {
+@@ -1152,7 +1152,7 @@
+       "GL_UNSIGNED_BYTE": "LoadCompressedToNative<6, 5, 1, 16>"
+     },
+     "R8G8B8A8_UNORM_SRGB": {
+-      "GL_UNSIGNED_BYTE": "LoadASTCToRGBA8<6, 5>"
++      "GL_UNSIGNED_BYTE": "LoadASTCToRGBA8<6, 5, true>"
+     }
+   },
+   "GL_COMPRESSED_SRGB8_ALPHA8_ASTC_6x6_KHR": {
+@@ -1160,7 +1160,7 @@
+       "GL_UNSIGNED_BYTE": "LoadCompressedToNative<6, 6, 1, 16>"
+     },
+     "R8G8B8A8_UNORM_SRGB": {
+-      "GL_UNSIGNED_BYTE": "LoadASTCToRGBA8<6, 6>"
++      "GL_UNSIGNED_BYTE": "LoadASTCToRGBA8<6, 6, true>"
+     }
+   },
+   "GL_COMPRESSED_SRGB8_ALPHA8_ASTC_8x5_KHR": {
+@@ -1168,7 +1168,7 @@
+       "GL_UNSIGNED_BYTE": "LoadCompressedToNative<8, 5, 1, 16>"
+     },
+     "R8G8B8A8_UNORM_SRGB": {
+-      "GL_UNSIGNED_BYTE": "LoadASTCToRGBA8<8, 5>"
++      "GL_UNSIGNED_BYTE": "LoadASTCToRGBA8<8, 5, true>"
+     }
+   },
+   "GL_COMPRESSED_SRGB8_ALPHA8_ASTC_8x6_KHR": {
+@@ -1176,7 +1176,7 @@
+       "GL_UNSIGNED_BYTE": "LoadCompressedToNative<8, 6, 1, 16>"
+     },
+     "R8G8B8A8_UNORM_SRGB": {
+-      "GL_UNSIGNED_BYTE": "LoadASTCToRGBA8<8, 6>"
++      "GL_UNSIGNED_BYTE": "LoadASTCToRGBA8<8, 6, true>"
+     }
+   },
+   "GL_COMPRESSED_SRGB8_ALPHA8_ASTC_8x8_KHR": {
+@@ -1184,7 +1184,7 @@
+       "GL_UNSIGNED_BYTE": "LoadCompressedToNative<8, 8, 1, 16>"
+     },
+     "R8G8B8A8_UNORM_SRGB": {
+-      "GL_UNSIGNED_BYTE": "LoadASTCToRGBA8<8, 8>"
++      "GL_UNSIGNED_BYTE": "LoadASTCToRGBA8<8, 8, true>"
+     }
+   },
+   "GL_COMPRESSED_SRGB8_ALPHA8_ASTC_10x5_KHR": {
+@@ -1192,7 +1192,7 @@
+       "GL_UNSIGNED_BYTE": "LoadCompressedToNative<10, 5, 1, 16>"
+     },
+     "R8G8B8A8_UNORM_SRGB": {
+-      "GL_UNSIGNED_BYTE": "LoadASTCToRGBA8<10, 5>"
++      "GL_UNSIGNED_BYTE": "LoadASTCToRGBA8<10, 5, true>"
+     }
+   },
+   "GL_COMPRESSED_SRGB8_ALPHA8_ASTC_10x6_KHR": {
+@@ -1200,7 +1200,7 @@
+       "GL_UNSIGNED_BYTE": "LoadCompressedToNative<10, 6, 1, 16>"
+     },
+     "R8G8B8A8_UNORM_SRGB": {
+-      "GL_UNSIGNED_BYTE": "LoadASTCToRGBA8<10, 6>"
++      "GL_UNSIGNED_BYTE": "LoadASTCToRGBA8<10, 6, true>"
+     }
+   },
+   "GL_COMPRESSED_SRGB8_ALPHA8_ASTC_10x8_KHR": {
+@@ -1208,7 +1208,7 @@
+       "GL_UNSIGNED_BYTE": "LoadCompressedToNative<10, 8, 1, 16>"
+     },
+     "R8G8B8A8_UNORM_SRGB": {
+-      "GL_UNSIGNED_BYTE": "LoadASTCToRGBA8<10, 8>"
++      "GL_UNSIGNED_BYTE": "LoadASTCToRGBA8<10, 8, true>"
+     }
+   },
+   "GL_COMPRESSED_SRGB8_ALPHA8_ASTC_10x10_KHR": {
+@@ -1216,7 +1216,7 @@
+       "GL_UNSIGNED_BYTE": "LoadCompressedToNative<10, 10, 1, 16>"
+     },
+     "R8G8B8A8_UNORM_SRGB": {
+-      "GL_UNSIGNED_BYTE": "LoadASTCToRGBA8<10, 10>"
++      "GL_UNSIGNED_BYTE": "LoadASTCToRGBA8<10, 10, true>"
+     }
+   },
+   "GL_COMPRESSED_SRGB8_ALPHA8_ASTC_12x10_KHR": {
+@@ -1224,7 +1224,7 @@
+       "GL_UNSIGNED_BYTE": "LoadCompressedToNative<12, 10, 1, 16>"
+     },
+     "R8G8B8A8_UNORM_SRGB": {
+-      "GL_UNSIGNED_BYTE": "LoadASTCToRGBA8<12, 10>"
++      "GL_UNSIGNED_BYTE": "LoadASTCToRGBA8<12, 10, true>"
+     }
+   },
+   "GL_COMPRESSED_SRGB8_ALPHA8_ASTC_12x12_KHR": {
+@@ -1232,7 +1232,7 @@
+       "GL_UNSIGNED_BYTE": "LoadCompressedToNative<12, 12, 1, 16>"
+     },
+     "R8G8B8A8_UNORM_SRGB": {
+-      "GL_UNSIGNED_BYTE": "LoadASTCToRGBA8<12, 12>"
++      "GL_UNSIGNED_BYTE": "LoadASTCToRGBA8<12, 12, true>"
+     }
+   },
+   "GL_COMPRESSED_RGBA_ASTC_3x3x3_OES": {
+@@ -1400,5 +1400,4 @@
+       "GL_UNSIGNED_BYTE": "LoadPalettedToRGBA8<8, 5, 5, 1>"
+     }
+   }
+-
+ }
+--- a/src/libANGLE/renderer/load_functions_table_autogen.cpp
++++ b/src/libANGLE/renderer/load_functions_table_autogen.cpp
+@@ -498,8 +498,7 @@
+     }
+ }
+ 
+-LoadImageFunctionInfo COMPRESSED_RGB8_PUNCHTHROUGH_ALPHA1_ETC2_to_ETC2_R8G8B8A1_UNORM_BLOCK(
+-    GLenum type)
++LoadImageFunctionInfo COMPRESSED_RGB8_PUNCHTHROUGH_ALPHA1_ETC2_to_ETC2_R8G8B8A1_UNORM_BLOCK(GLenum type)
+ {
+     switch (type)
+     {
+@@ -523,8 +522,7 @@
+     }
+ }
+ 
+-LoadImageFunctionInfo
+-COMPRESSED_RGB8_PUNCHTHROUGH_ALPHA1_LOSSY_DECODE_ETC2_ANGLE_to_BC1_RGBA_UNORM_BLOCK(GLenum type)
++LoadImageFunctionInfo COMPRESSED_RGB8_PUNCHTHROUGH_ALPHA1_LOSSY_DECODE_ETC2_ANGLE_to_BC1_RGBA_UNORM_BLOCK(GLenum type)
+ {
+     switch (type)
+     {
+@@ -1201,7 +1199,7 @@
+     switch (type)
+     {
+         case GL_UNSIGNED_BYTE:
+-            return LoadImageFunctionInfo(LoadASTCToRGBA8<10, 10>, true);
++            return LoadImageFunctionInfo(LoadASTCToRGBA8<10, 10, true>, true);
+         default:
+             UNREACHABLE();
+             return LoadImageFunctionInfo(UnreachableLoadFunction, true);
+@@ -1225,7 +1223,7 @@
+     switch (type)
+     {
+         case GL_UNSIGNED_BYTE:
+-            return LoadImageFunctionInfo(LoadASTCToRGBA8<10, 5>, true);
++            return LoadImageFunctionInfo(LoadASTCToRGBA8<10, 5, true>, true);
+         default:
+             UNREACHABLE();
+             return LoadImageFunctionInfo(UnreachableLoadFunction, true);
+@@ -1249,7 +1247,7 @@
+     switch (type)
+     {
+         case GL_UNSIGNED_BYTE:
+-            return LoadImageFunctionInfo(LoadASTCToRGBA8<10, 6>, true);
++            return LoadImageFunctionInfo(LoadASTCToRGBA8<10, 6, true>, true);
+         default:
+             UNREACHABLE();
+             return LoadImageFunctionInfo(UnreachableLoadFunction, true);
+@@ -1273,7 +1271,7 @@
+     switch (type)
+     {
+         case GL_UNSIGNED_BYTE:
+-            return LoadImageFunctionInfo(LoadASTCToRGBA8<10, 8>, true);
++            return LoadImageFunctionInfo(LoadASTCToRGBA8<10, 8, true>, true);
+         default:
+             UNREACHABLE();
+             return LoadImageFunctionInfo(UnreachableLoadFunction, true);
+@@ -1297,7 +1295,7 @@
+     switch (type)
+     {
+         case GL_UNSIGNED_BYTE:
+-            return LoadImageFunctionInfo(LoadASTCToRGBA8<12, 10>, true);
++            return LoadImageFunctionInfo(LoadASTCToRGBA8<12, 10, true>, true);
+         default:
+             UNREACHABLE();
+             return LoadImageFunctionInfo(UnreachableLoadFunction, true);
+@@ -1321,7 +1319,7 @@
+     switch (type)
+     {
+         case GL_UNSIGNED_BYTE:
+-            return LoadImageFunctionInfo(LoadASTCToRGBA8<12, 12>, true);
++            return LoadImageFunctionInfo(LoadASTCToRGBA8<12, 12, true>, true);
+         default:
+             UNREACHABLE();
+             return LoadImageFunctionInfo(UnreachableLoadFunction, true);
+@@ -1369,7 +1367,7 @@
+     switch (type)
+     {
+         case GL_UNSIGNED_BYTE:
+-            return LoadImageFunctionInfo(LoadASTCToRGBA8<4, 4>, true);
++            return LoadImageFunctionInfo(LoadASTCToRGBA8<4, 4, true>, true);
+         default:
+             UNREACHABLE();
+             return LoadImageFunctionInfo(UnreachableLoadFunction, true);
+@@ -1417,7 +1415,7 @@
+     switch (type)
+     {
+         case GL_UNSIGNED_BYTE:
+-            return LoadImageFunctionInfo(LoadASTCToRGBA8<5, 4>, true);
++            return LoadImageFunctionInfo(LoadASTCToRGBA8<5, 4, true>, true);
+         default:
+             UNREACHABLE();
+             return LoadImageFunctionInfo(UnreachableLoadFunction, true);
+@@ -1453,7 +1451,7 @@
+     switch (type)
+     {
+         case GL_UNSIGNED_BYTE:
+-            return LoadImageFunctionInfo(LoadASTCToRGBA8<5, 5>, true);
++            return LoadImageFunctionInfo(LoadASTCToRGBA8<5, 5, true>, true);
+         default:
+             UNREACHABLE();
+             return LoadImageFunctionInfo(UnreachableLoadFunction, true);
+@@ -1501,7 +1499,7 @@
+     switch (type)
+     {
+         case GL_UNSIGNED_BYTE:
+-            return LoadImageFunctionInfo(LoadASTCToRGBA8<6, 5>, true);
++            return LoadImageFunctionInfo(LoadASTCToRGBA8<6, 5, true>, true);
+         default:
+             UNREACHABLE();
+             return LoadImageFunctionInfo(UnreachableLoadFunction, true);
+@@ -1537,7 +1535,7 @@
+     switch (type)
+     {
+         case GL_UNSIGNED_BYTE:
+-            return LoadImageFunctionInfo(LoadASTCToRGBA8<6, 6>, true);
++            return LoadImageFunctionInfo(LoadASTCToRGBA8<6, 6, true>, true);
+         default:
+             UNREACHABLE();
+             return LoadImageFunctionInfo(UnreachableLoadFunction, true);
+@@ -1585,7 +1583,7 @@
+     switch (type)
+     {
+         case GL_UNSIGNED_BYTE:
+-            return LoadImageFunctionInfo(LoadASTCToRGBA8<8, 5>, true);
++            return LoadImageFunctionInfo(LoadASTCToRGBA8<8, 5, true>, true);
+         default:
+             UNREACHABLE();
+             return LoadImageFunctionInfo(UnreachableLoadFunction, true);
+@@ -1609,7 +1607,7 @@
+     switch (type)
+     {
+         case GL_UNSIGNED_BYTE:
+-            return LoadImageFunctionInfo(LoadASTCToRGBA8<8, 6>, true);
++            return LoadImageFunctionInfo(LoadASTCToRGBA8<8, 6, true>, true);
+         default:
+             UNREACHABLE();
+             return LoadImageFunctionInfo(UnreachableLoadFunction, true);
+@@ -1633,7 +1631,7 @@
+     switch (type)
+     {
+         case GL_UNSIGNED_BYTE:
+-            return LoadImageFunctionInfo(LoadASTCToRGBA8<8, 8>, true);
++            return LoadImageFunctionInfo(LoadASTCToRGBA8<8, 8, true>, true);
+         default:
+             UNREACHABLE();
+             return LoadImageFunctionInfo(UnreachableLoadFunction, true);
+@@ -1700,8 +1698,7 @@
+     }
+ }
+ 
+-LoadImageFunctionInfo COMPRESSED_SRGB8_LOSSY_DECODE_ETC2_ANGLE_to_BC1_RGB_UNORM_SRGB_BLOCK(
+-    GLenum type)
++LoadImageFunctionInfo COMPRESSED_SRGB8_LOSSY_DECODE_ETC2_ANGLE_to_BC1_RGB_UNORM_SRGB_BLOCK(GLenum type)
+ {
+     switch (type)
+     {
+@@ -1713,8 +1710,7 @@
+     }
+ }
+ 
+-LoadImageFunctionInfo COMPRESSED_SRGB8_PUNCHTHROUGH_ALPHA1_ETC2_to_ETC2_R8G8B8A1_SRGB_BLOCK(
+-    GLenum type)
++LoadImageFunctionInfo COMPRESSED_SRGB8_PUNCHTHROUGH_ALPHA1_ETC2_to_ETC2_R8G8B8A1_SRGB_BLOCK(GLenum type)
+ {
+     switch (type)
+     {
+@@ -1738,9 +1734,7 @@
+     }
+ }
+ 
+-LoadImageFunctionInfo
+-COMPRESSED_SRGB8_PUNCHTHROUGH_ALPHA1_LOSSY_DECODE_ETC2_ANGLE_to_BC1_RGBA_UNORM_SRGB_BLOCK(
+-    GLenum type)
++LoadImageFunctionInfo COMPRESSED_SRGB8_PUNCHTHROUGH_ALPHA1_LOSSY_DECODE_ETC2_ANGLE_to_BC1_RGBA_UNORM_SRGB_BLOCK(GLenum type)
+ {
+     switch (type)
+     {

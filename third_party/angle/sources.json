@@ -1,0 +1,78 @@
+{
+  "recipe": {
+    "repository": "https://github.com/msys2/MINGW-packages",
+    "commit": "dd88a67c5372893318e3d223aa8bfb6f8fb3aff1",
+    "folder": "mingw-w64-angleproject",
+    "files": {
+      "PKGBUILD": "cf5217d103e8c5b59093a80ed1dc48d6426e6cb73cf3fd8fa48d9f7f21045b4f",
+      "001-add-mingw-toolchain.patch": "a981ca6e824ba55e82bfb23f8a32732690eb0cb1f84fb4f3c1818141bc413ccb",
+      "002-buildflags-fixes.patch": "7f81766f1b69783a6af5a3e65f866894bced411af4c9400d5789c33babb6e097",
+      "003-angle-src-fixes.patch": "36939a33c2f9fef5ecf07d5bd508057b2a49c1582e0e01891ad3e7d9e3ffb7fc",
+      "005-vulkan-memory-allocator-updates.patch": "08441bed59aadcd6eb7079662a970e5c26dae3c77d4958af0485ac959d08a2fe",
+      "006-spirv-updates.patch": "cb5358e80a45f54e15a69bbe12ecb07eae405b491451ee38aea01ce4579b492b",
+      "007-vulkan-loader-updates.patch": "b69a6ff976df8192b776673f94fd494ba4c62e798708f753d9f8390f4fc0341e"
+    }
+  },
+  "sources": {
+    "src": {
+      "url": "https://github.com/google/angle.git",
+      "commit": "890b5d8fa2988e3719e0d80421bf3e927db9cd5c"
+    },
+    "src/tools/clang": {
+      "url": "https://chromium.googlesource.com/chromium/src/tools/clang.git",
+      "commit": "d6072980974f9a4922d2eb27e4fd244ca3017031"
+    },
+    "src/third_party/zlib": {
+      "url": "https://chromium.googlesource.com/chromium/src/third_party/zlib.git",
+      "commit": "bf1e8de6cc305fdab82db1b65bed76b70bd96c8b"
+    },
+    "src/third_party/spirv-headers/src": {
+      "url": "https://github.com/KhronosGroup/SPIRV-Headers.git",
+      "commit": "c8ad050fcb29e42a2f57d9f59e97488f465c436d"
+    },
+    "src/build": {
+      "url": "https://chromium.googlesource.com/chromium/src/build.git",
+      "commit": "70c150bc0ae989d00c15ab1ed67464198e4890d0"
+    },
+    "src/third_party/vulkan-headers/src": {
+      "url": "https://github.com/KhronosGroup/Vulkan-Headers.git",
+      "commit": "7cff847503174e2049b08253ee5f30428866fea3"
+    },
+    "src/third_party/vulkan-loader/src": {
+      "url": "https://github.com/KhronosGroup/Vulkan-Loader.git",
+      "commit": "235d1d2cf617af03a2ecbf6e951287595138feda"
+    },
+    "src/third_party/spirv-tools/src": {
+      "url": "https://github.com/KhronosGroup/SPIRV-Tools.git",
+      "commit": "257a227fbadf8176ea386c7d8fb9b889cbf08640"
+    },
+    "src/third_party/vulkan_memory_allocator": {
+      "url": "https://chromium.googlesource.com/external/github.com/GPUOpen-LibrariesAndSDKs/VulkanMemoryAllocator.git",
+      "commit": "56300b29fbfcc693ee6609ddad3fdd5b7a449a21"
+    },
+    "src/third_party/vulkan-tools/src": {
+      "url": "https://chromium.googlesource.com/external/github.com/KhronosGroup/Vulkan-Tools.git",
+      "commit": "5968d14a1ef8a7eeacf342e1542099e1aff20f70"
+    },
+    "src/third_party/rapidjson/src": {
+      "url": "https://github.com/Tencent/rapidjson.git",
+      "commit": "781a4e667d84aeedbeb8184b7b62425ea66ec59f"
+    },
+    "src/third_party/astc-encoder/src": {
+      "url": "https://chromium.googlesource.com/external/github.com/ARM-software/astc-encoder",
+      "commit": "2319d9c4d4af53a7fc7c52985e264ce6e8a02a9b"
+    },
+    "src/third_party/jsoncpp": {
+      "url": "https://chromium.googlesource.com/chromium/src/third_party/jsoncpp",
+      "commit": "f62d44704b4da6014aa231cfc116e7fd29617d2a"
+    },
+    "tools/gn-src": {
+      "url": "https://gn.googlesource.com/gn",
+      "commit": "150a9d6ba0aa7f407aa4feeabc5f03ce9aa7e04b"
+    },
+    "src/third_party/jsoncpp/source": {
+      "url": "https://github.com/open-source-parsers/jsoncpp.git",
+      "commit": "42e892d96e47b1f6e29844cc705e148ec4856448"
+    }
+  }
+}

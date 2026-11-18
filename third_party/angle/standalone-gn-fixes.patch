@@ -1,0 +1,1752 @@
+diff --git a/BUILD.gn b/BUILD.gn
+index 7426c80..0232031 100644
+--- a/BUILD.gn
++++ b/BUILD.gn
+@@ -1,69 +1,73 @@
+-# Copyright 2014 The Chromium Authors. All rights reserved.
+-# Use of this source code is governed by a BSD-style license that can be
+-# found in the LICENSE file.
+-
+-import("//testing/libfuzzer/fuzzer_test.gni")
+-
+-declare_args() {
+-  # Allow individual projects to remove the warning suppression
+-  # by overriding this in their .gn file or through custom args.gn
+-  # See crbug.com/983223
+-  jsoncpp_no_deprecated_declarations = true
+-}
+-
+-config("jsoncpp_config") {
+-  include_dirs = [ "source/include" ]
+-
+-  # TODO(crbug.com/983223): Update JsonCpp BUILD.gn to remove deprecated
+-  # declaration flag.
+-  # This temporary flag allowing clients to update to the new version, and then
+-  # update to the new StreamWriter and CharReader classes.
+-  if (jsoncpp_no_deprecated_declarations &&
+-      (!is_win || (is_clang && !is_ios))) {
+-    cflags_cc = [ "-Wno-deprecated-declarations" ]
+-  }
+-}
+-
+-source_set("jsoncpp") {
+-  sources = [
+-    "source/include/json/allocator.h",
+-    "source/include/json/assertions.h",
+-    "source/include/json/config.h",
+-    "source/include/json/forwards.h",
+-    "source/include/json/json.h",
+-    "source/include/json/json_features.h",
+-    "source/include/json/reader.h",
+-    "source/include/json/value.h",
+-    "source/include/json/version.h",
+-    "source/include/json/writer.h",
+-    "source/src/lib_json/json_reader.cpp",
+-    "source/src/lib_json/json_tool.h",
+-    "source/src/lib_json/json_value.cpp",
+-    "source/src/lib_json/json_writer.cpp",
+-  ]
+-
+-  public_configs = [ ":jsoncpp_config" ]
+-
+-  defines = [
+-    "JSON_USE_EXCEPTION=0",
+-    "JSON_USE_NULLREF=0",
+-  ]
+-
+-  include_dirs = [ "source/src/lib_json" ]
+-
+-  if (!is_win || is_clang) {
+-    cflags_cc = [ "-Wno-implicit-fallthrough" ]
+-  }
+-}
+-
+-if (build_with_chromium) {
+-  fuzzer_test("jsoncpp_fuzzer") {
+-    sources = [ "fuzzers/json_fuzzer.cc" ]
+-
+-    deps = [ ":jsoncpp" ]
+-
+-    include_dirs = [ "generated" ]
+-
+-    dict = "//testing/libfuzzer/fuzzers/dicts/json.dict"
+-  }
+-}
++import("//build_overrides/build.gni")
++# Bunker standalone: fuzzer target exists only in Chromium builds.
++# Copyright 2014 The Chromium Authors. All rights reserved.
++# Use of this source code is governed by a BSD-style license that can be
++# found in the LICENSE file.
++
++if (build_with_chromium) {
++  import("//testing/libfuzzer/fuzzer_test.gni")
++}
++
++declare_args() {
++  # Allow individual projects to remove the warning suppression
++  # by overriding this in their .gn file or through custom args.gn
++  # See crbug.com/983223
++  jsoncpp_no_deprecated_declarations = true
++}
++
++config("jsoncpp_config") {
++  include_dirs = [ "source/include" ]
++
++  # TODO(crbug.com/983223): Update JsonCpp BUILD.gn to remove deprecated
++  # declaration flag.
++  # This temporary flag allowing clients to update to the new version, and then
++  # update to the new StreamWriter and CharReader classes.
++  if (jsoncpp_no_deprecated_declarations &&
++      (!is_win || (is_clang && !is_ios))) {
++    cflags_cc = [ "-Wno-deprecated-declarations" ]
++  }
++}
++
++source_set("jsoncpp") {
++  sources = [
++    "source/include/json/allocator.h",
++    "source/include/json/assertions.h",
++    "source/include/json/config.h",
++    "source/include/json/forwards.h",
++    "source/include/json/json.h",
++    "source/include/json/json_features.h",
++    "source/include/json/reader.h",
++    "source/include/json/value.h",
++    "source/include/json/version.h",
++    "source/include/json/writer.h",
++    "source/src/lib_json/json_reader.cpp",
++    "source/src/lib_json/json_tool.h",
++    "source/src/lib_json/json_value.cpp",
++    "source/src/lib_json/json_writer.cpp",
++  ]
++
++  public_configs = [ ":jsoncpp_config" ]
++
++  defines = [
++    "JSON_USE_EXCEPTION=0",
++    "JSON_USE_NULLREF=0",
++  ]
++
++  include_dirs = [ "source/src/lib_json" ]
++
++  if (!is_win || is_clang) {
++    cflags_cc = [ "-Wno-implicit-fallthrough" ]
++  }
++}
++
++if (build_with_chromium) {
++  fuzzer_test("jsoncpp_fuzzer") {
++    sources = [ "fuzzers/json_fuzzer.cc" ]
++
++    deps = [ ":jsoncpp" ]
++
++    include_dirs = [ "generated" ]
++
++    dict = "//testing/libfuzzer/fuzzers/dicts/json.dict"
++  }
++}
+diff --git a/BUILD.gn b/BUILD.gn
+index 3d07354..0caf639 100644
+--- a/BUILD.gn
++++ b/BUILD.gn
+@@ -1,566 +1,566 @@
+-# Copyright 2013 The Chromium Authors
+-# Use of this source code is governed by a BSD-style license that can be
+-# found in the LICENSE file.
+-
+-import("//build/config/compiler/compiler.gni")
+-import("//build/config/dcheck_always_on.gni")
+-
+-declare_args() {
+-  # Expose zlib's symbols, used by Node.js to provide zlib APIs for its native
+-  # modules.
+-  zlib_symbols_visible = false
+-}
+-
+-if (build_with_chromium) {
+-  import("//testing/test.gni")
+-}
+-
+-if (current_cpu == "arm" || current_cpu == "arm64") {
+-  import("//build/config/arm.gni")
+-}
+-
+-config("zlib_config") {
+-  include_dirs = [ "." ]
+-
+-  if (zlib_symbols_visible) {
+-    defines = [ "ZLIB_DLL" ]
+-  }
+-}
+-
+-config("zlib_internal_config") {
+-  defines = [ "ZLIB_IMPLEMENTATION" ]
+-
+-  if (!is_debug) {
+-    # Build code using -O3, see: crbug.com/1084371.
+-    configs = [ "//build/config/compiler:optimize_speed" ]
+-  }
+-  if (is_debug || dcheck_always_on || use_fuzzing_engine) {
+-    # Enable zlib's asserts in debug and fuzzer builds.
+-    defines += [ "ZLIB_DEBUG" ]
+-  }
+-
+-  if (is_win && !is_clang) {
+-    # V8 supports building with msvc, these silence some warnings that
+-    # causes compilation to fail (https://crbug.com/1255096).
+-    cflags = [
+-      "/wd4244",
+-      "/wd4100",
+-      "/wd4702",
+-      "/wd4127",
+-    ]
+-  }
+-}
+-
+-source_set("zlib_common_headers") {
+-  visibility = [ ":*" ]
+-
+-  sources = [
+-    "chromeconf.h",
+-    "deflate.h",
+-    "inffast.h",
+-    "inffixed.h",
+-    "inflate.h",
+-    "inftrees.h",
+-    "zconf.h",
+-    "zlib.h",
+-    "zutil.h",
+-  ]
+-}
+-
+-use_arm_neon_optimizations = false
+-if ((current_cpu == "arm" || current_cpu == "arm64") &&
+-    !(is_win && !is_clang)) {
+-  # TODO(ritownsend@google.com): Optimizations temporarily disabled for
+-  # Windows on Arm MSVC builds, see http://crbug.com/v8/10012.
+-  if (arm_use_neon) {
+-    use_arm_neon_optimizations = true
+-  }
+-}
+-
+-use_x86_x64_optimizations =
+-    (current_cpu == "x86" || current_cpu == "x64") && !is_ios
+-
+-config("zlib_adler32_simd_config") {
+-  if (use_x86_x64_optimizations) {
+-    defines = [ "ADLER32_SIMD_SSSE3" ]
+-    if (is_win) {
+-      defines += [ "X86_WINDOWS" ]
+-    } else {
+-      defines += [ "X86_NOT_WINDOWS" ]
+-    }
+-  }
+-
+-  if (use_arm_neon_optimizations) {
+-    defines = [ "ADLER32_SIMD_NEON" ]
+-  }
+-}
+-
+-source_set("zlib_adler32_simd") {
+-  visibility = [ ":*" ]
+-
+-  if (use_x86_x64_optimizations) {
+-    sources = [
+-      "adler32_simd.c",
+-      "adler32_simd.h",
+-    ]
+-
+-    if (!is_win || is_clang) {
+-      cflags = [ "-mssse3" ]
+-    }
+-  }
+-
+-  if (use_arm_neon_optimizations) {
+-    sources = [
+-      "adler32_simd.c",
+-      "adler32_simd.h",
+-    ]
+-  }
+-
+-  configs += [ ":zlib_internal_config" ]
+-
+-  public_configs = [ ":zlib_adler32_simd_config" ]
+-
+-  public_deps = [ ":zlib_common_headers" ]
+-}
+-
+-if (use_arm_neon_optimizations) {
+-  config("zlib_arm_crc32_config") {
+-    defines = [ "CRC32_ARMV8_CRC32" ]
+-    if (is_android) {
+-      defines += [ "ARMV8_OS_ANDROID" ]
+-    } else if (is_linux || is_chromeos) {
+-      defines += [ "ARMV8_OS_LINUX" ]
+-    } else if (is_mac) {
+-      defines += [ "ARMV8_OS_MACOS" ]
+-    } else if (is_ios) {
+-      defines += [ "ARMV8_OS_IOS" ]
+-    } else if (is_fuchsia) {
+-      defines += [ "ARMV8_OS_FUCHSIA" ]
+-    } else if (is_win) {
+-      defines += [ "ARMV8_OS_WINDOWS" ]
+-    } else {
+-      assert(false, "Unsupported ARM OS")
+-    }
+-  }
+-
+-  source_set("zlib_arm_crc32") {
+-    visibility = [ ":*" ]
+-
+-    include_dirs = [ "." ]
+-
+-    if (!is_win && !is_clang) {
+-      assert(!use_thin_lto,
+-             "ThinLTO fails mixing different module-level targets")
+-      if (current_cpu == "arm64") {
+-        cflags_c = [ "-march=armv8-a+aes+crc" ]
+-      } else if (current_cpu == "arm") {
+-        cflags_c = [ "-march=armv8-a+crc" ]
+-      } else {
+-        assert(false, "Unexpected cpu: $current_cpu")
+-      }
+-    }
+-
+-    sources = [
+-      "crc32_simd.c",
+-      "crc32_simd.h",
+-    ]
+-
+-    configs += [ ":zlib_internal_config" ]
+-
+-    public_configs = [ ":zlib_arm_crc32_config" ]
+-
+-    public_deps = [ ":zlib_common_headers" ]
+-  }
+-}
+-
+-config("zlib_data_chunk_simd_config") {
+-  if (use_x86_x64_optimizations) {
+-    defines = [ "INFLATE_CHUNK_SIMD_SSE2" ]
+-
+-    if (current_cpu == "x64") {
+-      defines += [
+-        "INFLATE_CHUNK_READ_64LE",
+-        "DEFLATE_CHUNK_WRITE_64LE",
+-      ]
+-    }
+-  }
+-
+-  if (use_arm_neon_optimizations) {
+-    defines = [ "INFLATE_CHUNK_SIMD_NEON" ]
+-
+-    if (current_cpu == "arm64") {
+-      defines += [
+-        "INFLATE_CHUNK_READ_64LE",
+-        "DEFLATE_CHUNK_WRITE_64LE",
+-      ]
+-    }
+-  }
+-}
+-
+-source_set("zlib_data_chunk_simd") {
+-  visibility = [ ":*" ]
+-
+-  if (use_x86_x64_optimizations || use_arm_neon_optimizations) {
+-    include_dirs = [ "." ]
+-
+-    sources = [
+-      "contrib/optimizations/chunkcopy.h",
+-      "contrib/optimizations/inffast_chunk.c",
+-      "contrib/optimizations/inffast_chunk.h",
+-      "contrib/optimizations/inflate.c",
+-    ]
+-  }
+-
+-  configs += [ ":zlib_internal_config" ]
+-
+-  # Needed for MSVC, which is still supported by V8 and PDFium. zlib uses K&R C
+-  # style function declarations, which triggers warning C4131.
+-  configs -= [ "//build/config/compiler:chromium_code" ]
+-  configs += [ "//build/config/compiler:no_chromium_code" ]
+-  configs += [ ":zlib_warnings" ]
+-
+-  public_configs = [ ":zlib_data_chunk_simd_config" ]
+-
+-  public_deps = [ ":zlib_common_headers" ]
+-}
+-
+-config("zlib_crc32_simd_config") {
+-  if (use_x86_x64_optimizations) {
+-    defines = [ "CRC32_SIMD_SSE42_PCLMUL" ]
+-  }
+-}
+-
+-source_set("zlib_crc32_simd") {
+-  visibility = [ ":*" ]
+-
+-  if (use_x86_x64_optimizations) {
+-    sources = [
+-      "crc32_simd.c",
+-      "crc32_simd.h",
+-      "crc_folding.c",
+-    ]
+-
+-    if (!is_win || is_clang) {
+-      cflags = [
+-        "-msse4.2",
+-        "-mpclmul",
+-      ]
+-    }
+-  }
+-
+-  configs += [ ":zlib_internal_config" ]
+-
+-  public_configs = [ ":zlib_crc32_simd_config" ]
+-
+-  public_deps = [ ":zlib_common_headers" ]
+-}
+-
+-config("zlib_slide_hash_simd_config") {
+-  if (use_x86_x64_optimizations) {
+-    defines = [ "DEFLATE_SLIDE_HASH_SSE2" ]
+-  }
+-
+-  if (use_arm_neon_optimizations) {
+-    defines = [ "DEFLATE_SLIDE_HASH_NEON" ]
+-  }
+-}
+-
+-source_set("zlib_slide_hash_simd") {
+-  visibility = [ ":*" ]
+-
+-  if (use_x86_x64_optimizations) {
+-    sources = [ "slide_hash_simd.h" ]
+-  }
+-
+-  if (use_arm_neon_optimizations) {
+-    sources = [ "slide_hash_simd.h" ]
+-  }
+-
+-  configs += [ ":zlib_internal_config" ]
+-
+-  public_configs = [ ":zlib_slide_hash_simd_config" ]
+-
+-  public_deps = [ ":zlib_common_headers" ]
+-}
+-
+-config("zlib_warnings") {
+-  if (is_clang) {
+-    cflags = [
+-      "-Wno-incompatible-pointer-types",
+-      "-Wunused-variable",
+-    ]
+-  }
+-}
+-
+-component("zlib") {
+-  if (!is_win) {
+-    # Don't stomp on "libzlib" on other platforms.
+-    output_name = "chrome_zlib"
+-  }
+-
+-  sources = [
+-    "adler32.c",
+-    "chromeconf.h",
+-    "compress.c",
+-    "contrib/optimizations/insert_string.h",
+-    "cpu_features.c",
+-    "cpu_features.h",
+-    "crc32.c",
+-    "crc32.h",
+-    "deflate.c",
+-    "deflate.h",
+-    "gzclose.c",
+-    "gzguts.h",
+-    "gzlib.c",
+-    "gzread.c",
+-    "gzwrite.c",
+-    "infback.c",
+-    "inffast.c",
+-    "inffast.h",
+-    "inffixed.h",
+-    "inflate.h",
+-    "inftrees.c",
+-    "inftrees.h",
+-    "trees.c",
+-    "trees.h",
+-    "uncompr.c",
+-    "zconf.h",
+-    "zlib.h",
+-    "zutil.c",
+-    "zutil.h",
+-  ]
+-
+-  defines = []
+-  deps = []
+-
+-  if (!use_x86_x64_optimizations && !use_arm_neon_optimizations) {
+-    # Apparently android_cronet bot builds with NEON disabled and
+-    # we also should disable optimizations for iOS@x86 (a.k.a. simulator).
+-    defines += [ "CPU_NO_SIMD" ]
+-  }
+-
+-  if (use_x86_x64_optimizations || use_arm_neon_optimizations) {
+-    deps += [
+-      ":zlib_adler32_simd",
+-      ":zlib_data_chunk_simd",
+-      ":zlib_slide_hash_simd",
+-    ]
+-
+-    if (use_x86_x64_optimizations) {
+-      deps += [ ":zlib_crc32_simd" ]
+-    } else if (use_arm_neon_optimizations) {
+-      deps += [ ":zlib_arm_crc32" ]
+-    }
+-  } else {
+-    sources += [ "inflate.c" ]
+-  }
+-
+-  if (is_android) {
+-    import("//build/config/android/config.gni")
+-    if (defined(android_ndk_root) && android_ndk_root != "") {
+-      deps += [ "//third_party/cpu_features:ndk_compat" ]
+-    } else {
+-      assert(false, "CPU detection requires the Android NDK")
+-    }
+-  }
+-
+-  configs -= [ "//build/config/compiler:chromium_code" ]
+-  configs += [ "//build/config/compiler:no_chromium_code" ]
+-
+-  if (zlib_symbols_visible) {
+-    configs -= [ "//build/config/gcc:symbol_visibility_hidden" ]
+-    configs += [ "//build/config/gcc:symbol_visibility_default" ]
+-  }
+-
+-  public_configs = [ ":zlib_config" ]
+-
+-  configs += [
+-    ":zlib_internal_config",
+-
+-    # Must be after no_chromium_code for warning flags to be ordered correctly.
+-    ":zlib_warnings",
+-  ]
+-
+-  allow_circular_includes_from = deps
+-}
+-
+-config("minizip_warnings") {
+-  visibility = [ ":*" ]
+-
+-  if (is_clang) {
+-    cflags = [
+-      # zlib uses `if ((a == b))` for some reason.
+-      "-Wno-parentheses-equality",
+-    ]
+-  }
+-}
+-
+-static_library("minizip") {
+-  include_dirs = [
+-    ".",
+-    "//third_party/zlib",
+-  ]
+-
+-  sources = [
+-    "contrib/minizip/ioapi.c",
+-    "contrib/minizip/ioapi.h",
+-    "contrib/minizip/iowin32.c",
+-    "contrib/minizip/iowin32.h",
+-    "contrib/minizip/unzip.c",
+-    "contrib/minizip/unzip.h",
+-    "contrib/minizip/zip.c",
+-    "contrib/minizip/zip.h",
+-  ]
+-
+-  if (!is_win) {
+-    sources -= [
+-      "contrib/minizip/iowin32.c",
+-      "contrib/minizip/iowin32.h",
+-    ]
+-  }
+-
+-  if (is_apple || is_android) {
+-    # Mac, Android and the BSDs don't have fopen64, ftello64, or fseeko64. We
+-    # use fopen, ftell, and fseek instead on these systems.
+-    defines = [ "USE_FILE32API" ]
+-  }
+-
+-  deps = [ ":zlib" ]
+-
+-  configs -= [ "//build/config/compiler:chromium_code" ]
+-  configs += [ "//build/config/compiler:no_chromium_code" ]
+-
+-  public_configs = [ ":zlib_config" ]
+-
+-  configs += [
+-    # Must be after no_chromium_code for warning flags to be ordered correctly.
+-    ":minizip_warnings",
+-  ]
+-}
+-
+-executable("zlib_bench") {
+-  include_dirs = [ "." ]
+-
+-  sources = [ "contrib/bench/zlib_bench.cc" ]
+-  if (!is_debug) {
+-    configs -= [ "//build/config/compiler:default_optimization" ]
+-    configs += [ "//build/config/compiler:optimize_speed" ]
+-  }
+-
+-  deps = [ ":zlib" ]
+-
+-  configs -= [ "//build/config/compiler:chromium_code" ]
+-  configs += [ "//build/config/compiler:no_chromium_code" ]
+-}
+-
+-executable("minigzip") {
+-  include_dirs = [ "." ]
+-
+-  sources = [ "test/minigzip.c" ]
+-  if (!is_debug) {
+-    configs -= [ "//build/config/compiler:default_optimization" ]
+-    configs += [ "//build/config/compiler:optimize_speed" ]
+-  }
+-
+-  deps = [ ":zlib" ]
+-
+-  configs -= [ "//build/config/compiler:chromium_code" ]
+-  configs += [ "//build/config/compiler:no_chromium_code" ]
+-}
+-
+-executable("zpipe") {
+-  include_dirs = [ "." ]
+-
+-  sources = [ "examples/zpipe.c" ]
+-  if (!is_debug) {
+-    configs -= [ "//build/config/compiler:default_optimization" ]
+-    configs += [ "//build/config/compiler:optimize_speed" ]
+-  }
+-
+-  deps = [ ":zlib" ]
+-
+-  configs -= [ "//build/config/compiler:chromium_code" ]
+-  configs += [ "//build/config/compiler:no_chromium_code" ]
+-}
+-
+-if (!is_win || target_os != "winuwp") {
+-  executable("minizip_bin") {
+-    include_dirs = [ "." ]
+-
+-    sources = [ "contrib/minizip/minizip.c" ]
+-
+-    if (is_clang) {
+-      cflags = [ "-Wno-incompatible-pointer-types-discards-qualifiers" ]
+-    }
+-
+-    if (!is_debug) {
+-      configs -= [ "//build/config/compiler:default_optimization" ]
+-      configs += [ "//build/config/compiler:optimize_speed" ]
+-    }
+-
+-    deps = [ ":minizip" ]
+-
+-    configs -= [ "//build/config/compiler:chromium_code" ]
+-    configs += [ "//build/config/compiler:no_chromium_code" ]
+-  }
+-
+-  executable("miniunz_bin") {
+-    include_dirs = [ "." ]
+-
+-    sources = [ "contrib/minizip/miniunz.c" ]
+-
+-    if (is_clang) {
+-      cflags = [ "-Wno-incompatible-pointer-types-discards-qualifiers" ]
+-    }
+-
+-    if (!is_debug) {
+-      configs -= [ "//build/config/compiler:default_optimization" ]
+-      configs += [ "//build/config/compiler:optimize_speed" ]
+-    }
+-
+-    deps = [ ":minizip" ]
+-
+-    configs -= [ "//build/config/compiler:chromium_code" ]
+-    configs += [ "//build/config/compiler:no_chromium_code" ]
+-  }
+-}
+-
+-if (build_with_chromium) {
+-  test("zlib_unittests") {
+-    testonly = true
+-
+-    sources = [
+-      "contrib/tests/infcover.cc",
+-      "contrib/tests/infcover.h",
+-      "contrib/tests/run_all_unittests.cc",
+-      "contrib/tests/utils_unittest.cc",
+-      "google/compression_utils_unittest.cc",
+-      "google/zip_reader_unittest.cc",
+-      "google/zip_unittest.cc",
+-    ]
+-
+-    data = [ "google/test/data/" ]
+-
+-    if (is_ios) {
+-      bundle_deps = [ "google:zlib_pak_bundle_data" ]
+-    }
+-
+-    deps = [
+-      ":minizip",
+-      ":zlib",
+-      "google:compression_utils",
+-      "google:zip",
+-      "//base/test:test_support",
+-      "//testing/gtest",
+-    ]
+-
+-    configs -= [ "//build/config/compiler:chromium_code" ]
+-    configs += [ "//build/config/compiler:no_chromium_code" ]
+-
+-    include_dirs = [
+-      "//third_party/googletest/src/googletest/include/gtest",
+-      ".",
+-      "google",
+-    ]
+-  }
+-}
++# Copyright 2013 The Chromium Authors
++# Use of this source code is governed by a BSD-style license that can be
++# found in the LICENSE file.
++
++import("//build/config/compiler/compiler.gni")
++import("//build/config/dcheck_always_on.gni")
++
++declare_args() {
++  # Expose zlib's symbols, used by Node.js to provide zlib APIs for its native
++  # modules.
++  zlib_symbols_visible = false
++}
++
++if (build_with_chromium) {
++  import("//testing/test.gni")
++}
++
++if (current_cpu == "arm" || current_cpu == "arm64") {
++  import("//build/config/arm.gni")
++}
++
++config("zlib_config") {
++  include_dirs = [ "." ]
++
++  if (zlib_symbols_visible) {
++    defines = [ "ZLIB_DLL" ]
++  }
++}
++
++config("zlib_internal_config") {
++  defines = [ "ZLIB_IMPLEMENTATION" ]
++
++  if (!is_debug) {
++    # Build code using -O3, see: crbug.com/1084371.
++    configs = [ "//build/config/compiler:optimize_speed" ]
++  }
++  if (is_debug || dcheck_always_on || use_fuzzing_engine) {
++    # Enable zlib's asserts in debug and fuzzer builds.
++    defines += [ "ZLIB_DEBUG" ]
++  }
++
++  if (is_msvc && !is_clang) {
++    # V8 supports building with msvc, these silence some warnings that
++    # causes compilation to fail (https://crbug.com/1255096).
++    cflags = [
++      "/wd4244",
++      "/wd4100",
++      "/wd4702",
++      "/wd4127",
++    ]
++  }
++}
++
++source_set("zlib_common_headers") {
++  visibility = [ ":*" ]
++
++  sources = [
++    "chromeconf.h",
++    "deflate.h",
++    "inffast.h",
++    "inffixed.h",
++    "inflate.h",
++    "inftrees.h",
++    "zconf.h",
++    "zlib.h",
++    "zutil.h",
++  ]
++}
++
++use_arm_neon_optimizations = false
++if ((current_cpu == "arm" || current_cpu == "arm64") &&
++    !(is_win && !is_clang)) {
++  # TODO(ritownsend@google.com): Optimizations temporarily disabled for
++  # Windows on Arm MSVC builds, see http://crbug.com/v8/10012.
++  if (arm_use_neon) {
++    use_arm_neon_optimizations = true
++  }
++}
++
++use_x86_x64_optimizations =
++    (current_cpu == "x86" || current_cpu == "x64") && !is_ios
++
++config("zlib_adler32_simd_config") {
++  if (use_x86_x64_optimizations) {
++    defines = [ "ADLER32_SIMD_SSSE3" ]
++    if (is_win) {
++      defines += [ "X86_WINDOWS" ]
++    } else {
++      defines += [ "X86_NOT_WINDOWS" ]
++    }
++  }
++
++  if (use_arm_neon_optimizations) {
++    defines = [ "ADLER32_SIMD_NEON" ]
++  }
++}
++
++source_set("zlib_adler32_simd") {
++  visibility = [ ":*" ]
++
++  if (use_x86_x64_optimizations) {
++    sources = [
++      "adler32_simd.c",
++      "adler32_simd.h",
++    ]
++
++    if (!is_msvc || is_clang) {
++      cflags = [ "-mssse3" ]
++    }
++  }
++
++  if (use_arm_neon_optimizations) {
++    sources = [
++      "adler32_simd.c",
++      "adler32_simd.h",
++    ]
++  }
++
++  configs += [ ":zlib_internal_config" ]
++
++  public_configs = [ ":zlib_adler32_simd_config" ]
++
++  public_deps = [ ":zlib_common_headers" ]
++}
++
++if (use_arm_neon_optimizations) {
++  config("zlib_arm_crc32_config") {
++    defines = [ "CRC32_ARMV8_CRC32" ]
++    if (is_android) {
++      defines += [ "ARMV8_OS_ANDROID" ]
++    } else if (is_linux || is_chromeos) {
++      defines += [ "ARMV8_OS_LINUX" ]
++    } else if (is_mac) {
++      defines += [ "ARMV8_OS_MACOS" ]
++    } else if (is_ios) {
++      defines += [ "ARMV8_OS_IOS" ]
++    } else if (is_fuchsia) {
++      defines += [ "ARMV8_OS_FUCHSIA" ]
++    } else if (is_win) {
++      defines += [ "ARMV8_OS_WINDOWS" ]
++    } else {
++      assert(false, "Unsupported ARM OS")
++    }
++  }
++
++  source_set("zlib_arm_crc32") {
++    visibility = [ ":*" ]
++
++    include_dirs = [ "." ]
++
++    if (!is_win && !is_clang) {
++      assert(!use_thin_lto,
++             "ThinLTO fails mixing different module-level targets")
++      if (current_cpu == "arm64") {
++        cflags_c = [ "-march=armv8-a+aes+crc" ]
++      } else if (current_cpu == "arm") {
++        cflags_c = [ "-march=armv8-a+crc" ]
++      } else {
++        assert(false, "Unexpected cpu: $current_cpu")
++      }
++    }
++
++    sources = [
++      "crc32_simd.c",
++      "crc32_simd.h",
++    ]
++
++    configs += [ ":zlib_internal_config" ]
++
++    public_configs = [ ":zlib_arm_crc32_config" ]
++
++    public_deps = [ ":zlib_common_headers" ]
++  }
++}
++
++config("zlib_data_chunk_simd_config") {
++  if (use_x86_x64_optimizations) {
++    defines = [ "INFLATE_CHUNK_SIMD_SSE2" ]
++
++    if (current_cpu == "x64") {
++      defines += [
++        "INFLATE_CHUNK_READ_64LE",
++        "DEFLATE_CHUNK_WRITE_64LE",
++      ]
++    }
++  }
++
++  if (use_arm_neon_optimizations) {
++    defines = [ "INFLATE_CHUNK_SIMD_NEON" ]
++
++    if (current_cpu == "arm64") {
++      defines += [
++        "INFLATE_CHUNK_READ_64LE",
++        "DEFLATE_CHUNK_WRITE_64LE",
++      ]
++    }
++  }
++}
++
++source_set("zlib_data_chunk_simd") {
++  visibility = [ ":*" ]
++
++  if (use_x86_x64_optimizations || use_arm_neon_optimizations) {
++    include_dirs = [ "." ]
++
++    sources = [
++      "contrib/optimizations/chunkcopy.h",
++      "contrib/optimizations/inffast_chunk.c",
++      "contrib/optimizations/inffast_chunk.h",
++      "contrib/optimizations/inflate.c",
++    ]
++  }
++
++  configs += [ ":zlib_internal_config" ]
++
++  # Needed for MSVC, which is still supported by V8 and PDFium. zlib uses K&R C
++  # style function declarations, which triggers warning C4131.
++  configs -= [ "//build/config/compiler:chromium_code" ]
++  configs += [ "//build/config/compiler:no_chromium_code" ]
++  configs += [ ":zlib_warnings" ]
++
++  public_configs = [ ":zlib_data_chunk_simd_config" ]
++
++  public_deps = [ ":zlib_common_headers" ]
++}
++
++config("zlib_crc32_simd_config") {
++  if (use_x86_x64_optimizations) {
++    defines = [ "CRC32_SIMD_SSE42_PCLMUL" ]
++  }
++}
++
++source_set("zlib_crc32_simd") {
++  visibility = [ ":*" ]
++
++  if (use_x86_x64_optimizations) {
++    sources = [
++      "crc32_simd.c",
++      "crc32_simd.h",
++      "crc_folding.c",
++    ]
++
++    if (!is_msvc || is_clang) {
++      cflags = [
++        "-msse4.2",
++        "-mpclmul",
++      ]
++    }
++  }
++
++  configs += [ ":zlib_internal_config" ]
++
++  public_configs = [ ":zlib_crc32_simd_config" ]
++
++  public_deps = [ ":zlib_common_headers" ]
++}
++
++config("zlib_slide_hash_simd_config") {
++  if (use_x86_x64_optimizations) {
++    defines = [ "DEFLATE_SLIDE_HASH_SSE2" ]
++  }
++
++  if (use_arm_neon_optimizations) {
++    defines = [ "DEFLATE_SLIDE_HASH_NEON" ]
++  }
++}
++
++source_set("zlib_slide_hash_simd") {
++  visibility = [ ":*" ]
++
++  if (use_x86_x64_optimizations) {
++    sources = [ "slide_hash_simd.h" ]
++  }
++
++  if (use_arm_neon_optimizations) {
++    sources = [ "slide_hash_simd.h" ]
++  }
++
++  configs += [ ":zlib_internal_config" ]
++
++  public_configs = [ ":zlib_slide_hash_simd_config" ]
++
++  public_deps = [ ":zlib_common_headers" ]
++}
++
++config("zlib_warnings") {
++  if (is_clang) {
++    cflags = [
++      "-Wno-incompatible-pointer-types",
++      "-Wunused-variable",
++    ]
++  }
++}
++
++component("zlib") {
++  if (!is_win) {
++    # Don't stomp on "libzlib" on other platforms.
++    output_name = "chrome_zlib"
++  }
++
++  sources = [
++    "adler32.c",
++    "chromeconf.h",
++    "compress.c",
++    "contrib/optimizations/insert_string.h",
++    "cpu_features.c",
++    "cpu_features.h",
++    "crc32.c",
++    "crc32.h",
++    "deflate.c",
++    "deflate.h",
++    "gzclose.c",
++    "gzguts.h",
++    "gzlib.c",
++    "gzread.c",
++    "gzwrite.c",
++    "infback.c",
++    "inffast.c",
++    "inffast.h",
++    "inffixed.h",
++    "inflate.h",
++    "inftrees.c",
++    "inftrees.h",
++    "trees.c",
++    "trees.h",
++    "uncompr.c",
++    "zconf.h",
++    "zlib.h",
++    "zutil.c",
++    "zutil.h",
++  ]
++
++  defines = []
++  deps = []
++
++  if (!use_x86_x64_optimizations && !use_arm_neon_optimizations) {
++    # Apparently android_cronet bot builds with NEON disabled and
++    # we also should disable optimizations for iOS@x86 (a.k.a. simulator).
++    defines += [ "CPU_NO_SIMD" ]
++  }
++
++  if (use_x86_x64_optimizations || use_arm_neon_optimizations) {
++    deps += [
++      ":zlib_adler32_simd",
++      ":zlib_data_chunk_simd",
++      ":zlib_slide_hash_simd",
++    ]
++
++    if (use_x86_x64_optimizations) {
++      deps += [ ":zlib_crc32_simd" ]
++    } else if (use_arm_neon_optimizations) {
++      deps += [ ":zlib_arm_crc32" ]
++    }
++  } else {
++    sources += [ "inflate.c" ]
++  }
++
++  if (is_android) {
++    import("//build/config/android/config.gni")
++    if (defined(android_ndk_root) && android_ndk_root != "") {
++      deps += [ "//third_party/cpu_features:ndk_compat" ]
++    } else {
++      assert(false, "CPU detection requires the Android NDK")
++    }
++  }
++
++  configs -= [ "//build/config/compiler:chromium_code" ]
++  configs += [ "//build/config/compiler:no_chromium_code" ]
++
++  if (zlib_symbols_visible) {
++    configs -= [ "//build/config/gcc:symbol_visibility_hidden" ]
++    configs += [ "//build/config/gcc:symbol_visibility_default" ]
++  }
++
++  public_configs = [ ":zlib_config" ]
++
++  configs += [
++    ":zlib_internal_config",
++
++    # Must be after no_chromium_code for warning flags to be ordered correctly.
++    ":zlib_warnings",
++  ]
++
++  allow_circular_includes_from = deps
++}
++
++config("minizip_warnings") {
++  visibility = [ ":*" ]
++
++  if (is_clang) {
++    cflags = [
++      # zlib uses `if ((a == b))` for some reason.
++      "-Wno-parentheses-equality",
++    ]
++  }
++}
++
++static_library("minizip") {
++  include_dirs = [
++    ".",
++    "//third_party/zlib",
++  ]
++
++  sources = [
++    "contrib/minizip/ioapi.c",
++    "contrib/minizip/ioapi.h",
++    "contrib/minizip/iowin32.c",
++    "contrib/minizip/iowin32.h",
++    "contrib/minizip/unzip.c",
++    "contrib/minizip/unzip.h",
++    "contrib/minizip/zip.c",
++    "contrib/minizip/zip.h",
++  ]
++
++  if (!is_win) {
++    sources -= [
++      "contrib/minizip/iowin32.c",
++      "contrib/minizip/iowin32.h",
++    ]
++  }
++
++  if (is_apple || is_android) {
++    # Mac, Android and the BSDs don't have fopen64, ftello64, or fseeko64. We
++    # use fopen, ftell, and fseek instead on these systems.
++    defines = [ "USE_FILE32API" ]
++  }
++
++  deps = [ ":zlib" ]
++
++  configs -= [ "//build/config/compiler:chromium_code" ]
++  configs += [ "//build/config/compiler:no_chromium_code" ]
++
++  public_configs = [ ":zlib_config" ]
++
++  configs += [
++    # Must be after no_chromium_code for warning flags to be ordered correctly.
++    ":minizip_warnings",
++  ]
++}
++
++executable("zlib_bench") {
++  include_dirs = [ "." ]
++
++  sources = [ "contrib/bench/zlib_bench.cc" ]
++  if (!is_debug) {
++    configs -= [ "//build/config/compiler:default_optimization" ]
++    configs += [ "//build/config/compiler:optimize_speed" ]
++  }
++
++  deps = [ ":zlib" ]
++
++  configs -= [ "//build/config/compiler:chromium_code" ]
++  configs += [ "//build/config/compiler:no_chromium_code" ]
++}
++
++executable("minigzip") {
++  include_dirs = [ "." ]
++
++  sources = [ "test/minigzip.c" ]
++  if (!is_debug) {
++    configs -= [ "//build/config/compiler:default_optimization" ]
++    configs += [ "//build/config/compiler:optimize_speed" ]
++  }
++
++  deps = [ ":zlib" ]
++
++  configs -= [ "//build/config/compiler:chromium_code" ]
++  configs += [ "//build/config/compiler:no_chromium_code" ]
++}
++
++executable("zpipe") {
++  include_dirs = [ "." ]
++
++  sources = [ "examples/zpipe.c" ]
++  if (!is_debug) {
++    configs -= [ "//build/config/compiler:default_optimization" ]
++    configs += [ "//build/config/compiler:optimize_speed" ]
++  }
++
++  deps = [ ":zlib" ]
++
++  configs -= [ "//build/config/compiler:chromium_code" ]
++  configs += [ "//build/config/compiler:no_chromium_code" ]
++}
++
++if (!is_win || target_os != "winuwp") {
++  executable("minizip_bin") {
++    include_dirs = [ "." ]
++
++    sources = [ "contrib/minizip/minizip.c" ]
++
++    if (is_clang) {
++      cflags = [ "-Wno-incompatible-pointer-types-discards-qualifiers" ]
++    }
++
++    if (!is_debug) {
++      configs -= [ "//build/config/compiler:default_optimization" ]
++      configs += [ "//build/config/compiler:optimize_speed" ]
++    }
++
++    deps = [ ":minizip" ]
++
++    configs -= [ "//build/config/compiler:chromium_code" ]
++    configs += [ "//build/config/compiler:no_chromium_code" ]
++  }
++
++  executable("miniunz_bin") {
++    include_dirs = [ "." ]
++
++    sources = [ "contrib/minizip/miniunz.c" ]
++
++    if (is_clang) {
++      cflags = [ "-Wno-incompatible-pointer-types-discards-qualifiers" ]
++    }
++
++    if (!is_debug) {
++      configs -= [ "//build/config/compiler:default_optimization" ]
++      configs += [ "//build/config/compiler:optimize_speed" ]
++    }
++
++    deps = [ ":minizip" ]
++
++    configs -= [ "//build/config/compiler:chromium_code" ]
++    configs += [ "//build/config/compiler:no_chromium_code" ]
++  }
++}
++
++if (build_with_chromium) {
++  test("zlib_unittests") {
++    testonly = true
++
++    sources = [
++      "contrib/tests/infcover.cc",
++      "contrib/tests/infcover.h",
++      "contrib/tests/run_all_unittests.cc",
++      "contrib/tests/utils_unittest.cc",
++      "google/compression_utils_unittest.cc",
++      "google/zip_reader_unittest.cc",
++      "google/zip_unittest.cc",
++    ]
++
++    data = [ "google/test/data/" ]
++
++    if (is_ios) {
++      bundle_deps = [ "google:zlib_pak_bundle_data" ]
++    }
++
++    deps = [
++      ":minizip",
++      ":zlib",
++      "google:compression_utils",
++      "google:zip",
++      "//base/test:test_support",
++      "//testing/gtest",
++    ]
++
++    configs -= [ "//build/config/compiler:chromium_code" ]
++    configs += [ "//build/config/compiler:no_chromium_code" ]
++
++    include_dirs = [
++      "//third_party/googletest/src/googletest/include/gtest",
++      ".",
++      "google",
++    ]
++  }
++}
+diff --git a/toolchain/gcc_solink_wrapper.py b/toolchain/gcc_solink_wrapper.py
+index 0dae7ab..90c72f2 100755
+--- a/toolchain/gcc_solink_wrapper.py
++++ b/toolchain/gcc_solink_wrapper.py
+@@ -1,211 +1,235 @@
+-#!/usr/bin/env python3
+-# Copyright 2015 The Chromium Authors
+-# Use of this source code is governed by a BSD-style license that can be
+-# found in the LICENSE file.
+-
+-"""Runs 'ld -shared' and generates a .TOC file that's untouched when unchanged.
+-
+-This script exists to avoid using complex shell commands in
+-gcc_toolchain.gni's tool("solink"), in case the host running the compiler
+-does not have a POSIX-like shell (e.g. Windows).
+-"""
+-
+-import argparse
+-import os
+-import shlex
+-import subprocess
+-import sys
+-
+-import wrapper_utils
+-
+-
+-def CollectSONAME(args):
+-  """Replaces: readelf -d $sofile | grep SONAME"""
+-  # TODO(crbug.com/40797404): Come up with a way to get this info without having
+-  # to bundle readelf in the toolchain package.
+-  toc = ''
+-  readelf = subprocess.Popen(wrapper_utils.CommandToRun(
+-      [args.readelf, '-d', args.sofile]),
+-                             stdout=subprocess.PIPE,
+-                             bufsize=-1,
+-                             universal_newlines=True)
+-  for line in readelf.stdout:
+-    if 'SONAME' in line:
+-      toc += line
+-  return readelf.wait(), toc
+-
+-
+-def CollectDynSym(args):
+-  """Replaces: nm --format=posix -g -D -p $sofile | cut -f1-2 -d' '"""
+-  toc = ''
+-  nm = subprocess.Popen(wrapper_utils.CommandToRun(
+-      [args.nm, '--format=posix', '-g', '-D', '-p', args.sofile]),
+-                        stdout=subprocess.PIPE,
+-                        bufsize=-1,
+-                        universal_newlines=True)
+-  for line in nm.stdout:
+-    toc += ' '.join(line.split(' ', 2)[:2]) + '\n'
+-  return nm.wait(), toc
+-
+-
+-def CollectTOC(args):
+-  result, toc = CollectSONAME(args)
+-  if result == 0:
+-    result, dynsym = CollectDynSym(args)
+-    toc += dynsym
+-  return result, toc
+-
+-
+-def UpdateTOC(tocfile, toc):
+-  if os.path.exists(tocfile):
+-    old_toc = open(tocfile, 'r').read()
+-  else:
+-    old_toc = None
+-  if toc != old_toc:
+-    open(tocfile, 'w').write(toc)
+-
+-
+-def CollectInputs(out, args):
+-  for x in args:
+-    if x.startswith('@'):
+-      with open(x[1:]) as rsp:
+-        CollectInputs(out, shlex.split(rsp.read()))
+-    elif not x.startswith('-') and (x.endswith('.o') or x.endswith('.a')):
+-      out.write(x)
+-      out.write('\n')
+-
+-
+-def InterceptFlag(flag, command):
+-  ret = flag in command
+-  if ret:
+-    command.remove(flag)
+-  return ret
+-
+-
+-def SafeDelete(path):
+-  try:
+-    os.unlink(path)
+-  except OSError:
+-    pass
+-
+-
+-def main():
+-  parser = argparse.ArgumentParser(description=__doc__)
+-  parser.add_argument('--readelf',
+-                      required=True,
+-                      help='The readelf binary to run',
+-                      metavar='PATH')
+-  parser.add_argument('--nm',
+-                      required=True,
+-                      help='The nm binary to run',
+-                      metavar='PATH')
+-  parser.add_argument('--strip',
+-                      help='The strip binary to run',
+-                      metavar='PATH')
+-  parser.add_argument('--dwp', help='The dwp binary to run', metavar='PATH')
+-  parser.add_argument('--sofile',
+-                      required=True,
+-                      help='Shared object file produced by linking command',
+-                      metavar='FILE')
+-  parser.add_argument('--tocfile',
+-                      required=True,
+-                      help='Output table-of-contents file',
+-                      metavar='FILE')
+-  parser.add_argument('--map-file',
+-                      help=('Use --Wl,-Map to generate a map file. Will be '
+-                            'gzipped if extension ends with .gz'),
+-                      metavar='FILE')
+-  parser.add_argument('--output',
+-                      required=True,
+-                      help='Final output shared object file',
+-                      metavar='FILE')
+-  parser.add_argument('command', nargs='+',
+-                      help='Linking command')
+-  args = parser.parse_args()
+-
+-  # Work-around for gold being slow-by-default. http://crbug.com/632230
+-  fast_env = dict(os.environ)
+-  fast_env['LC_ALL'] = 'C'
+-
+-  # Extract flags passed through ldflags but meant for this script.
+-  # https://crbug.com/954311 tracks finding a better way to plumb these.
+-  partitioned_library = InterceptFlag('--partitioned-library', args.command)
+-  collect_inputs_only = InterceptFlag('--collect-inputs-only', args.command)
+-
+-  # Partitioned .so libraries are used only for splitting apart in a subsequent
+-  # step.
+-  #
+-  # - The TOC file optimization isn't useful, because the partition libraries
+-  #   must always be re-extracted if the combined library changes (and nothing
+-  #   should be depending on the combined library's dynamic symbol table).
+-  # - Stripping isn't necessary, because the combined library is not used in
+-  #   production or published.
+-  #
+-  # Both of these operations could still be done, they're needless work, and
+-  # tools would need to be updated to handle and/or not complain about
+-  # partitioned libraries. Instead, to keep Ninja happy, simply create dummy
+-  # files for the TOC and stripped lib.
+-  if collect_inputs_only or partitioned_library:
+-    open(args.output, 'w').close()
+-    open(args.tocfile, 'w').close()
+-
+-  # Instead of linking, records all inputs to a file. This is used by
+-  # enable_resource_allowlist_generation in order to avoid needing to
+-  # link (which is slow) to build the resources allowlist.
+-  if collect_inputs_only:
+-    if args.map_file:
+-      open(args.map_file, 'w').close()
+-    if args.dwp:
+-      open(args.sofile + '.dwp', 'w').close()
+-
+-    with open(args.sofile, 'w') as f:
+-      CollectInputs(f, args.command)
+-    return 0
+-
+-  # First, run the actual link.
+-  command = wrapper_utils.CommandToRun(args.command)
+-  result = wrapper_utils.RunLinkWithOptionalMapFile(command,
+-                                                    env=fast_env,
+-                                                    map_file=args.map_file)
+-
+-  if result != 0:
+-    return result
+-
+-  # If dwp is set, then package debug info for this SO.
+-  dwp_proc = None
+-  if args.dwp:
+-    # Explicit delete to account for symlinks (when toggling between
+-    # debug/release).
+-    SafeDelete(args.sofile + '.dwp')
+-    # Suppress warnings about duplicate CU entries (https://crbug.com/1264130)
+-    dwp_proc = subprocess.Popen(wrapper_utils.CommandToRun(
+-        [args.dwp, '-e', args.sofile, '-o', args.sofile + '.dwp']),
+-                                stderr=subprocess.DEVNULL)
+-
+-  if not partitioned_library:
+-    # Next, generate the contents of the TOC file.
+-    result, toc = CollectTOC(args)
+-    if result != 0:
+-      return result
+-
+-    # If there is an existing TOC file with identical contents, leave it alone.
+-    # Otherwise, write out the TOC file.
+-    UpdateTOC(args.tocfile, toc)
+-
+-    # Finally, strip the linked shared object file (if desired).
+-    if args.strip:
+-      result = subprocess.call(
+-          wrapper_utils.CommandToRun(
+-              [args.strip, '-o', args.output, args.sofile]))
+-
+-  if dwp_proc:
+-    dwp_result = dwp_proc.wait()
+-    if dwp_result != 0:
+-      sys.stderr.write('dwp failed with error code {}\n'.format(dwp_result))
+-      return dwp_result
+-
+-  return result
+-
+-
+-if __name__ == "__main__":
+-  sys.exit(main())
++#!/usr/bin/env python3
++# Copyright 2015 The Chromium Authors
++# Use of this source code is governed by a BSD-style license that can be
++# found in the LICENSE file.
++
++"""Runs 'ld -shared' and generates a .TOC file that's untouched when unchanged.
++
++This script exists to avoid using complex shell commands in
++gcc_toolchain.gni's tool("solink"), in case the host running the compiler
++does not have a POSIX-like shell (e.g. Windows).
++"""
++
++import argparse
++import os
++import shlex
++import subprocess
++import sys
++
++import wrapper_utils
++
++
++def IsPEFile(path):
++  with open(path, "rb") as binary:
++    return binary.read(2) == b"MZ"
++
++
++def CollectSONAME(args):
++  """Replaces: readelf -d $sofile | grep SONAME"""
++  # TODO(crbug.com/40797404): Come up with a way to get this info without having
++  # to bundle readelf in the toolchain package.
++  toc = ''
++  # MinGW's readelf doesn't work on PE files
++  if IsPEFile(args.sofile):
++    return 0, toc
++  readelf = subprocess.Popen(wrapper_utils.CommandToRun(
++      [args.readelf, '-d', args.sofile]),
++                             stdout=subprocess.PIPE,
++                             bufsize=-1,
++                             universal_newlines=True)
++  for line in readelf.stdout:
++    if 'SONAME' in line:
++      toc += line
++  return readelf.wait(), toc
++
++
++def CollectDynSym(args):
++  """Replaces: nm --format=posix -g -D -p $sofile | cut -f1-2 -d' '"""
++  toc = ''
++  # MinGW's nm doesn't work on PE/COFF files
++  if IsPEFile(args.sofile):
++    return 0, toc
++  nm = subprocess.Popen(wrapper_utils.CommandToRun(
++      [args.nm, '--format=posix', '-g', '-D', '-p', args.sofile]),
++                        stdout=subprocess.PIPE,
++                        bufsize=-1,
++                        universal_newlines=True)
++  for line in nm.stdout:
++    toc += ' '.join(line.split(' ', 2)[:2]) + '\n'
++  return nm.wait(), toc
++
++
++def CollectTOC(args):
++  result, toc = CollectSONAME(args)
++  if result == 0:
++    result, dynsym = CollectDynSym(args)
++    toc += dynsym
++  return result, toc
++
++
++def UpdateTOC(tocfile, toc):
++  if os.path.exists(tocfile):
++    old_toc = open(tocfile, 'r').read()
++  else:
++    old_toc = None
++  if toc != old_toc:
++    open(tocfile, 'w').write(toc)
++
++
++def CollectInputs(out, args):
++  for x in args:
++    if x.startswith('@'):
++      with open(x[1:]) as rsp:
++        CollectInputs(out, shlex.split(rsp.read()))
++    elif not x.startswith('-') and (x.endswith('.o') or x.endswith('.a')):
++      out.write(x)
++      out.write('\n')
++
++
++def InterceptFlag(flag, command):
++  ret = flag in command
++  if ret:
++    command.remove(flag)
++  return ret
++
++
++def SafeDelete(path):
++  try:
++    os.unlink(path)
++  except OSError:
++    pass
++
++
++def main():
++  parser = argparse.ArgumentParser(description=__doc__)
++  parser.add_argument('--readelf',
++                      required=True,
++                      help='The readelf binary to run',
++                      metavar='PATH')
++  parser.add_argument('--nm',
++                      required=True,
++                      help='The nm binary to run',
++                      metavar='PATH')
++  parser.add_argument('--strip',
++                      help='The strip binary to run',
++                      metavar='PATH')
++  parser.add_argument('--dwp', help='The dwp binary to run', metavar='PATH')
++  parser.add_argument('--objcopy',
++                      help='The objcopy binary to run',
++                      metavar='PATH')
++  parser.add_argument('--sofile',
++                      required=True,
++                      help='Shared object file produced by linking command',
++                      metavar='FILE')
++  parser.add_argument('--tocfile',
++                      required=True,
++                      help='Output table-of-contents file',
++                      metavar='FILE')
++  parser.add_argument('--map-file',
++                      help=('Use --Wl,-Map to generate a map file. Will be '
++                            'gzipped if extension ends with .gz'),
++                      metavar='FILE')
++  parser.add_argument('--output',
++                      required=True,
++                      help='Final output shared object file',
++                      metavar='FILE')
++  parser.add_argument('command', nargs='+',
++                      help='Linking command')
++  args = parser.parse_args()
++
++  # Work-around for gold being slow-by-default. http://crbug.com/632230
++  fast_env = dict(os.environ)
++  fast_env['LC_ALL'] = 'C'
++
++  # Extract flags passed through ldflags but meant for this script.
++  # https://crbug.com/954311 tracks finding a better way to plumb these.
++  partitioned_library = InterceptFlag('--partitioned-library', args.command)
++  collect_inputs_only = InterceptFlag('--collect-inputs-only', args.command)
++
++  # Partitioned .so libraries are used only for splitting apart in a subsequent
++  # step.
++  #
++  # - The TOC file optimization isn't useful, because the partition libraries
++  #   must always be re-extracted if the combined library changes (and nothing
++  #   should be depending on the combined library's dynamic symbol table).
++  # - Stripping isn't necessary, because the combined library is not used in
++  #   production or published.
++  #
++  # Both of these operations could still be done, they're needless work, and
++  # tools would need to be updated to handle and/or not complain about
++  # partitioned libraries. Instead, to keep Ninja happy, simply create dummy
++  # files for the TOC and stripped lib.
++  if collect_inputs_only or partitioned_library:
++    open(args.output, 'w').close()
++    open(args.tocfile, 'w').close()
++
++  # Instead of linking, records all inputs to a file. This is used by
++  # enable_resource_allowlist_generation in order to avoid needing to
++  # link (which is slow) to build the resources allowlist.
++  if collect_inputs_only:
++    if args.map_file:
++      open(args.map_file, 'w').close()
++    if args.dwp:
++      open(args.sofile + '.dwp', 'w').close()
++
++    with open(args.sofile, 'w') as f:
++      CollectInputs(f, args.command)
++    return 0
++
++  # First, run the actual link.
++  command = wrapper_utils.CommandToRun(args.command)
++  result = wrapper_utils.RunLinkWithOptionalMapFile(command,
++                                                    env=fast_env,
++                                                    map_file=args.map_file)
++
++  if result != 0:
++    return result
++
++  # If dwp is set, then package debug info for this SO.
++  dwp_proc = None
++  if args.dwp:
++    # Explicit delete to account for symlinks (when toggling between
++    # debug/release).
++    SafeDelete(args.sofile + '.dwp')
++    # Suppress warnings about duplicate CU entries (https://crbug.com/1264130)
++    dwp_proc = subprocess.Popen(wrapper_utils.CommandToRun(
++        [args.dwp, '-e', args.sofile, '-o', args.sofile + '.dwp']),
++                                stderr=subprocess.DEVNULL)
++
++  if not partitioned_library:
++    # Next, generate the contents of the TOC file.
++    result, toc = CollectTOC(args)
++    if result != 0:
++      return result
++
++    # If there is an existing TOC file with identical contents, leave it alone.
++    # Otherwise, write out the TOC file.
++    UpdateTOC(args.tocfile, toc)
++
++    # Finally, strip the linked shared object file (if desired).
++    if args.strip:
++      if args.objcopy:
++        result = subprocess.call(wrapper_utils.CommandToRun(
++            [args.objcopy, '--only-keep-debug', args.sofile, args.output + '.debug']))
++        if result != 0:
++          return result
++      result = subprocess.call(
++          wrapper_utils.CommandToRun(
++              [args.strip, '-o', args.output, args.sofile]))
++    if result != 0:
++      return result
++    if args.objcopy:
++      result = subprocess.call(wrapper_utils.CommandToRun(
++          [args.objcopy, '--add-gnu-debuglink', args.output + '.debug',args.output]))
++
++  if dwp_proc:
++    dwp_result = dwp_proc.wait()
++    if dwp_result != 0:
++      sys.stderr.write('dwp failed with error code {}\n'.format(dwp_result))
++      return dwp_result
++
++  return result
++
++
++if __name__ == "__main__":
++  sys.exit(main())
+diff --git a/src/libANGLE/renderer/vulkan/vk_cache_utils.cpp b/src/libANGLE/renderer/vulkan/vk_cache_utils.cpp
+index 388d627..c0d52af 100644
+--- a/src/libANGLE/renderer/vulkan/vk_cache_utils.cpp
++++ b/src/libANGLE/renderer/vulkan/vk_cache_utils.cpp
+@@ -7213,6 +7213,12 @@ T *UpdateDescriptorSetsBuilder::DescriptorInfoAllocator<T>::allocate(uint32_t co
+     return &mCurrentVector->front();
+ }
+ 
++// Emit allocator definitions used by inline callers in other translation units.
++template VkWriteDescriptorSet *UpdateDescriptorSetsBuilder::DescriptorInfoAllocator<VkWriteDescriptorSet>::allocate(uint32_t);
++template VkDescriptorBufferInfo *UpdateDescriptorSetsBuilder::DescriptorInfoAllocator<VkDescriptorBufferInfo>::allocate(uint32_t);
++template VkDescriptorImageInfo *UpdateDescriptorSetsBuilder::DescriptorInfoAllocator<VkDescriptorImageInfo>::allocate(uint32_t);
++template VkBufferView *UpdateDescriptorSetsBuilder::DescriptorInfoAllocator<VkBufferView>::allocate(uint32_t);
++
+ uint32_t UpdateDescriptorSetsBuilder::WriteDescriptorSetAllocator::updateDescriptorSets(
+     VkDevice device) const
+ {

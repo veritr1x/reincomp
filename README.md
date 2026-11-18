@@ -40,8 +40,12 @@ or in its releases, so the game executable is built on your PC from your APK.
 about an hour. See [BUILDING.md](BUILDING.md) for what to install first.
 
 ```
-python build/from_apk.py --apk <your APK> --toolchain <toolchain folder> --clang <clang.exe of LLVM 18> --deps <deps folder> --launcher reincomp.exe --server bunker-server.exe --out <folder>
+python build/from_apk.py --apk <your APK> --clang <clang.exe of LLVM 18> --out <folder>
 ```
+
+It downloads the rest itself: the recompiler's toolchain, the launcher and the
+DLLs that ship beside the game from this project's release, and the server
+from Bunker's. Each is checked against a hash pinned in this repository.
 
 **Then: play.** Put your three files in the `reincomp` folder it made and run
 `reincomp.exe`. The first start prepares the APK and imports the dump (about
@@ -62,7 +66,7 @@ so a save moves between a phone and the PC either way.
 | `game/` | What describes this game: where each recompiled function starts, three headers, and code patches. No game code |
 | `build/` | The one-command build and its steps |
 | `launcher/` | `reincomp.exe` |
-| `third_party/` | Headers of Remill, zlib and ANGLE |
+| `third_party/` | Headers of Remill, zlib and ANGLE, and the patches ANGLE is built with |
 
 See also [CHANGELOG.md](CHANGELOG.md) and [THIRD-PARTY.md](THIRD-PARTY.md).
 

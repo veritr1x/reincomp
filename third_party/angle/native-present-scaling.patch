@@ -1,0 +1,378 @@
+--- a/src/libANGLE/Surface.h
++++ b/src/libANGLE/Surface.h
+@@ -107,8 +107,8 @@
+     void setMultisampleResolve(EGLenum resolve);
+     void setSwapBehavior(EGLenum behavior);
+ 
+-    void setFixedWidth(EGLint width);
+-    void setFixedHeight(EGLint height);
++    Error setFixedWidth(EGLint width);
++    Error setFixedHeight(EGLint height);
+ 
+     const Config *getConfig() const;
+ 
+--- a/src/libANGLE/Surface.cpp
++++ b/src/libANGLE/Surface.cpp
+@@ -436,16 +436,22 @@
+     mState.swapBehavior = behavior;
+ }
+ 
+-void Surface::setFixedWidth(EGLint width)
+-{
++Error Surface::setFixedWidth(EGLint width)
++{
++    ANGLE_TRY(mImplementation->validateFixedSize(width, getHeight()));
++    mImplementation->setFixedWidth(width);
+     mFixedWidth = width;
+-    mImplementation->setFixedWidth(width);
+-}
+-
+-void Surface::setFixedHeight(EGLint height)
+-{
++    onStateChange(angle::SubjectMessage::SurfaceChanged);
++    return NoError();
++}
++
++Error Surface::setFixedHeight(EGLint height)
++{
++    ANGLE_TRY(mImplementation->validateFixedSize(getWidth(), height));
++    mImplementation->setFixedHeight(height);
+     mFixedHeight = height;
+-    mImplementation->setFixedHeight(height);
++    onStateChange(angle::SubjectMessage::SurfaceChanged);
++    return NoError();
+ }
+ 
+ const Config *Surface::getConfig() const
+--- a/src/libANGLE/queryutils.cpp
++++ b/src/libANGLE/queryutils.cpp
+@@ -4965,11 +4965,9 @@
+             surface->setSwapBehavior(value);
+             break;
+         case EGL_WIDTH:
+-            surface->setFixedWidth(value);
+-            break;
++            return surface->setFixedWidth(value);
+         case EGL_HEIGHT:
+-            surface->setFixedHeight(value);
+-            break;
++            return surface->setFixedHeight(value);
+         case EGL_TIMESTAMPS_ANDROID:
+             surface->setTimestampsEnabled(value != EGL_FALSE);
+             break;
+--- a/src/libANGLE/renderer/SurfaceImpl.h
++++ b/src/libANGLE/renderer/SurfaceImpl.h
+@@ -76,6 +76,7 @@
+     virtual egl::Error getSyncValues(EGLuint64KHR *ust, EGLuint64KHR *msc, EGLuint64KHR *sbc);
+     virtual egl::Error getMscRate(EGLint *numerator, EGLint *denominator);
+     virtual void setSwapInterval(const egl::Display *display, EGLint interval) = 0;
++    virtual egl::Error validateFixedSize(EGLint width, EGLint height) const;
+     virtual void setFixedWidth(EGLint width);
+     virtual void setFixedHeight(EGLint height);
+ 
+--- a/src/libANGLE/renderer/SurfaceImpl.cpp
++++ b/src/libANGLE/renderer/SurfaceImpl.cpp
+@@ -73,6 +73,11 @@
+     return egl::Error(EGL_BAD_SURFACE, "getMscRate implementation missing.");
+ }
+ 
++egl::Error SurfaceImpl::validateFixedSize(EGLint, EGLint) const
++{
++    return egl::NoError();
++}
++
+ void SurfaceImpl::setFixedWidth(EGLint width)
+ {
+     UNREACHABLE();
+--- a/src/libANGLE/renderer/vulkan/SurfaceVk.h
++++ b/src/libANGLE/renderer/vulkan/SurfaceVk.h
+@@ -304,6 +304,9 @@
+     egl::Error getSyncValues(EGLuint64KHR *ust, EGLuint64KHR *msc, EGLuint64KHR *sbc) override;
+     egl::Error getMscRate(EGLint *numerator, EGLint *denominator) override;
+     void setSwapInterval(const egl::Display *display, EGLint interval) override;
++    egl::Error validateFixedSize(EGLint width, EGLint height) const override;
++    void setFixedWidth(EGLint width) override;
++    void setFixedHeight(EGLint height) override;
+ 
+     // Sizes that Surface will have after render target is first accessed (e.g. after draw).
+     egl::Error getUserWidth(const egl::Display *display, EGLint *value) const final;
+@@ -474,6 +477,12 @@
+     angle::FormatID getActualFormatID(vk::Renderer *renderer);
+ 
+     bool mIsSurfaceSizedBySwapchain;
++    bool mNativeFixedSize;
++    EGLint mRequestedFixedWidth;
++    EGLint mRequestedFixedHeight;
++    VkExtent2D mFixedMinExtent = {1, 1};
++    VkExtent2D mFixedMaxExtent = {0, 0};
++    mutable VkExtent2D mLastPhysicalExtent = {0, 0};
+ 
+     // Atomic is to allow update state without necessarily locking the mSizeMutex.
+     std::atomic<impl::SurfaceSizeState> mSizeState;
+--- a/src/libANGLE/renderer/vulkan/SurfaceVk.cpp
++++ b/src/libANGLE/renderer/vulkan/SurfaceVk.cpp
+@@ -8,6 +8,8 @@
+ //
+ 
+ #include "libANGLE/renderer/vulkan/SurfaceVk.h"
++#include <cstdio>
++#include <cstdlib>
+ 
+ #include "common/debug.h"
+ #include "libANGLE/Context.h"
+@@ -1018,6 +1020,9 @@
+       mSurface(VK_NULL_HANDLE),
+       mSupportsProtectedSwapchain(false),
+       mIsSurfaceSizedBySwapchain(false),
++      mNativeFixedSize(surfaceState.attributes.getAsInt(EGL_FIXED_SIZE_ANGLE, EGL_FALSE) == EGL_TRUE),
++      mRequestedFixedWidth(surfaceState.attributes.getAsInt(EGL_WIDTH, 0)),
++      mRequestedFixedHeight(surfaceState.attributes.getAsInt(EGL_HEIGHT, 0)),
+       mSizeState(SurfaceSizeState::InvalidSwapchain),
+       mSwapchain(VK_NULL_HANDLE),
+       mLastSwapchain(VK_NULL_HANDLE),
+@@ -1141,6 +1146,8 @@
+ 
+ egl::Error WindowSurfaceVk::initialize(const egl::Display *display)
+ {
++    if (mNativeFixedSize && (mRequestedFixedWidth <= 0 || mRequestedFixedHeight <= 0))
++        return egl::Error(EGL_BAD_PARAMETER, "Native Vulkan fixed buffers require positive dimensions.");
+     DisplayVk *displayVk = vk::GetImpl(display);
+     bool anyMatches      = false;
+     angle::Result result = initializeImpl(displayVk, &anyMatches);
+@@ -1348,6 +1355,44 @@
+ 
+     ANGLE_TRY(GetPresentModes(displayVk, physicalDevice, mSurface, &mPresentModes));
+ 
++    if (mNativeFixedSize)
++    {
++        if (!IsWindows() || !renderer->getFeatures().supportsSurfaceMaintenance1.enabled ||
++            !renderer->getFeatures().supportsSwapchainMaintenance1.enabled)
++            return angle::Result::Continue;
++        const auto &limits = renderer->getPhysicalDeviceProperties().limits;
++        mFixedMaxExtent.width = std::min(limits.maxImageDimension2D, limits.maxFramebufferWidth);
++        mFixedMaxExtent.height = std::min(limits.maxImageDimension2D, limits.maxFramebufferHeight);
++        for (vk::PresentMode mode : mPresentModes)
++        {
++            VkSurfacePresentModeEXT present = {};
++            present.sType = VK_STRUCTURE_TYPE_SURFACE_PRESENT_MODE_EXT;
++            present.presentMode = vk::ConvertPresentModeToVkPresentMode(mode);
++            VkPhysicalDeviceSurfaceInfo2KHR query = {};
++            query.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SURFACE_INFO_2_KHR;
++            query.surface = mSurface;
++            query.pNext = &present;
++            VkSurfacePresentScalingCapabilitiesEXT scaling = {};
++            scaling.sType = VK_STRUCTURE_TYPE_SURFACE_PRESENT_SCALING_CAPABILITIES_EXT;
++            VkSurfaceCapabilities2KHR caps = {};
++            caps.sType = VK_STRUCTURE_TYPE_SURFACE_CAPABILITIES_2_KHR;
++            caps.pNext = &scaling;
++            ANGLE_VK_TRY(displayVk, vkGetPhysicalDeviceSurfaceCapabilities2KHR(physicalDevice, &query, &caps));
++            if ((scaling.supportedPresentScaling & VK_PRESENT_SCALING_STRETCH_BIT_EXT) == 0)
++                return angle::Result::Continue;
++            mFixedMinExtent.width = std::max(mFixedMinExtent.width, scaling.minScaledImageExtent.width);
++            mFixedMinExtent.height = std::max(mFixedMinExtent.height, scaling.minScaledImageExtent.height);
++            mFixedMaxExtent.width = std::min(mFixedMaxExtent.width, scaling.maxScaledImageExtent.width);
++            mFixedMaxExtent.height = std::min(mFixedMaxExtent.height, scaling.maxScaledImageExtent.height);
++        }
++        if (static_cast<uint32_t>(mRequestedFixedWidth) < mFixedMinExtent.width ||
++            static_cast<uint32_t>(mRequestedFixedHeight) < mFixedMinExtent.height ||
++            static_cast<uint32_t>(mRequestedFixedWidth) > mFixedMaxExtent.width ||
++            static_cast<uint32_t>(mRequestedFixedHeight) > mFixedMaxExtent.height)
++            return angle::Result::Continue;
++    }
++
++
+     // Select appropriate present mode based on vsync parameter. Default to 1 (FIFO), though it
+     // will get clamped to the min/max values specified at display creation time.
+     setDesiredSwapInterval(mState.swapInterval);
+@@ -1673,6 +1718,14 @@
+     swapchainInfo.clipped      = VK_TRUE;
+     swapchainInfo.oldSwapchain = mLastSwapchain;
+ 
++    VkSwapchainPresentScalingCreateInfoEXT scalingInfo = {};
++    if (mNativeFixedSize)
++    {
++        scalingInfo.sType = VK_STRUCTURE_TYPE_SWAPCHAIN_PRESENT_SCALING_CREATE_INFO_EXT;
++        scalingInfo.scalingBehavior = VK_PRESENT_SCALING_STRETCH_BIT_EXT;
++        vk::AddToPNextChain(&swapchainInfo, &scalingInfo);
++    }
++
+     VkImageCompressionControlEXT compressionInfo = {};
+     compressionInfo.sType                        = VK_STRUCTURE_TYPE_IMAGE_COMPRESSION_CONTROL_EXT;
+     compressionInfo.flags                        = mCompressionFlags;
+@@ -1703,7 +1756,7 @@
+     }
+ #endif
+ 
+-    if (renderer->getFeatures().supportsSwapchainMaintenance1.enabled)
++    if (!mNativeFixedSize && renderer->getFeatures().supportsSwapchainMaintenance1.enabled)
+     {
+         swapchainInfo.flags |= VK_SWAPCHAIN_CREATE_DEFERRED_MEMORY_ALLOCATION_BIT_EXT;
+     }
+@@ -1741,6 +1794,14 @@
+     VkSwapchainKHR newSwapChain = VK_NULL_HANDLE;
+     ANGLE_VK_TRY(context, vkCreateSwapchainKHR(device, &swapchainInfo, nullptr, &newSwapChain));
+     mLastSwapchain = newSwapChain;
++    if (mNativeFixedSize && std::getenv("BUNKER_ANGLE_SCALING_TRACE"))
++    {
++        std::fprintf(stderr, "BUNKER_SCALING_SWAPCHAIN buffer=%ux%u physical=%ux%u mode=%u flags=%u\n",
++                     swapchainInfo.imageExtent.width, swapchainInfo.imageExtent.height,
++                     mLastPhysicalExtent.width, mLastPhysicalExtent.height,
++                     static_cast<unsigned>(swapchainInfo.presentMode),
++                     static_cast<unsigned>(scalingInfo.scalingBehavior));
++    }
+ 
+     // If frame timestamp was enabled for the surface, [re]enable it when [re]creating the swapchain
+     if (renderer->getFeatures().supportsTimestampSurfaceAttribute.enabled &&
+@@ -1888,6 +1949,13 @@
+         VkSurfaceCapabilities2KHR surfaceCaps2 = {};
+         surfaceCaps2.sType                     = VK_STRUCTURE_TYPE_SURFACE_CAPABILITIES_2_KHR;
+ 
++        VkSurfacePresentScalingCapabilitiesEXT scaling = {};
++        if (mNativeFixedSize)
++        {
++            scaling.sType = VK_STRUCTURE_TYPE_SURFACE_PRESENT_SCALING_CAPABILITIES_EXT;
++            vk::AddToPNextChain(&surfaceCaps2, &scaling);
++        }
++
+         VkSurfacePresentModeCompatibilityEXT compatibleModes = {};
+         if (compatiblePresentModesOut != nullptr)
+         {
+@@ -1942,6 +2010,23 @@
+             }
+         }
+ 
++        if (mNativeFixedSize)
++        {
++            ANGLE_VK_CHECK(context,
++                (scaling.supportedPresentScaling & VK_PRESENT_SCALING_STRETCH_BIT_EXT) != 0 &&
++                static_cast<uint32_t>(mRequestedFixedWidth) >= scaling.minScaledImageExtent.width &&
++                static_cast<uint32_t>(mRequestedFixedHeight) >= scaling.minScaledImageExtent.height &&
++                static_cast<uint32_t>(mRequestedFixedWidth) <= scaling.maxScaledImageExtent.width &&
++                static_cast<uint32_t>(mRequestedFixedHeight) <= scaling.maxScaledImageExtent.height,
++                VK_ERROR_INITIALIZATION_FAILED);
++            // Force recreation on present-mode changes. Every fixed-size
++            // swapchain is validated for its exact mode and scaling caps.
++            if (compatiblePresentModesOut)
++            {
++                compatiblePresentModesOut->resize(1);
++                (*compatiblePresentModesOut)[0] = surfacePresentMode.presentMode;
++            }
++        }
+         *surfaceCapsOut = surfaceCaps2.surfaceCapabilities;
+     }
+     else
+@@ -1969,6 +2054,12 @@
+     }
+ 
+     adjustSurfaceExtent(&surfaceCapsOut->currentExtent);
++    if (mNativeFixedSize)
++    {
++        mLastPhysicalExtent = surfaceCapsOut->currentExtent;
++        surfaceCapsOut->currentExtent.width = static_cast<uint32_t>(mRequestedFixedWidth);
++        surfaceCapsOut->currentExtent.height = static_cast<uint32_t>(mRequestedFixedHeight);
++    }
+ 
+     return angle::Result::Continue;
+ }
+@@ -2025,7 +2116,7 @@
+             return angle::Result::Continue;
+         }
+ 
+-        if (renderer->getFeatures().avoidInvisibleWindowSwapchainRecreate.enabled)
++        if (!mNativeFixedSize && renderer->getFeatures().avoidInvisibleWindowSwapchainRecreate.enabled)
+         {
+             bool isWindowVisible = false;
+             ANGLE_TRY(getWindowVisibility(context, &isWindowVisible));
+@@ -3106,6 +3197,20 @@
+     // swapchain will be recreated.
+ }
+ 
++egl::Error WindowSurfaceVk::validateFixedSize(EGLint width, EGLint height) const
++{
++    if (!mNativeFixedSize || width <= 0 || height <= 0 ||
++        static_cast<uint32_t>(width) < mFixedMinExtent.width ||
++        static_cast<uint32_t>(height) < mFixedMinExtent.height ||
++        static_cast<uint32_t>(width) > mFixedMaxExtent.width ||
++        static_cast<uint32_t>(height) > mFixedMaxExtent.height)
++        return egl::Error(EGL_BAD_PARAMETER, "Fixed buffer dimensions exceed actual Vulkan limits.");
++    return egl::NoError();
++}
++
++void WindowSurfaceVk::setFixedWidth(EGLint width) { mRequestedFixedWidth = width; }
++void WindowSurfaceVk::setFixedHeight(EGLint height) { mRequestedFixedHeight = height; }
++
+ void WindowSurfaceVk::setSwapInterval(const egl::Display *display, EGLint interval)
+ {
+     // Don't let setSwapInterval change presentation mode if using SHARED present.
+--- a/src/libANGLE/renderer/vulkan/win32/DisplayVkWin32.h
++++ b/src/libANGLE/renderer/vulkan/win32/DisplayVkWin32.h
+@@ -22,6 +22,7 @@
+ 
+     egl::Error initialize(egl::Display *display) override;
+     void terminate() override;
++    void generateExtensions(egl::DisplayExtensions *outExtensions) const override;
+ 
+     bool isValidNativeWindow(EGLNativeWindowType window) const override;
+ 
+@@ -34,6 +35,7 @@
+     const char *getWSIExtension() const override;
+ 
+   private:
++    bool mNativePresentScaling = false;
+     ATOM mWindowClass;
+     HWND mMockWindow;
+     std::vector<VkSurfaceFormatKHR> mSurfaceFormats;
+--- a/src/libANGLE/renderer/vulkan/win32/DisplayVkWin32.cpp
++++ b/src/libANGLE/renderer/vulkan/win32/DisplayVkWin32.cpp
+@@ -126,6 +126,38 @@
+     {
+         return egl::Error(EGL_NOT_INITIALIZED, "vkGetPhysicalDeviceSurfaceFormatsKHR (2nd) failed");
+     }
++    mNativePresentScaling = false;
++    if (mRenderer->getFeatures().supportsSurfaceMaintenance1.enabled &&
++        mRenderer->getFeatures().supportsSwapchainMaintenance1.enabled)
++    {
++        uint32_t count = 0;
++        if (vkGetPhysicalDeviceSurfacePresentModesKHR(physDevice, surfaceVk, &count, nullptr) == VK_SUCCESS && count > 0)
++        {
++            std::vector<VkPresentModeKHR> modes(count);
++            if (vkGetPhysicalDeviceSurfacePresentModesKHR(physDevice, surfaceVk, &count, modes.data()) == VK_SUCCESS)
++            {
++                mNativePresentScaling = true;
++                for (VkPresentModeKHR mode : modes)
++                {
++                    VkSurfacePresentModeEXT present = {};
++                    present.sType = VK_STRUCTURE_TYPE_SURFACE_PRESENT_MODE_EXT;
++                    present.presentMode = mode;
++                    VkPhysicalDeviceSurfaceInfo2KHR query = {};
++                    query.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SURFACE_INFO_2_KHR;
++                    query.surface = surfaceVk;
++                    query.pNext = &present;
++                    VkSurfacePresentScalingCapabilitiesEXT scaling = {};
++                    scaling.sType = VK_STRUCTURE_TYPE_SURFACE_PRESENT_SCALING_CAPABILITIES_EXT;
++                    VkSurfaceCapabilities2KHR caps = {};
++                    caps.sType = VK_STRUCTURE_TYPE_SURFACE_CAPABILITIES_2_KHR;
++                    caps.pNext = &scaling;
++                    if (vkGetPhysicalDeviceSurfaceCapabilities2KHR(physDevice, &query, &caps) != VK_SUCCESS ||
++                        (scaling.supportedPresentScaling & VK_PRESENT_SCALING_STRETCH_BIT_EXT) == 0)
++                        mNativePresentScaling = false;
++                }
++            }
++        }
++    }
+     vkDestroySurfaceKHR(instance, surfaceVk, nullptr);
+ 
+     DestroyWindow(mMockWindow);
+@@ -175,6 +207,12 @@
+     config->surfaceType &= ~EGL_WINDOW_BIT;
+ }
+ 
++void DisplayVkWin32::generateExtensions(egl::DisplayExtensions *outExtensions) const
++{
++    DisplayVk::generateExtensions(outExtensions);
++    outExtensions->windowFixedSize = mNativePresentScaling;
++}
++
+ const char *DisplayVkWin32::getWSIExtension() const
+ {
+     return VK_KHR_WIN32_SURFACE_EXTENSION_NAME;
