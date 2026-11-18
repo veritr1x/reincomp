@@ -49,8 +49,9 @@ They are a zip on this project's 0.1.0 release. ANGLE is built with this
 project's patches, which are in `third_party/angle/` with the pins of its
 sources; the other two DLLs come from the Firebase C++ SDK 9.6.0 and the
 Grpc.Core 2.26.0 package. The server is Bunker's `bunker-server` for Windows,
-from the Bunker release pinned in `bunker.lock.json` (1.12.11, the first with
-the import and save commands the launcher uses); `--unpinned-server` accepts
+from the Bunker release pinned in `bunker.lock.json` (1.12.12; the launcher
+needs its import and save commands, and 1.12.11 refuses a save made by another
+version); `--unpinned-server` accepts
 another build.
 
 A pack is made from the game's own code. Keep it, and anything built from it,

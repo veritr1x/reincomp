@@ -55,8 +55,10 @@ about 35 to 45 fps, and can freeze during a loading pause.
   (`bunker-server import`).
 - New: `-export-save` and `-import-save` back up and restore the save, in
   Bunker's backup format: a save moves between a phone and the PC either way.
-- The pinned server is Bunker 1.12.11, the first release with the import and
-  save commands, so a released server now works without `--unpinned-server`.
+- The pinned server is Bunker 1.12.12, so a released server now works without
+  `--unpinned-server`. 1.12.11 was the first with the import and save
+  commands, but refused a save made by another version; 1.12.12 snapshots the
+  save and updates it.
 
 ### CI
 - New: every push compiles the host layer, builds the launcher and parses the
