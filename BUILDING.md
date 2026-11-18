@@ -38,6 +38,19 @@ continues where it stopped.
    helper inliner. About a minute; later builds recompile only what changed.
 5. **Assemble the folder** (`build/make_release.py`).
 
+**The Bunker in the game.** For Ctrl+B to show the Bunker's pages, the folder
+needs a `pods` folder, which is not a download yet. Make it once and pass it
+with `--pods <folder>`, or copy it in as `pods` afterwards:
+
+```
+python build/make_pods.py --python <python-3.12-embed-amd64.zip> --bunker <Bunker checkout> --loader <WebView2Loader.dll> --out <folder>
+```
+
+The zip is python.org's Windows embeddable package. The checkout is Bunker at
+the release in `bunker.lock.json`, after its `scripts/prepare.py`. The DLL is
+the x64 one in Microsoft's Microsoft.Web.WebView2 NuGet package. The Python
+packages come from PyPI.
+
 `--toolchain`, `--deps`, `--launcher` and `--server` take your own in place
 of a download. With `--no-download` nothing is fetched, and the build stops at
 the game executable unless all of them are given.

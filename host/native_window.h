@@ -76,6 +76,11 @@ class NativeWindows {
   // placement (false). F11 and Alt+Enter toggle it on the window's UI thread;
   // those key presses are consumed there and never reach DrainEvents.
   void SetFullscreen(const Handle &,bool fullscreen);
+  // A hook on the window's UI thread, shown each message of this window before
+  // it is recorded or dispatched. True consumes a posted message; the sent ones
+  // it sees (size, focus gained, destroy) cannot be consumed.
+  using MessageHook=std::function<bool(void *hwnd,uint32_t message,uint64_t wparam,int64_t lparam)>;
+  void SetMessageHook(const Handle &,MessageHook);
   void Close(const Handle &);
  private:
   struct Impl;

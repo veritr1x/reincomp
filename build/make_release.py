@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 """Assemble the folder players unzip: launcher, game, server and licenses.
 
-    python build/make_release.py --exe EXE --launcher EXE --deps DIR --server EXE --out DIR
+    python build/make_release.py --exe EXE --launcher EXE --deps DIR --server EXE --out DIR [--pods DIR]
 
 DEPS holds what ships beside the game executable: angle/ (libEGL.dll and the
 rest), FirebaseCppApp-9_6_0.dll, grpc_csharp_ext.x64.dll and licenses/.
 SERVER is Bunker's bunker-server for Windows; its hash must be the one pinned
-in bunker.lock.json.
+in bunker.lock.json. PODS is the folder build/make_pods.py makes: with it,
+Ctrl+B in the game shows the Bunker's pages.
 """
 import argparse, hashlib, json, shutil, sys
 from pathlib import Path
@@ -26,6 +27,9 @@ reincomp.exe -export-save backup.zip   writes a backup of your save
 reincomp.exe -import-save backup.zip   restores one (also one made by Bunker on a phone)
 reincomp.exe -nosound                  plays without sound
 
+Ctrl+B in the game opens and closes the Bunker (Pod Programs), when the pods folder is here.
+F11 or Alt+Enter switches to full screen.
+
 Saves, logs and the imported files are kept in the data folder here.
 '''
 
@@ -34,6 +38,7 @@ def main():
     ap = argparse.ArgumentParser()
     for name in ('exe', 'launcher', 'deps', 'server', 'out'):
         ap.add_argument('--' + name, type=Path, required=True)
+    ap.add_argument('--pods', type=Path, help='the folder from make_pods.py (optional)')
     ap.add_argument('--unpinned-server', action='store_true', help='accept a server build other than the pinned release (to test one)')
     a = ap.parse_args()
     pin = json.loads((ROOT / 'bunker.lock.json').read_text())['bunker']['server']['windows-x86_64']['sha256']
@@ -54,6 +59,8 @@ def main():
     shutil.copytree(a.deps / 'licenses', out / 'licenses')
     shutil.copy2(ROOT / 'LICENSE', out / 'licenses/LICENSE.reincomp.txt')
     shutil.copy2(ROOT / 'THIRD-PARTY.md', out / 'licenses/THIRD-PARTY.md')
+    if a.pods:
+        shutil.copytree(a.pods, out / 'pods')
     (out / 'README.txt').write_text(README, newline='\r\n')
     print(out)
 

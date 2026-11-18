@@ -25,12 +25,27 @@ release therefore carries a `licenses/` folder with the texts named below.
 | `third_party/remill-include/` | Remill | Apache-2.0 |
 | `third_party/zlib/` | zlib: `zlib.h`, `zconf.h` and `libz-inflate.a`, zlib's inflate code built for MinGW-w64 | zlib license |
 | `third_party/angle-include/` | ANGLE: the Khronos EGL, GLES and KHR headers | Apache-2.0 and MIT (Khronos) |
+| `third_party/webview2/` | `WebView2.h` from Microsoft's Microsoft.Web.WebView2 package 1.0.2903.40 (its include of `EventToken.h` in lower case) | BSD-3-Clause (`LICENSE.txt` beside it) |
 | `third_party/angle/` | This project's patches to ANGLE, with the pins of the sources it is built from | BSD-3-Clause, as ANGLE |
+
+## The pods folder
+
+`build/make_pods.py` makes it; nothing in it comes from the game. Each
+license text is copied into its `licenses/` folder.
+
+| Part | License |
+|---|---|
+| Python 3.12 embeddable package (python.org) | PSF License |
+| `WebView2Loader.dll` (Microsoft.Web.WebView2 1.0.2903.40) | BSD-3-Clause |
+| Bunker's Pod Programs pages (`app/`) | MIT, with Bunker's own third-party notices |
+| fastapi, pydantic, starlette, uvicorn, h11, anyio, idna, click, jinja2, markupsafe, python-multipart, typing_extensions, msgpack, lz4, pycryptodome | MIT, BSD, Apache-2.0, PSF or public domain, each as its wheel states |
 
 ## Still to check
 
 - The 13 texts collected with ANGLE have not been checked one by one against
   the third-party parts its DLLs contain.
+- The licenses of the Python packages in the pods folder are taken from the
+  wheels and have not been read one by one.
 - The Firebase and gRPC DLLs need the Microsoft Visual C++ runtime, which is
   not shipped: it comes with Windows updates or Microsoft's redistributable.
 

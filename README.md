@@ -17,6 +17,9 @@ Windows x86-64 only, and not finished.
 
 - Works: the game starts, signs in to the local server and plays, at up to 4K,
   with the keyboard and with sound.
+- New: Ctrl+B opens the Bunker (Pod Programs) over the game, when the folder
+  to play from has a `pods` folder ([BUILDING.md](BUILDING.md)). Little of it
+  is tested yet.
 - Slow: about 35 to 45 fps in gameplay, and loading screens are long.
 - Sound is new. It plays through the first chapter's opening; later parts of
   the game may still stop on audio code that is not recompiled yet.

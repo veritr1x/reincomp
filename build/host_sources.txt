@@ -17,6 +17,7 @@ host/android_obb_storage.cpp
 host/android_assets.cpp
 host/apk_assets.cpp
 host/native_window.cpp
+host/bunker_view.cpp
 host/unity_lifecycle.cpp
 host/signal_host.cpp
 host/signal_sleep.cpp

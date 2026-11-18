@@ -12,6 +12,7 @@ reincomp/
   game/     bunker-game-bootstrap.exe, FirebaseCppApp-9_6_0.dll,
             grpc_csharp_ext.x64.dll, angle/ (libEGL.dll and the rest)
   server/   bunker-server.exe, the file pinned in ../bunker.lock.json
+  pods/     optional: Python, Bunker's pages and WebView2Loader.dll (build/make_pods.py)
   licenses/
 ```
 
@@ -28,6 +29,19 @@ When `data/assets` holds no imported files, the launcher runs
 and shows the progress. The dump is extracted next to any earlier files and
 swapped in only when complete. `-assets <folder>` uses a folder imported
 elsewhere instead.
+
+## The Bunker in the game (Ctrl+B)
+
+With a `pods/` folder, the launcher starts the server with its control
+endpoint (`-control`, a random token) and starts Bunker's Pod Programs beside
+it with the Python in `pods/python`. The game does not wait for it. When the
+pages are served, the launcher writes their address and token to
+`data/bunker-view.json`. Ctrl+B in the game window opens a WebView2 pane over
+the game and loads them; Ctrl+B again, or the pages' Close, hides it. The
+game keeps running underneath. Pod Programs keeps its own files in
+`data/pods`, its log is `data/pods.log`, and the pane's browser data is in
+`data/webview`. It needs the Microsoft Edge WebView2 Runtime, which Windows
+11 has.
 
 ## What "prepare" does
 
@@ -52,6 +66,8 @@ Every other APK entry is copied as stored. No code changes.
 - The master data is installed as supplied. On a phone, Pod Programs then
   adjusts it (the events calendar, language layers); that step is not part of
   this launcher.
+- The `pods/` folder is not downloaded by the build yet: it is made with
+  `build/make_pods.py`.
 - The game window is fixed at 1280x720.
 
 ## Build

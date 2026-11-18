@@ -75,6 +75,7 @@ class NativeWindows::Window {
   std::vector<Event> events;
   // UI-thread only: borderless fullscreen state and the framed placement.
   bool fullscreen=false;WINDOWPLACEMENT framed{sizeof(WINDOWPLACEMENT)};
+  MessageHook hook;
   explicit Window(uint64_t owner,int32_t width,int32_t height,const std::u16string &title,bool visible)
       :owner(owner),token(WindowToken()) {
     std::promise<void> ready;auto started=ready.get_future();
@@ -109,6 +110,7 @@ class NativeWindows::Window {
           }else{
             // Observe only messages dequeued for this owned HWND. In
             // particular, retain MSG.time rather than sampling a later clock.
+            if(message.hwnd==Native()&&hook&&hook(message.hwnd,message.message,message.wParam,message.lParam))continue;
             if(message.hwnd==Native()&&FullscreenHotkey(message)){ApplyFullscreen(!fullscreen);continue;}
             if(message.hwnd==Native()){
               Event event{};
@@ -214,6 +216,7 @@ class NativeWindows::Window {
     auto *self=reinterpret_cast<Window*>(GetWindowLongPtrW(window,GWLP_USERDATA));
     if(message==WM_NCCREATE){self=static_cast<Window*>(reinterpret_cast<CREATESTRUCTW*>(lparam)->lpCreateParams);
       SetWindowLongPtrW(window,GWLP_USERDATA,reinterpret_cast<LONG_PTR>(self));}
+    if(self&&self->hook&&(message==WM_SIZE||message==WM_SETFOCUS||message==WM_DESTROY))self->hook(window,message,wparam,lparam);
     if(self){
       std::lock_guard lock(self->mutex);
       switch(message){
@@ -324,6 +327,10 @@ void NativeWindows::ResizeClient(const Handle &window,int32_t width,int32_t heig
 void NativeWindows::SetFullscreen(const Handle &window,bool fullscreen){
   if(!window||window->owner!=impl_->owner)throw std::invalid_argument("window fullscreen owner mismatch");
   auto *raw=window.get();window->Submit([raw,fullscreen]{raw->ApplyFullscreen(fullscreen);});
+}
+void NativeWindows::SetMessageHook(const Handle &window,MessageHook hook){
+  if(!window||window->owner!=impl_->owner)throw std::invalid_argument("window hook owner mismatch");
+  auto *raw=window.get();window->Submit([raw,&hook]{raw->hook=std::move(hook);});
 }
 void NativeWindows::Close(const Handle &window){
   if(!window||window->owner!=impl_->owner)throw std::invalid_argument("window close owner mismatch");

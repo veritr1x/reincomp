@@ -14,6 +14,26 @@ about 35 to 45 fps, and can freeze during a loading pause.
 
 ## 2026-11-18
 
+### The Bunker in the game
+- New: Ctrl+B in the game window opens the Bunker's pages (Pod Programs) in
+  a pane over the game, and closes it again; the pages' own Close closes it
+  too. The game keeps running underneath. The pane is WebView2
+  (`host/bunker_view.cpp`), loaded through `WebView2Loader.dll`; without the
+  WebView2 Runtime, Ctrl+B does nothing and the game log says why.
+- New: with a `pods/` folder beside it, the launcher starts the server with
+  its control endpoint and Bunker's Pod Programs beside it, and tells the
+  game where the pages are (`data/bunker-view.json`). The game does not wait
+  for them.
+- New: `build/make_pods.py` makes that folder: Python 3.12, the packages
+  Pod Programs needs, Bunker's pages at the pinned release, and
+  `WebView2Loader.dll`, with their license texts. `make_release.py` and
+  `from_apk.py` take it with `--pods`; it is not a download yet.
+- Checked in the game at the title screen: the pane opens and closes with
+  Ctrl+B from the game and from inside the pane, the Pod Programs home page
+  shows, and a backup made through the pages was written. Not checked:
+  clicking through the pages in the pane, the pages' Close, and a save edit
+  while playing.
+
 ### Build from your own APK
 - The build needs only the APK and clang: `python build/from_apk.py --apk
   <APK> --clang <clang.exe> --out <folder>`. It downloads the toolchain, the

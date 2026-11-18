@@ -28,6 +28,7 @@
 #include "android_choreographer.h"
 #include "unicode.h"
 #include "apk_assets.h"
+#include "bunker_view.h"
 #include "native_window.h"
 #include "unity_touch_input.h"
 #include "game_frame_rate.h"
@@ -409,6 +410,9 @@ int main(int argc,char **argv){
   for(int i=1;i+1<argc;++i)if(!std::strcmp(argv[i],"--grpc-native")){GameGrpcNative()=argv[i+1];for(int j=i;j+2<argc;++j)argv[j]=argv[j+2];argc-=2;break;}
   for(int i=1;i<argc;++i)if(!std::strcmp(argv[i],"--server-profile")){GameServerProfile()=true;for(int j=i;j+1<argc;++j)argv[j]=argv[j+1];--argc;break;}
   for(int i=1;i<argc;++i)if(!std::strcmp(argv[i],"--sound")){GameSound()=true;for(int j=i;j+1<argc;++j)argv[j]=argv[j+1];--argc;break;}
+  // --bunker-view LOADER STATE DATA: Ctrl+B shows the Bunker's pages over the game (bunker_view.h).
+  std::string bunker_view_loader,bunker_view_state,bunker_view_data;
+  for(int i=1;i+3<argc;++i)if(!std::strcmp(argv[i],"--bunker-view")){bunker_view_loader=argv[i+1];bunker_view_state=argv[i+2];bunker_view_data=argv[i+3];for(int j=i;j+4<argc;++j)argv[j]=argv[j+4];argc-=4;break;}
   // --render-size WxH: Unity renders at this fixed size (e.g. 3840x2160) and the
   // presenter scales it to the window. --fullscreen: borderless on the monitor.
   int32_t render_width=0,render_height=0;bool start_fullscreen=false;
@@ -1510,6 +1514,10 @@ int main(int argc,char **argv){
         if(!Translated(recreate)||!Translated(changed))throw std::runtime_error("verified surface natives are not translated");
         auto window=native_windows->Create(width,height,frame_gate?u"Bunker":u"Bunker native surface diagnostic",frame_gate);
         if(frame_gate&&start_fullscreen)native_windows->SetFullscreen(window,true);
+        if(frame_gate&&!bunker_view_loader.empty()){
+          auto view=std::make_shared<bunker::windows::BunkerView>(bunker_view_loader,bunker_view_state,bunker_view_data);
+          native_windows->SetMessageHook(window,[view](void *hwnd,uint32_t message,uint64_t wparam,int64_t lparam){return view->Message(hwnd,message,wparam,lparam);});
+        }
         auto surface=native_windows->NewSurface(window);
         {LocalFrame locals(java);displays.BindActivityWindow(context.Activity(),native_windows->NativeHandleReader(window));}
         auto token=native_windows->FromSurface(surface);

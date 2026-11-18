@@ -6,6 +6,7 @@
 //
 //	game/     bunker-game-bootstrap.exe and its DLLs (angle/, Firebase, gRPC)
 //	server/   bunker-server.exe, from Bunker's releases
+//	pods/     optional: what serves the Bunker's pages, shown in the game with Ctrl+B
 //	*.apk     the player's game APK (any name)
 //	data/     made here: the prepared APK, its libraries, saves and game storage
 //
@@ -15,6 +16,7 @@ package main
 import (
 	"archive/zip"
 	"bufio"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -117,8 +119,26 @@ func run(assets, fps, render string, prepareOnly bool) error {
 		return e
 	}
 
+	// The Bunker's pages (Pod Programs) are served when the pods folder is there.
+	pods := filepath.Join(root, "pods")
+	if _, e := os.Stat(filepath.Join(pods, "app", "desktop_runtime.py")); e != nil {
+		pods = ""
+	}
+	view := filepath.Join(data, "bunker-view.json")
+	os.Remove(view)
+
 	fmt.Println("Starting the server...")
 	serve := exec.Command(server, "-data", filepath.Join(data, "server"), "-assets", assets, "-port-offset", portOffset, "-stdin")
+	token := ""
+	if pods != "" {
+		secret := make([]byte, 24)
+		if _, e := rand.Read(secret); e != nil {
+			return e
+		}
+		token = hex.EncodeToString(secret)
+		serve.Args = append(serve.Args, "-control", "127.0.0.1:0")
+		serve.Env = append(os.Environ(), "BUNKER_CONTROL_TOKEN="+token)
+	}
 	hold, e := serve.StdinPipe() // closing it stops the server, also when this program dies
 	if e != nil {
 		return e
@@ -137,8 +157,19 @@ func run(assets, fps, render string, prepareOnly bool) error {
 		return fmt.Errorf("The server did not start: %v", e)
 	}
 	defer func() { hold.Close(); serve.Wait() }()
-	ready := make(chan string, 1)
-	go func() { line, _ := bufio.NewReader(out).ReadString('\n'); ready <- line; io.Copy(io.Discard, out) }()
+	ready, control := make(chan string, 1), make(chan string, 1)
+	go func() {
+		lines := bufio.NewReader(out)
+		line, _ := lines.ReadString('\n')
+		ready <- line
+		if pods != "" { // the second line names the control endpoint
+			var answer struct{ Control string }
+			line, _ = lines.ReadString('\n')
+			json.Unmarshal([]byte(line), &answer)
+			control <- answer.Control
+		}
+		io.Copy(io.Discard, out)
+	}()
 	select {
 	case line := <-ready:
 		if !strings.Contains(line, "\"game\"") {
@@ -146,6 +177,11 @@ func run(assets, fps, render string, prepareOnly bool) error {
 		}
 	case <-time.After(3 * time.Minute):
 		return fmt.Errorf("The server took too long to start. See %s.", log.Name())
+	}
+
+	if pods != "" {
+		stop := servePods(root, pods, data, assets, token, control, view)
+		defer stop()
 	}
 
 	fmt.Println("Starting the game...")
@@ -163,6 +199,9 @@ func run(assets, fps, render string, prepareOnly bool) error {
 	if render != "" {
 		args = append(args, "--render-size", render)
 	}
+	if pods != "" {
+		args = append(args, "--bunker-view", filepath.Join(pods, "WebView2Loader.dll"), view, filepath.Join(data, "webview"))
+	}
 	play := exec.Command(game, args...)
 	play.Dir = dir
 	gameLog, e := os.Create(filepath.Join(data, "game.log"))
@@ -175,6 +214,77 @@ func run(assets, fps, render string, prepareOnly bool) error {
 		return fmt.Errorf("The game stopped: %v. See %s.", e, gameLog.Name())
 	}
 	return nil
+}
+
+// servePods starts the Bunker's pages (Pod Programs) beside the server and
+// writes where they are to STATE, which the game reads when Ctrl+B is pressed:
+// {"url","token"}, or {"error"} when they did not start. The game does not
+// wait for it. The returned function stops the pages.
+func servePods(root, pods, data, assets, token string, control <-chan string, state string) func() {
+	report := func(answer any) {
+		b, _ := json.Marshal(answer)
+		if os.WriteFile(state+".part", b, 0o600) == nil {
+			os.Rename(state+".part", state)
+		}
+	}
+	fail := func(text string) {
+		report(map[string]string{"error": text + " See pods.log in the data folder."})
+	}
+	// The master data as the player supplied it, which Pod Programs keeps to start changes from.
+	master := filepath.Join(root, masterName)
+	if _, e := os.Stat(master); e != nil {
+		master = filepath.Join(assets, "assets", "release", masterName)
+	}
+	url := ""
+	select {
+	case url = <-control:
+	case <-time.After(30 * time.Second):
+	}
+	if url == "" {
+		fail("The Bunker did not start: the server has no control endpoint.")
+		return func() {}
+	}
+	run := exec.Command(filepath.Join(pods, "python", "python.exe"), "-I", "-X", "utf8", filepath.Join(pods, "app", "desktop_runtime.py"),
+		"--data", filepath.Join(data, "server"), "--assets", assets, "--tools", filepath.Join(data, "pods"),
+		"--control", url, "--original-master", master)
+	run.Dir = filepath.Join(pods, "app")
+	run.Env = append(os.Environ(), "BUNKER_CONTROL_TOKEN="+token)
+	hold, e1 := run.StdinPipe() // closing it stops the pages, also when this program dies
+	out, e2 := run.StdoutPipe()
+	log, e3 := os.Create(filepath.Join(data, "pods.log"))
+	if e := errors.Join(e1, e2, e3); e != nil {
+		fail("The Bunker did not start: " + e.Error() + ".")
+		return func() {}
+	}
+	run.Stderr = log
+	if e := run.Start(); e != nil {
+		log.Close()
+		fail("The Bunker did not start: " + e.Error() + ".")
+		return func() {}
+	}
+	go func() {
+		var answer struct{ URL, Token string }
+		line, _ := bufio.NewReader(out).ReadString('\n')
+		if json.Unmarshal([]byte(line), &answer) != nil || answer.URL == "" {
+			fail("The Bunker did not start.")
+		} else {
+			report(map[string]string{"url": answer.URL, "token": answer.Token})
+		}
+		io.Copy(io.Discard, out)
+	}()
+	return func() {
+		hold.Close()
+		done := make(chan struct{})
+		go func() { run.Wait(); close(done) }()
+		select {
+		case <-done:
+		case <-time.After(5 * time.Second):
+			run.Process.Kill()
+			<-done
+		}
+		log.Close()
+		os.Remove(state)
+	}
 }
 
 // saves keeps or restores the player's save with the server's own commands

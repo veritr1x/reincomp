@@ -91,6 +91,7 @@ def main():
     ap.add_argument('--deps', type=Path, help='your own folder of files that ship beside the game (see make_release.py)')
     ap.add_argument('--launcher', type=Path, help='your own reincomp.exe')
     ap.add_argument('--server', type=Path, help='your own bunker-server.exe')
+    ap.add_argument('--pods', type=Path, help='the folder from build/make_pods.py: Ctrl+B then shows the Bunker in the game')
     ap.add_argument('--unpinned-server', action='store_true', help='accept a server build other than the pinned release')
     ap.add_argument('--no-download', action='store_true', help='download nothing; use only what is given')
     ap.add_argument('--out', type=Path, required=True)
@@ -137,6 +138,7 @@ def main():
         sys.exit(f'{folder} already exists: move it away first.')
     step('Assembling the folder', [sys.executable, ROOT / 'build/make_release.py', '--exe', exe, '--launcher', launcher,
                                    '--deps', deps, '--server', server, '--out', folder,
+                                   *(['--pods', a.pods] if a.pods else []),
                                    *(['--unpinned-server'] if a.unpinned_server else [])])
     print(f'\nDone. Put your game APK, {json.dumps("20240404193219.bin.e")} and the resource dump in\n  {folder}\nand run reincomp.exe.')
 
