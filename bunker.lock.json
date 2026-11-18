@@ -1,11 +1,11 @@
 {
   "bunker": {
     "repository": "https://github.com/veritr1x/bunker",
-    "release": "v1.12.9",
+    "release": "v1.12.11",
     "server": {
       "windows-x86_64": {
-        "file": "bunker-server-1.12.9-windows-x86_64.exe",
-        "sha256": "2c14cf4a5d48c8331538866c673208c9397721539dce85da128e92f9c6af806c"
+        "file": "bunker-server-1.12.11-windows-x86_64.exe",
+        "sha256": "e60890c12acf7d7b7ad36bac6f2895ca09fa5895f3077971ee81f4ce985596a7"
       }
     }
   }

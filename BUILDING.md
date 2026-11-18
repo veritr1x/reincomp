@@ -39,9 +39,9 @@ The deps folder holds what ships beside the game: `angle/` (ANGLE's
 `libEGL.dll`, `libGLESv2.dll` and the DLLs they need),
 `FirebaseCppApp-9_6_0.dll`, `grpc_csharp_ext.x64.dll` and `licenses/`
 ([THIRD-PARTY.md](THIRD-PARTY.md)). The server is Bunker's `bunker-server`
-for Windows, from Bunker's releases. The launcher's import and save commands
-need a server newer than Bunker 1.12.10; until Bunker's next release, build
-it from Bunker's `desktop-pods` branch and pass `--unpinned-server`. The deps folder is not published
+for Windows, from the Bunker release pinned in `bunker.lock.json` (1.12.11,
+the first with the import and save commands the launcher uses);
+`--unpinned-server` accepts another build. The deps folder is not published
 anywhere yet: ANGLE has to be built with this project's presentation patch,
 and the two DLLs come from the Firebase C++ SDK 9.6.0 and the Grpc.Core 2.26.0
 package.
