@@ -29,6 +29,8 @@ about 35 to 45 fps, and can freeze during a loading pause.
   lists at build time, and the Remill, zlib and ANGLE headers are in
   `third_party/`.
 - `build.py --compile-only` compiles the host layer with no pack.
+- The toolchain builds with a Visual Studio newer than LLVM 18 (2022's current
+  compiler tools), which otherwise refuse clang 18 in their headers.
 - The pinned Remill revision is the one the working build was lifted with
   (3fd14f3, plus the indexed-fmul patch).
 

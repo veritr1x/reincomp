@@ -61,6 +61,8 @@ def main():
     ap.add_argument('--out', type=Path, required=True)
     a = ap.parse_args()
     llvm, work, out = a.llvm.resolve(), a.work.resolve(), a.out.resolve()
+    # A Visual Studio newer than LLVM 18 refuses this clang in its headers unless told otherwise.
+    os.environ['CL'] = (os.environ.get('CL', '') + ' /D_ALLOW_COMPILER_AND_STL_VERSION_MISMATCH').strip()
     work.mkdir(parents=True, exist_ok=True)
     out.mkdir(parents=True, exist_ok=True)
     clang_cl, clangxx = llvm / 'bin/clang-cl.exe', llvm / 'bin/clang++.exe'
