@@ -47,6 +47,14 @@ Options includes save import and export, master-data import, auto-deploy,
 theme, server status and the log. Stop Lunar Tear before changing the
 installed resources or importing a save. Deploy starts the game in this window.
 
+In the portable Windows player, **Options → Check for updates** offers
+**Update and restart** when a newer Windows release is available. Enable
+**Install updates automatically** to check and install before gameplay.
+The updater rebuilds the release with the original APK and master data already
+in the installation, verifies the executable against Bunker's published SHA-256,
+then restarts it in place. Imported resources, saves and settings stay in their
+existing folders. An offline startup can still enter the game.
+
 ## The Bunker in the game (Ctrl+B)
 
 With a `pods/` folder, the launcher starts the server with its control

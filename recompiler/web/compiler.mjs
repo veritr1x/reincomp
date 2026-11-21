@@ -101,6 +101,8 @@ export async function compileWindows({apk,master,log=()=>{},progress,workers,pre
 
 export async function packagePlayer({apk,master,patchedMaster,metadata,runtime,runtimeInfo,read,log}) {
     const player=await (await get("player.json")).json();
+    const {bunkerVersion}=await (await get("kit.json")).json();
+    if(!/^\d+\.\d+\.\d+$/.test(bunkerVersion))throw Error("Invalid Windows kit version");
     log("Packaging Nier Reincarnation.exe…");
     const pieces=[];
     for(const [path,hash] of player.parts)pieces.push(await checked(path,hash));
@@ -112,6 +114,7 @@ export async function packagePlayer({apk,master,patchedMaster,metadata,runtime,r
         yield {path,blob};
       }
       yield {path:"game/GuestRuntime.dll",blob:runtime,prepared:runtimeInfo};
+      yield {path:"game/windows-version.txt",blob:new Blob([bunkerVersion+"\n"])};
       yield {path:"data/original-master.bin.e",blob:master};
       yield {path:"data/import-master.bin.e",blob:patchedMaster};
       yield {path:"data/game-sound.apk",blob:apk};

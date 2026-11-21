@@ -1,17 +1,18 @@
 {
   "portable": {
-    "sha256": "e6bff5255164d6b6ef39b2a2d7a6fffe61ad3365e87fdeedb58ad72f485032ff",
-    "size": 1057580443,
+    "bunkerVersion": "1.12.16",
+    "sha256": "2420306eae0509a316e23b35d80494f6d634f0e00a7f2b8d5e3d583e76217ba2",
+    "size": 1057618945,
     "playerMembers": {
-      "game/EngineCalls.dll": "2faf08b19225c022ea12254eea1e6b562e5a4c36e75e556014fcf3cbe2c3a336",
+      "game/EngineCalls.dll": "776e89b6322f93228f69f7967860c39908fb2b9f29649112c625f36b9f9cfc58",
       "game/GameAssembly.dll": "45d218db6a6706e02552fa41c9869adf090a6c1d371563ce4693e22a70db9315",
       "game/archive-media.exe": "16b2edfdfd5347f1f8a2806490bc980c26dd692e0ac989cbdb5663fe4a968734",
       "game/desktop_bundles.py": "514548a3bd9a53e65e3c6b661bdea365c3917795b10f66df2afb98f120add274",
       "game/desktop_services.py": "1ef42d2a2c374f4b8cb2e1b782409a0716eec7e8953d60dd9b74d7427d1fb8dc",
-      "game/resource-setup.css": "8aa47fe86a83c99ae464a27da63f6d74b6f758d133daaff01b82470018a3f8a0",
-      "game/resource-setup.html": "a6febc2606df1e85d0f742484adf43bea3487c03dc8dd67df07e57b98769d758",
-      "game/resource-window.exe": "b03a66faa75d78089a34a759094ff97d9a24d5eae0efa13dfb04444660028210",
-      "launcher.exe": "da35945e6fb37bfde245d1c2349ac4ff5085b14deb88fa06d29808292a658317",
+      "game/resource-setup.css": "9e053656b6aa02b705eb89fc5f1b54b13e77f633cbd86777cacc8912273b242a",
+      "game/resource-setup.html": "b10c2688bd0ecee80f861f4282427d6a83a6306c798164a5e99a2fd50da9d481",
+      "game/resource-window.exe": "60825e4ab4cbdabf53ddf50b12a950de32faa62b93df236d28f92544b8d4fca2",
+      "launcher.exe": "0c01108680e6f09e1011e6405f7c77de818e4c6158171d0d96c21fd0a56ecb4b",
       "server/bunker-server.exe": "dc4973fd7562bde0451e78056b9ccf7e9f599c3511723643a6528ecc59279ff5"
     },
     "hostObjects": {

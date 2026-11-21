@@ -20,7 +20,7 @@
 <button class="outline" id="more" aria-label="{{ t('launcher.main.options') }}" aria-haspopup="dialog">⋮</button></header>
 <section class="update" id="release" aria-label="{{ t('launcher.main.update') }}" hidden><div class="panel">
 <div class="update-line"><span id="release-message"></span><a id="release-notes" target="_blank" rel="noopener">{{ t('launcher.main.whats_new') }} ›</a></div>
-<div class="update-actions"><a class="solid" href="https://veritr1x.github.io/bunker/" target="_blank" rel="noopener">{{ t('launcher.main.web_builder') }}</a>
+<div class="update-actions"><button class="solid" id="install-update" hidden>Update and restart</button><a class="solid" id="update-builder" href="https://veritr1x.github.io/bunker/" target="_blank" rel="noopener">{{ t('launcher.main.web_builder') }}</a>
 <button class="outline" id="later">{{ t('launcher.main.later') }}</button><button class="outline" id="skip">{{ t('launcher.main.skip') }}</button></div></div></section>
 <div class="columns">
 <section class="section system">{{ heading('launcher.main.system') }}<div class="panel">
@@ -49,6 +49,7 @@
 {{ option('import-master','launcher.menu.import_master') }}{{ option('export-save','launcher.menu.export_save') }}{{ option('import-save','launcher.menu.import_save') }}
 {{ heading('launcher.menu.support') }}{{ option('show-log','launcher.menu.log') }}<a id="export-log" class="option" href="log" download="Lunar Tear.log">{{ t('launcher.menu.export_log') }}</a>
 {{ option('auto-deploy','launcher.menu.auto_deploy_on') }}{{ option('display-theme','launcher.display.title') }}{{ option('updates','launcher.menu.updates_on') }}{{ option('check-updates','launcher.menu.check_updates') }}
+<button class="option" id="auto-install" hidden></button>
 <a class="option" href="/display" data-program aria-disabled="true">{{ t('launcher.menu.app_settings') }}</a>
 <button class="option" data-dialog="help-dialog">{{ t('launcher.menu.help') }}</button><button class="option" data-dialog="about-dialog">{{ t('launcher.menu.about') }}</button>
 </div></div></dialog>
@@ -77,6 +78,7 @@ const el=id=>document.getElementById(id);
 const programLinks=document.querySelectorAll('[data-program]');
 const systemDark=matchMedia('(prefers-color-scheme: dark)');
 let settings, latest='', postponed=false;
+let pendingAuto=false;
 const words={
 {% for key in ['chip.ready','chip.no_files','chip.importing','chip.running','chip.starting','chip.standing_by','chip.waiting_for_files','main.no_save','main.change','main.choose','index.not_built','index.ready','main.choose_files_hint','main.keep_open','menu.auto_deploy_on','menu.auto_deploy_off','menu.updates_on','menu.updates_off','display.light','display.dark','display.system','menu.check_updates'] %}
   '{{ key }}':{{ t('launcher.'+key)|tojson }},
@@ -108,6 +110,12 @@ async function update(){
   for(const id of ['check','stop'])el(id).disabled=s.busy||s.deployed;
   el('auto-deploy').textContent=words[s.autoDeploy?'menu.auto_deploy_on':'menu.auto_deploy_off'];
   el('auto-deploy').disabled=s.busy||s.deployed;
+  el('install-update').disabled=s.busy||s.services||s.deployed;
+  el('auto-install').hidden=!s.portableUpdate;
+  if(pendingAuto&&!el('install-update').disabled){
+    pendingAuto=false;
+    if(!s.message.startsWith('Update failed:'))act('install-update');
+  }
   el('deploy').disabled=!s.ready||s.busy||s.deployed;
   for(const link of programLinks)link.setAttribute('aria-disabled',String(el('deploy').disabled));
   const progress=s.busy&&!s.ready&&s.message.match(/(\d+)%/);
@@ -159,6 +167,8 @@ async function prefs(changes){
   const init=changes?{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(changes)}:{};
   const r=await fetch('preferences',init);if(!r.ok)throw Error(await r.text());
   settings=await r.json();setTheme();
+  el('auto-install').textContent='Install updates automatically: '+(settings.autoInstall?'On':'Off');
+  el('auto-install').disabled=!settings.updates;
   el('display-theme').textContent=words['menu.display'].replace('__MODE__',words['display.'+settings.theme]);
   for(const b of document.querySelectorAll('[data-theme-choice]'))b.setAttribute('aria-pressed',String(b.dataset.themeChoice===settings.theme));
   el('updates').textContent=words[settings.updates?'menu.updates_on':'menu.updates_off'];
@@ -169,19 +179,24 @@ el('updates').onclick=async()=>{closeOptions();try{await prefs({updates:!setting
 async function checkUpdate(manual){
   try{
     const r=await fetch('update');if(!r.ok)throw Error(await r.text());
-    const {version}=await r.json(),current={{ version|tojson }};
-    if(version.localeCompare(current,undefined,{numeric:true})<=0){
+    const {version,current,available,portable}=await r.json();
+    if(!available){
       el('release').hidden=true;if(manual)notice(words['menu.check_updates'],'Bunker '+current+' is up to date.');return;
     }
     latest=version;
+    el('install-update').hidden=!portable;
+    el('update-builder').hidden=portable;
     if(manual){postponed=false;if(settings.skipped)await prefs({skipped:''})}
     el('release-message').textContent=words['main.update_available'].replace('__VERSION__',version);
     el('release-notes').href='https://github.com/veritr1x/bunker/releases/tag/v'+encodeURIComponent(version);
     el('release').hidden=postponed||settings.skipped===latest;
+    pendingAuto=portable&&!manual&&!el('release').hidden&&settings.autoInstall;
   }catch(e){if(manual)notice(words['menu.check_updates'],e.message)}
 }
 el('check-updates').onclick=()=>{closeOptions();checkUpdate(true)};
-el('later').onclick=()=>{postponed=true;el('release').hidden=true};
+el('install-update').onclick=()=>{pendingAuto=false;act('install-update')};
+el('auto-install').onclick=async()=>{try{await prefs({autoInstall:!settings.autoInstall})}catch(error){detail(error.message)}};
+el('later').onclick=()=>{pendingAuto=false;postponed=true;el('release').hidden=true};
 el('skip').onclick=async()=>{try{await prefs({skipped:latest});el('release').hidden=true}catch(e){detail(e.message)}};
 prefs().then(()=>{if(settings.updates)checkUpdate(false)}).catch(e=>detail(e.message));
 (async function poll(){try{await update()}catch(e){detail(e.message)}finally{setTimeout(poll,650)}})();

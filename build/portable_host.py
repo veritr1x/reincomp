@@ -171,5 +171,6 @@ def prepare_site(a, work, windows, bunker, release):
         shutil.copyfile(item,windows/item.name)
     manifest = windows/'kit.json'
     index = json.loads(manifest.read_bytes())
+    index['bunkerVersion'] = PORTABLE['bunkerVersion']
     index['files'] = {name:digest(windows/name) for name in index['files']}
     manifest.write_text(json.dumps(index,sort_keys=True),encoding='utf-8')

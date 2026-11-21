@@ -26,9 +26,10 @@ var hideHelperWindow = func(*exec.Cmd) {}
 var playerParent atomic.Uintptr
 
 type launcherPreferences struct {
-	Theme   string `json:"theme"`
-	Updates bool   `json:"updates"`
-	Skipped string `json:"skipped,omitempty"`
+	Theme       string `json:"theme"`
+	Updates     bool   `json:"updates"`
+	AutoInstall bool   `json:"autoInstall"`
+	Skipped     string `json:"skipped,omitempty"`
 }
 
 func readLauncherPreferences(data string) launcherPreferences {
@@ -53,6 +54,7 @@ type resourceWindow struct {
 	status                                      string
 	busy, verified, deployed, services, running bool
 	deploy                                      chan struct{}
+	restart                                     chan struct{}
 	startServices, stopServices                 chan struct{}
 	checkURL, checkToken                        string
 	assetRoot                                   string
@@ -100,6 +102,17 @@ func firstRunWindow(root, server, assets, master, dump string, ready bool) (*res
 	addr := listener.Addr().String()
 	ctx, cancel := context.WithCancel(context.Background())
 	w := &resourceWindow{done: make(chan struct{}), deploy: make(chan struct{}), cancel: cancel, verified: ready, assetRoot: assets}
+	w.restart = make(chan struct{})
+	exe, _ := os.Executable()
+	portableUpdate := canUpdatePortable(root, exe)
+	currentVersion := installedWindowsVersion(root)
+	var available windowsRelease
+	var updating bool
+	updateError := filepath.Join(root, "data", "update-error.txt")
+	if msg, e := os.ReadFile(updateError); e == nil {
+		w.status = "Update failed: " + string(msg)
+		os.Remove(updateError)
+	}
 	w.startServices = make(chan struct{}, 1)
 	w.stopServices = make(chan struct{}, 1)
 	manual := filepath.Join(root, "data", "manual-deploy")
@@ -201,9 +214,10 @@ func firstRunWindow(root, server, assets, master, dump string, ready bool) (*res
 					return
 				}
 				var change struct {
-					Theme   *string
-					Updates *bool
-					Skipped *string
+					Theme       *string
+					Updates     *bool
+					AutoInstall *bool
+					Skipped     *string
 				}
 				if json.NewDecoder(http.MaxBytesReader(out, r.Body, 1024)).Decode(&change) != nil {
 					http.Error(out, "Invalid preferences", 400)
@@ -220,6 +234,9 @@ func firstRunWindow(root, server, assets, master, dump string, ready bool) (*res
 				}
 				if change.Updates != nil {
 					p.Updates = *change.Updates
+				}
+				if change.AutoInstall != nil {
+					p.AutoInstall = *change.AutoInstall
 				}
 				if change.Skipped != nil {
 					if *change.Skipped != "" && !releaseTag.MatchString(*change.Skipped) {
@@ -249,24 +266,16 @@ func firstRunWindow(root, server, assets, master, dump string, ready bool) (*res
 				http.Error(out, "Method", 405)
 				return
 			}
-			req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.github.com/repos/veritr1x/bunker/releases/latest", nil)
-			req.Header.Set("User-Agent", "Bunker-Windows-launcher")
-			client := http.Client{Timeout: 12 * time.Second}
-			resp, err := client.Do(req)
+			release, err := latestWindowsRelease(r.Context())
 			if err != nil {
-				http.Error(out, "Unable to check for updates.", 502)
+				http.Error(out, "Unable to check for Windows updates.", 502)
 				return
 			}
-			defer resp.Body.Close()
-			var release struct {
-				Tag string `json:"tag_name"`
-			}
-			if resp.StatusCode != 200 || json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&release) != nil || !releaseTag.MatchString(release.Tag) {
-				http.Error(out, "Unable to read Bunker's latest release.", 502)
-				return
-			}
+			w.mu.Lock()
+			available = release
+			w.mu.Unlock()
 			out.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(out).Encode(map[string]string{"version": strings.TrimPrefix(release.Tag, "v")})
+			json.NewEncoder(out).Encode(map[string]any{"version": release.Version, "current": currentVersion, "available": newerVersion(release.Version, currentVersion), "portable": portableUpdate})
 		case "":
 			if r.Method != http.MethodGet {
 				http.Error(out, "Method", 405)
@@ -287,7 +296,8 @@ func firstRunWindow(root, server, assets, master, dump string, ready bool) (*res
 				size = s.Size()
 			}
 			json.NewEncoder(out).Encode(map[string]any{"message": w.status, "ready": w.verified, "busy": w.busy, "deployed": w.deployed,
-				"services": w.services, "running": w.running, "saveBytes": size, "archiveBytes": archiveSize(root), "autoDeploy": !regularFile(manual)})
+				"services": w.services, "running": w.running, "saveBytes": size, "archiveBytes": archiveSize(root), "autoDeploy": !regularFile(manual),
+				"portableUpdate": portableUpdate, "updating": updating})
 		case "log":
 			if r.Method != http.MethodGet {
 				http.Error(out, "Method", 405)
@@ -314,7 +324,7 @@ func firstRunWindow(root, server, assets, master, dump string, ready bool) (*res
 			if previous, e := os.ReadFile(lastLink); e == nil {
 				out.Write(previous)
 			}
-		case "choose", "choose-folder", "choose-in-place", "resource-link", "deploy", "program", "auto-deploy", "import-save", "export-save", "import-master", "stop", "check":
+		case "install-update", "choose", "choose-folder", "choose-in-place", "resource-link", "deploy", "program", "auto-deploy", "import-save", "export-save", "import-master", "stop", "check":
 			if r.Method != http.MethodPost || r.Header.Get("Origin") != "http://"+addr {
 				http.Error(out, "Forbidden", 403)
 				return
@@ -326,6 +336,26 @@ func firstRunWindow(root, server, assets, master, dump string, ready bool) (*res
 				return
 			}
 			switch action {
+			case "install-update":
+				if w.services || !portableUpdate || !newerVersion(available.Version, currentVersion) {
+					http.Error(out, "Stop Lunar Tear and check for a newer Windows release first.", 409)
+					return
+				}
+				w.busy, updating = true, true
+				w.status = "Preparing Windows update…"
+				go func(release windowsRelease) {
+					progress := func(msg string) { w.mu.Lock(); w.status = msg; w.mu.Unlock() }
+					err := startPlayerUpdate(ctx, root, exe, release, progress)
+					w.mu.Lock()
+					defer w.mu.Unlock()
+					if err != nil {
+						w.status = err.Error()
+						w.busy, updating = false, false
+						return
+					}
+					w.status = "Restarting into the updated player…"
+					close(w.restart)
+				}(available)
 			case "stop":
 				if !w.running {
 					http.Error(out, "Lunar Tear is not running.", 409)

@@ -3,6 +3,17 @@
 What changed, newest first, by date and area. A release's heading comes
 above the dated sections it holds.
 
+## 0.2.1 (2026-11-21)
+
+- The portable Windows player can update and restart from Bunker’s launcher.
+  Enable automatic installation in Options, or use **Check for updates**.
+  The updater reuses the installed APK and master data, verifies the rebuilt
+  EXE, and keeps the existing saves, resources and settings.
+- Fixed taps and clicks after resizing the game window. The embedded Unity
+  player now recognizes its parent window’s focus and keeps each tap in the
+  resized window’s coordinate system.
+- Added space above **Close** in the game files dialog.
+
 ## 0.2.0 (2026-11-21)
 
 - Fixed a Windows summon freeze between the second and third rewards of a ten-pull.

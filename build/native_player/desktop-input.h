@@ -144,6 +144,13 @@ static void samplePointer(bool down,bool held,bool up,bool cancel,Point position
         }
         hasEdges.store(mousePath.moved,std::memory_order_release);
     }
+    // A Windows press uses client-normalized coordinates. Unity's polled
+    // mouse position can still use the previous surface for a frame after
+    // resizing; mixing the two turns a stationary tap into a drag.
+    if(windowPress && pointer.held && !cancel){
+        std::lock_guard lock(edgeMutex);
+        position={mousePath.last.x*w,mousePath.last.y*h};
+    }
     if(!pointer.held || cancel || up || !held)windowPress=false;
     pointer.sample(id,down,held,up,cancel,position,windowPress?motion(position):position,dt);
 }
@@ -235,6 +242,17 @@ struct BrowserPad {
     }
 };
 static BrowserPad browserPad;
+// The setup process owns the foreground HWND when Unity is embedded. After
+// a border drag, focus can briefly be on that frame instead of its child.
+static HWND inputWindow(HWND foreground,HWND parent){
+    if(!foreground)return nullptr;
+    HWND target=foreground;
+    if(parent && foreground==parent)
+        target=FindWindowExW(parent,nullptr,L"UnityWndClass",nullptr);
+    DWORD pid=0;
+    if(target)GetWindowThreadProcessId(target,&pid);
+    return pid==GetCurrentProcessId()?target:nullptr;
+}
 static void advance(){
     if(!frame || !physicalCount || !width || !height || !mouseHeld || !mouseDown || !mouseUp ||
        !mousePosition || !keyHeld || !deltaTime)return;
@@ -242,10 +260,12 @@ static void advance(){
     const int current=frame();
     if(previous==current)return;
     previous=current;
-    HWND window=GetForegroundWindow();
-    DWORD pid=0;
-    GetWindowThreadProcessId(window,&pid);
-    const bool focused=pid==GetCurrentProcessId();
+    static HWND parent=[]{
+        const auto *value=_wgetenv(L"REINCOMP_WINDOW_PARENT");
+        return value?reinterpret_cast<HWND>(_wcstoui64(value,nullptr,10)):nullptr;
+    }();
+    HWND window=inputWindow(GetForegroundWindow(),parent);
+    const bool focused=window!=nullptr;
     realCount=physicalCount();
     if(!realCount || physicalTouch)sampleFingers(physicalTouch);
     int w=width(), h=height();

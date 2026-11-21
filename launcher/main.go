@@ -151,6 +151,18 @@ func run(root, resourceDir, assets, fps, render string, prepareOnly, fullscreen,
 	view := filepath.Join(data, "bunker-view.json")
 	os.Remove(view)
 	readyFiles := resourcesReady(assets)
+	if desktop && readyFiles && !showLauncher && !regularFile(filepath.Join(data, "manual-deploy")) {
+		prefs := readLauncherPreferences(data)
+		exe, _ := os.Executable()
+		if regularFile(filepath.Join(data, "update-error.txt")) {
+			showLauncher = true
+		} else if prefs.Updates && prefs.AutoInstall && canUpdatePortable(root, exe) {
+			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			release, err := latestWindowsRelease(ctx)
+			cancel()
+			showLauncher = err == nil && release.Version != prefs.Skipped && newerVersion(release.Version, installedWindowsVersion(root))
+		}
+	}
 	if !readyFiles || desktop && (showLauncher || regularFile(filepath.Join(data, "manual-deploy"))) {
 		dump, master := resourceInputs(resourceDir, root)
 		if desktop && regularFile(filepath.Join(root, "game", "resource-window.exe")) {
@@ -171,6 +183,8 @@ func run(root, resourceDir, assets, fps, render string, prepareOnly, fullscreen,
 		if setup != nil {
 			select {
 			case <-setup.done:
+				return nil
+			case <-setup.restart:
 				return nil
 			case <-setup.startServices:
 				setup.mu.Lock()

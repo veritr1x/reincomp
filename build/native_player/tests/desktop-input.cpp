@@ -33,6 +33,7 @@ static DWORD mockState(DWORD user,XINPUT_STATE *out){
     out->Gamepad=pad;return ERROR_SUCCESS;
 }
 static DWORD owner(HWND,DWORD *pid){*pid=focus?GetCurrentProcessId():0;return 1;}
+static HWND childWindow(HWND parent,HWND,LPCWSTR,LPCWSTR){return parent==HWND(2)?HWND(1):nullptr;}
 static ULONGLONG clockMs=100;
 namespace desktop_gamepad {
 static bool sonyConnected=false;
@@ -44,6 +45,7 @@ static bool readRecordedPad(HWND,XINPUT_GAMEPAD &state){
 }
 #define GetForegroundWindow() HWND(1)
 #define GetWindowThreadProcessId owner
+#define FindWindowExW childWindow
 #define GetTickCount64() clockMs
 #define XInputGetState mockState
 #define readPlayStation readRecordedPad
@@ -51,6 +53,7 @@ static bool readRecordedPad(HWND,XINPUT_GAMEPAD &state){
 #undef readPlayStation
 #undef GetForegroundWindow
 #undef GetWindowThreadProcessId
+#undef FindWindowExW
 #undef GetTickCount64
 #undef XInputGetState
 
@@ -108,6 +111,19 @@ int main(){
         touch(s,reinterpret_cast<P>(readPhysical));return result;};
     auto number=[](uint64_t caller){State s{};s.gpr.x30.qword=caller;count(s,nullptr);return int(s.gpr.x0.qword);};
     auto next=[&] {++tick;clockMs+=10;return number(0x827da4f0);};
+    assert(inputWindow(HWND(2),HWND(2))==HWND(1));
+    assert(!inputWindow(HWND(3),HWND(3)));
+    focus=false;assert(!inputWindow(HWND(1),HWND(2)));focus=true;
+    for(auto size:{std::pair{960,520},std::pair{1440,900},std::pair{3840,2160}}){
+        w=size.first;h=size.second;
+        held=true;mouseEdge(true,.75f,.25f);
+        assert(next()==1 && read(0).phase==Began);
+        assert(next()==1 && read(0).phase==Stationary && read(0).position.x==.75f*w);
+        held=false;mouseEdge(false,.75f,.25f);
+        assert(next()==1 && read(0).phase==Ended && read(0).position.y==.25f*h);
+        assert(next()==0);
+    }
+    w=1280;h=720;
     assert(next()==0);
     down=held=true;assert(next()==1);auto start=read(0);assert(start.phase==Began && start.id==0);
     down=false;x+=24;y-=7;assert(next()==1);
