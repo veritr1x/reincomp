@@ -19,7 +19,7 @@ python recompiler/web/prepare_runtime_pack.py --exe "<verified-player.exe>" --ex
 
 Place only the generated `runtime.json` and `runtime.partNNN` files at the
 root of `veritr1x/reincomp-private-archive`. Record its commit, the manifest
-SHA-256 and the compiler ZIP SHA-256 in Bunker's
+SHA-256, the compiler ZIP filename and its SHA-256 in Bunker's
 [`web/windows-release.json`](https://github.com/veritr1x/bunker/blob/main/web/windows-release.json).
 The Pages workflow reads the selected revision with a read-only deploy key.
 It verifies the pack against the matching kit and serves the selected runtime

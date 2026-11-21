@@ -32,6 +32,11 @@ Windows x86-64 only, and not finished.
 You need your own copy of the game. Nothing of the game is in this repository
 or in its releases, so the game executable is built on your PC from your APK.
 
+For a Windows EXE, open [Bunker's web builder](https://veritr1x.github.io/bunker/),
+choose **Windows**, and select your original Global 3.7.1 ARM64 APK and April
+2024 master data. The browser downloads the precompiled runtime and assembles
+the EXE locally. On first launch, choose your resource dump in Bunker.
+
 **Your files**
 
 - the game APK: the English 3.7.1 (152) arm64-v8a build
