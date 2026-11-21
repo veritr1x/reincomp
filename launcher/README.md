@@ -25,11 +25,13 @@ fullscreen at 4K. Alt+Enter toggles the mode while playing.
 The launcher looks for an installed revision and master data beside the player.
 Use `-assets <folder>` to point it at an existing Bunker installation elsewhere.
 When resources are missing, Windows opens Bunker's System, Play and Programs
-screen with the Android launcher's layout and translations. Choose a Global Android
-resource ZIP or 7z. A resource archive placed beside the EXE can also be picked
-up automatically. The launcher checks the archive’s revision index, then Lunar
-Tear verifies the files while extracting them into a staging folder. Deploy
-opens Unity in the same window after the import completes.
+screen. Select **Choose** under **Game files** to copy an extracted Global
+Android folder, use it in place, open a `.7z` or `.zip`, or enter an HTTP or
+HTTPS link to the archive. Using a local folder in place saves disk space.
+Keep that folder on its drive while playing. The launcher can also pick up
+a resource archive placed beside the EXE. Once the files pass verification,
+**Deploy** opens the game in the same window. Use **Change** to select new
+resources from a launcher that already has a verified installation.
 
 A download from Bunker's Windows web builder is named `Nier Reincarnation.exe`.
 Place it in a writable folder. On first launch it verifies and expands its
