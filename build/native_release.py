@@ -54,9 +54,16 @@ def archive_server_source(a, bunker, work, go):
         server = bunker/'server'
     if not (server/'mobile').is_dir():
         run('git','submodule','update','--init','--recursive', *(['--no-fetch'] if a.no_download else []), cwd=bunker)
+        # Bunker runs git archive and git apply in its own subprocesses. Keep
+        # their Go and embedded SQL output identical on every Windows checkout.
+        git_env = os.environ.copy()
+        index = int(git_env.get('GIT_CONFIG_COUNT', '0'))
+        git_env.update(GIT_CONFIG_COUNT=str(index+1))
+        git_env[f'GIT_CONFIG_KEY_{index}'] = 'core.autocrlf'
+        git_env[f'GIT_CONFIG_VALUE_{index}'] = 'false'
         run(sys.executable, '-X', 'utf8', '-c',
             'import runpy,sys; from pathlib import Path; sys.path.insert(0,str(Path(sys.argv[1]).parent)); '
-            'runpy.run_path(sys.argv[1],run_name="__main__")', bunker/'scripts/prepare.py', cwd=bunker)
+            'runpy.run_path(sys.argv[1],run_name="__main__")', bunker/'scripts/prepare.py', cwd=bunker, env=git_env)
     if not (server/'gen/proto/gacha.pb.go').is_file():
         protoc = shutil.which('protoc')
         if not protoc:

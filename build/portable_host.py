@@ -46,7 +46,7 @@ def run(*cmd, **opts):
 def public_bunker(work):
     bunker = work/'bunker'
     if not bunker.exists():
-        run('git','-c','core.autocrlf=false','clone','--branch','v1.12.14','--depth','1',
+        run('git','-c','core.autocrlf=false','clone','--config','core.autocrlf=false','--branch','v1.12.14','--depth','1',
             '--recurse-submodules','https://github.com/veritr1x/bunker.git',bunker)
     revision = subprocess.check_output(['git','rev-parse','HEAD'],cwd=bunker,text=True).strip()
     if revision != BUNKER_COMMIT:
