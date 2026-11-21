@@ -12,7 +12,7 @@ async function build(site, apk, master, output, edge, jobs, expected) {
   const prefix = "/" + token + "/";
   const profile = await fs.promises.mkdtemp(path.join(path.dirname(output), "edge-"));
   const partial = path.join(profile, "player.partial");
-  let browser, resolve, reject;
+  let browser, resolve, reject, verified = false;
   const completed = new Promise((ok, fail) => { resolve = ok; reject = fail; });
   const inputs = new Map([["apk", apk], ["master", master]]);
   const types = {".js":"application/javascript", ".mjs":"application/javascript", ".wasm":"application/wasm", ".json":"application/json"};
@@ -57,7 +57,12 @@ async function build(site, apk, master, output, edge, jobs, expected) {
         for await (const chunk of fs.createReadStream(partial)) hash.update(chunk);
         const result = hash.digest("hex");
         if(result !== expected) throw Error("Source-built EXE differs from the release. SHA-256 " + result + ". Candidate retained at " + partial);
-        await fs.promises.link(partial,output);
+        try {
+          await fs.promises.link(partial,output);
+        } catch (error) {
+          if (!["EPERM","ENOTSUP","EXDEV"].includes(error.code)) throw error;
+          await fs.promises.copyFile(partial,output,fs.constants.COPYFILE_EXCL);
+        }
         await fs.promises.unlink(partial);
         res.writeHead(200).end("OK");
         resolve(result);
@@ -78,10 +83,21 @@ async function build(site, apk, master, output, edge, jobs, expected) {
     browser.once("error",reject);
     browser.once("exit",code=>reject(Error("Browser closed before the build completed ("+code+")")));
     console.log("Verified EXE SHA-256",await completed);
+    verified = true;
   } finally {
-    if(browser) browser.kill();
+    if(browser && browser.exitCode === null && browser.signalCode === null) {
+      const stopped = new Promise(ok=>browser.once("exit",ok));
+      browser.kill();
+      await stopped;
+    }
     server.closeAllConnections();
     server.close();
+    if (verified) {
+      // Only the fresh temporary profile allocated by this invocation.
+      try {
+        await fs.promises.rm(profile,{recursive:true,maxRetries:6,retryDelay:500});
+      } catch (error) {console.warn("Browser profile still in use:",profile);}
+    }
   }
 }
 

@@ -8,7 +8,7 @@ import re
 import shutil
 import struct
 import tempfile
-from zipfile import ZIP_DEFLATED, ZipFile
+from zipfile import ZIP_DEFLATED, ZipFile, ZipInfo
 
 HERE = Path(__file__).resolve().parent
 NATIVE = HERE.parents[1]/'build/native_player'
@@ -90,7 +90,7 @@ def prepare(args):
         packed = work/'player.zip'
         with ZipFile(packed,'w',compression=ZIP_DEFLATED,compresslevel=5) as z:
             for name,path in sorted(members.items()):
-                z.write(path,name)
+                z.writestr(ZipInfo(name),path.read_bytes(),ZIP_DEFLATED,compresslevel=5)
         with packed.open('rb') as src:
             while block:=src.read(48*1024*1024):
                 name=f'player.part{len(index["parts"])+1:02d}'

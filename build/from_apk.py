@@ -37,7 +37,8 @@ def sha256(path):
 
 def pins():
     """What can be downloaded: name -> (url, sha256)."""
-    found = {name: (entry['url'], entry['sha256']) for name, entry in json.loads((ROOT / 'release.lock.json').read_text()).items()}
+    lock = json.loads((ROOT / 'release.lock.json').read_text())
+    found = {name: (entry['url'], entry['sha256']) for name, entry in lock.items() if 'url' in entry}
     bunker = json.loads((ROOT / 'bunker.lock.json').read_text())['bunker']
     server = bunker['server']['windows-x86_64']
     found['server'] = (f'{bunker["repository"]}/releases/download/{bunker["release"]}/{server["file"]}', server['sha256'])

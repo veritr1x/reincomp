@@ -67,7 +67,9 @@ or in its releases, so the game executable is built on your PC from your APK.
 For a Windows EXE, open [Bunker's web builder](https://veritr1x.github.io/bunker/),
 choose **Windows**, and select your original Global 3.7.1 ARM64 APK and April
 2024 master data. The browser downloads the precompiled runtime and assembles
-the EXE locally. On first launch, choose your resource dump in Bunker.
+the EXE locally. The Windows launcher can copy an extracted Android resource
+folder, use it in place, import a 7z or ZIP, or download the archive from a
+link. Deploy becomes available after verification.
 
 **Your files**
 

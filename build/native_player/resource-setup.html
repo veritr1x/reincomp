@@ -53,6 +53,18 @@
 <button class="option" data-dialog="help-dialog">{{ t('launcher.menu.help') }}</button><button class="option" data-dialog="about-dialog">{{ t('launcher.menu.about') }}</button>
 </div></div></dialog>
 {% macro close_button() -%}<button class="outline" data-close>{{ t('common.close') }}</button>{%- endmacro %}
+<dialog id="files-dialog" aria-labelledby="files-heading"><div class="panel"><div class="scroll">
+<h2 id="files-heading">{{ t('launcher.files_dialog.title') }}</h2>
+{% for kind in ['copy','in_place','archive','link'] %}
+<button class="option" data-source="{{ kind }}">{{ t('launcher.files_dialog.'+kind) }}</button>
+{% endfor %}{{ close_button() }}</div></div></dialog>
+<dialog id="link-dialog" aria-labelledby="link-heading"><form class="panel" id="link-form"><div class="scroll">
+<h2 id="link-heading"><label for="resource-link">{{ t('launcher.files_dialog.link_title') }}</label></h2>
+<p>{{ t('launcher.files_dialog.link_hint') }}</p>
+<input id="resource-link" type="url" required maxlength="8192" spellcheck="false" placeholder="https://" autocomplete="off">
+<p id="link-error" class="note" role="alert" hidden></p>
+<button class="solid" type="submit">{{ t('launcher.files_dialog.download') }}</button>
+<button class="outline" type="button" data-close>{{ t('common.cancel') }}</button></div></form></dialog>
 <dialog id="theme-dialog" aria-labelledby="theme-heading"><div class="panel"><div class="scroll"><h2 id="theme-heading">{{ t('launcher.display.title') }}</h2>
 {% for mode in ['system','light','dark'] %}<button class="option" data-theme-choice="{{ mode }}">{{ t('launcher.display.'+mode) }}</button>{% endfor %}{{ close_button() }}</div></div></dialog>
 <dialog id="info-dialog" aria-labelledby="info-title"><div class="panel"><div class="scroll"><h2 id="info-title"></h2><p id="info-text"></p>{{ close_button() }}</div></div></dialog>
@@ -103,9 +115,9 @@ async function update(){
   if(progress){el('meter').style.setProperty('--progress',progress[0]);el('meter').setAttribute('aria-valuenow',progress[1]);el('progress-label').textContent=s.message}
   detail(progress?words['main.keep_open']:s.message||(s.ready?'':words['main.choose_files_hint']));
 }
-async function act(id,action=id){
+async function act(id,action=id,body){
   if(el(id))el(id).disabled=true;
-  try{const r=await fetch(action,{method:'POST'});if(!r.ok)throw Error(await r.text());await update()}catch(error){detail(error.message)}
+  try{const r=await fetch(action,{method:'POST',body});if(!r.ok)throw Error(await r.text());await update()}catch(error){detail(error.message)}
 }
 el('more').onclick=()=>el('options').showModal();
 for(const d of document.querySelectorAll('dialog')){
@@ -114,7 +126,29 @@ for(const d of document.querySelectorAll('dialog')){
 }
 for(const b of document.querySelectorAll('[data-info]'))b.onclick=()=>notice(b.dataset.title,b.dataset.info);
 for(const b of document.querySelectorAll('[data-dialog]'))b.onclick=()=>{closeOptions();el(b.dataset.dialog).showModal()};
-for(const id of ['choose','deploy','auto-deploy','export-save','import-master','check','stop'])el(id).onclick=()=>{closeOptions();act(id)};
+el('choose').onclick=()=>el('files-dialog').showModal();
+for(const b of document.querySelectorAll('[data-source]'))b.onclick=async()=>{
+  el('files-dialog').close();
+  if(b.dataset.source==='link'){
+    el('link-error').hidden=true;
+    try{const r=await fetch('last-resource-link');if(r.ok)el('resource-link').value=await r.text()}catch{}
+    el('link-dialog').showModal();el('resource-link').focus();el('resource-link').select();
+  }else act(null,({copy:'choose-folder',in_place:'choose-in-place',archive:'choose'})[b.dataset.source]);
+};
+el('link-form').onsubmit=async e=>{
+  e.preventDefault();
+  const input=el('resource-link'),button=e.currentTarget.querySelector('[type=submit]');
+  const link=input.value.trim();
+  button.disabled=true;
+  try{
+    if(!/^https?:\/\//i.test(link))throw Error({{ t('launcher.files.bad_link')|tojson }});
+    const r=await fetch('resource-link',{method:'POST',body:link});
+    if(!r.ok)throw Error(await r.text());
+    el('link-dialog').close();await update();
+  }catch(error){el('link-error').textContent=error.message;el('link-error').hidden=false;input.focus()}
+  finally{button.disabled=false}
+};
+for(const id of ['deploy','auto-deploy','export-save','import-master','check','stop'])el(id).onclick=()=>{closeOptions();act(id)};
 el('import-save').onclick=()=>{closeOptions();if(confirm({{ t('launcher.save_import.message')|tojson }}))act('import-save')};
 el('export-log').onclick=closeOptions;
 for(const a of programLinks)a.onclick=e=>{e.preventDefault();if(a.getAttribute('aria-disabled')==='false'){closeOptions();act(null,'program?path='+encodeURIComponent(a.pathname))}};

@@ -9,7 +9,7 @@ from zipfile import ZipFile
 RELEASE = 'https://github.com/veritr1x/bunker/releases/download/v1.12.14/'
 KIT = ('bunker-windows-browser-1.12.14-r3.zip', 'dfb97b80fd837ba2a0b9a35c665250f23fb441197edcb486cb019935783594d5')
 NOTICES = ('bunker-notices-306a4695f28b.zip', '306a4695f28bf30b0dba2bdd3516d23051f18474ddfd52bd994d328730ef278d')
-EXE_HASH = '5de1b4e920ee557907cd45c7a32ad15845aefe5e7a8686eaf9aaab28f7bcca90'
+PORTABLE = json.loads((Path(__file__).resolve().parents[1]/'release.lock.json').read_bytes())['portable']
 
 
 def digest(path):

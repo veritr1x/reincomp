@@ -142,6 +142,9 @@ func run(root, resourceDir, assets, fps, render string, prepareOnly, fullscreen,
 		fps = "165"
 	}
 	if assets == "" {
+		if err := recoverPendingImport(filepath.Join(root, "data", "assets")); err != nil {
+			return err
+		}
 		assets = locateResources(root, resourceDir)
 	}
 	var setup *resourceWindow
@@ -170,6 +173,9 @@ func run(root, resourceDir, assets, fps, render string, prepareOnly, fullscreen,
 			case <-setup.done:
 				return nil
 			case <-setup.startServices:
+				setup.mu.Lock()
+				assets = setup.assetRoot
+				setup.mu.Unlock()
 			}
 		}
 		err := serveAndPlay(root, data, assets, game, server, view, native, apk, fps, render, desktop, fullscreen, setup)

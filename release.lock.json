@@ -1,4 +1,15 @@
 {
+  "portable": {
+    "sha256": "2453ea7c9e5d0dbf48bb70f60578f7f8c155232079415a635e463d09bf0bd3ed",
+    "size": 1057543484,
+    "playerMembers": {
+      "game/archive-media.exe": "a636c27cab805171c7ace3fe0b5848ab58988620999ee84d83567f4e667981ac",
+      "game/resource-setup.css": "8aa47fe86a83c99ae464a27da63f6d74b6f758d133daaff01b82470018a3f8a0",
+      "game/resource-setup.html": "a6febc2606df1e85d0f742484adf43bea3487c03dc8dd67df07e57b98769d758",
+      "game/resource-window.exe": "dd7e2bf13ca0b0644d7156155a4d24b5caacb5be8262f7c5bdda22f14f2baecd",
+      "launcher.exe": "da35945e6fb37bfde245d1c2349ac4ff5085b14deb88fa06d29808292a658317"
+    }
+  },
   "toolchain": {
     "url": "https://github.com/veritr1x/reincomp/releases/download/v0.1.0/reincomp-toolchain-0.1.0-windows-x86_64.zip",
     "sha256": "80c386e259d21820a22741a2bcef19feaf45111404504928e982eb4406c8f9f6"

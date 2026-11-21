@@ -2,6 +2,7 @@
 from argparse import Namespace
 from contextlib import contextmanager
 import io
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -18,10 +19,9 @@ sys.path[:0] = [str(HERE), str(NATIVE)]
 import build as host_build
 import native_release
 from compile_player import compile_adapter, compile_fsr
-from portable_inputs import download, digest
+from portable_inputs import PORTABLE, download, digest
 
 BUNKER_COMMIT = '8985f2b759c33ace6ffc7b5f040cfe8395f17150'
-MEDIA_COMMIT = 'fd9648396ad365a2d1e2dc946ae3dff137f7eb48'
 PROTOC = ('protoc-31.1-win64.zip', '70381b116ab0d71cb6a5177d9b17c7c13415866603a0fd40d513dafe32d56c35')
 
 
@@ -43,13 +43,13 @@ def run(*cmd, **opts):
     subprocess.run([str(arg) for arg in cmd], check=True, **opts)
 
 
-def public_bunker(work, folder='bunker', tag='v1.12.14', commit=BUNKER_COMMIT):
-    bunker = work/folder
+def public_bunker(work):
+    bunker = work/'bunker'
     if not bunker.exists():
-        run('git','-c','core.autocrlf=false','clone','--branch',tag,'--depth','1',
+        run('git','-c','core.autocrlf=false','clone','--branch','v1.12.14','--depth','1',
             '--recurse-submodules','https://github.com/veritr1x/bunker.git',bunker)
     revision = subprocess.check_output(['git','rev-parse','HEAD'],cwd=bunker,text=True).strip()
-    if revision != commit:
+    if revision != BUNKER_COMMIT:
         raise ValueError('Bunker source revision differs from the release')
     return bunker
 
@@ -73,11 +73,7 @@ def build_go(bunker, work, go, game):
             raise ValueError('Expected Go 1.25.8 for Windows x64, found '+version)
         source = native_release.archive_server_source(Namespace(bunker=None,no_download=False), bunker, work, go)
         native_release.build_windows_server(go,source,work,server,os.environ.copy())
-        # 1.12.14 updated the server. The distributed Archive converter
-        # still uses the 1.12.13 mobile module embedded in the original kit.
-        media = public_bunker(work,'bunker-media','v1.12.13',MEDIA_COMMIT)
-        media_source = native_release.archive_server_source(Namespace(bunker=None,no_download=False),media,work,go)
-        run(go,'build','-trimpath','-o',game/'archive-media.exe',NATIVE/'archive_media.go',NATIVE/'resource_archive.go',cwd=media_source)
+        run(go,'build','-trimpath','-o',game/'archive-media.exe',NATIVE/'archive_media.go',NATIVE/'resource_archive.go',cwd=source)
         run(go,'build','-trimpath','-buildvcs=false','-ldflags','-H=windowsgui','-o',work/'launcher.exe','.',cwd=ROOT/'launcher')
 
 
@@ -153,8 +149,19 @@ def prepare_site(a, work, windows, bunker, release):
     with read_parts(windows) as ref, read_parts(new) as rebuilt:
         if set(ref.namelist()) != set(rebuilt.namelist()):
             raise ValueError('Unexpected player package inventory')
-        errors = [name for name in ref.namelist() if ref.read(name) != rebuilt.read(name)]
+        errors=[]
+        for name in ref.namelist():
+            content=rebuilt.read(name)
+            if name in PORTABLE['playerMembers']:
+                matches=hashlib.sha256(content).hexdigest()==PORTABLE['playerMembers'][name]
+            else:
+                matches=content==ref.read(name)
+            if not matches:errors.append(name)
         if errors:
             raise ValueError('Rebuilt player members differ from the reference: '+', '.join(errors))
     for item in new.iterdir():
         shutil.copyfile(item,windows/item.name)
+    manifest = windows/'kit.json'
+    index = json.loads(manifest.read_bytes())
+    index['files'] = {name:digest(windows/name) for name in index['files']}
+    manifest.write_text(json.dumps(index,sort_keys=True),encoding='utf-8')

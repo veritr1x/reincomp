@@ -10,6 +10,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -54,6 +55,7 @@ type resourceWindow struct {
 	deploy                                      chan struct{}
 	startServices, stopServices                 chan struct{}
 	checkURL, checkToken                        string
+	assetRoot                                   string
 }
 
 func (w *resourceWindow) send(line string) { fmt.Fprintln(w.input, line) }
@@ -97,7 +99,7 @@ func firstRunWindow(root, server, assets, master, dump string, ready bool) (*res
 	prefix := "/" + hex.EncodeToString(token) + "/"
 	addr := listener.Addr().String()
 	ctx, cancel := context.WithCancel(context.Background())
-	w := &resourceWindow{done: make(chan struct{}), deploy: make(chan struct{}), cancel: cancel, verified: ready}
+	w := &resourceWindow{done: make(chan struct{}), deploy: make(chan struct{}), cancel: cancel, verified: ready, assetRoot: assets}
 	w.startServices = make(chan struct{}, 1)
 	w.stopServices = make(chan struct{}, 1)
 	manual := filepath.Join(root, "data", "manual-deploy")
@@ -120,31 +122,47 @@ func firstRunWindow(root, server, assets, master, dump string, ready bool) (*res
 		w.input.Close()
 		return nil, err
 	}
-	importFile := func(path string) {
+	managed := filepath.Join(root, "data", "assets")
+	lastLink := filepath.Join(root, "data", "resource-link.txt")
+	importFile := func(mode, path string) {
 		w.mu.Lock()
 		w.busy = true
-		w.verified = false
-		w.status = "Checking " + filepath.Base(path)
+		current := w.assetRoot
+		w.status = "Checking game files"
 		w.mu.Unlock()
-		verify := exec.CommandContext(ctx, filepath.Join(root, "game", "archive-media.exe"), "verify-resources", path)
-		hideHelperWindow(verify)
-		out, err := verify.CombinedOutput()
-		if err != nil && len(out) > 0 {
-			err = fmt.Errorf("%s", strings.TrimSpace(string(out)))
+		helper := filepath.Join(root, "game", "archive-media.exe")
+		progress := func(s string) { w.mu.Lock(); w.status = s; w.mu.Unlock() }
+		useMaster := master
+		if live := filepath.Join(current, "assets", "release", masterName); regularFile(live) {
+			useMaster = live
 		}
+		lock, err := lockResourceFiles(managed)
 		if err == nil {
-			useMaster := master
-			if live := filepath.Join(assets, "assets", "release", masterName); regularFile(live) {
-				useMaster = live
+			defer lock.Close()
+			err = recoverResourceRevision(managed)
+		}
+		if err == nil && mode == "picked" {
+			verify := exec.CommandContext(ctx, helper, "verify-resources", path)
+			hideHelperWindow(verify)
+			var out []byte
+			out, err = verify.CombinedOutput()
+			if err != nil && len(out) > 0 {
+				err = fmt.Errorf("%s", strings.TrimSpace(string(out)))
 			}
-			err = importArchive(ctx, server, assets, useMaster, path, func(s string) { w.mu.Lock(); w.status = s; w.mu.Unlock() })
+			if err == nil {
+				err = importArchive(ctx, server, managed, useMaster, path, progress)
+			}
+		} else if err == nil {
+			err = importResourceSource(ctx, helper, server, managed, useMaster, mode, path, progress)
 		}
 		w.mu.Lock()
 		w.busy = false
 		if err == nil {
+			w.assetRoot = managed
 			w.verified = true
 			w.status = "Game files are ready."
 		} else {
+			w.verified = resourcesReady(current)
 			w.status = err.Error()
 		}
 		w.mu.Unlock()
@@ -287,7 +305,16 @@ func firstRunWindow(root, server, assets, master, dump string, ready bool) (*res
 			}
 			defer f.Close()
 			io.Copy(out, f)
-		case "choose", "deploy", "program", "auto-deploy", "import-save", "export-save", "import-master", "stop", "check":
+		case "last-resource-link":
+			if r.Method != http.MethodGet {
+				http.Error(out, "Method not allowed", 405)
+				return
+			}
+			out.Header().Set("Cache-Control", "no-store")
+			if previous, e := os.ReadFile(lastLink); e == nil {
+				out.Write(previous)
+			}
+		case "choose", "choose-folder", "choose-in-place", "resource-link", "deploy", "program", "auto-deploy", "import-save", "export-save", "import-master", "stop", "check":
 			if r.Method != http.MethodPost || r.Header.Get("Origin") != "http://"+addr {
 				http.Error(out, "Forbidden", 403)
 				return
@@ -341,7 +368,7 @@ func firstRunWindow(root, server, assets, master, dump string, ready bool) (*res
 					http.Error(out, err.Error(), 500)
 					return
 				}
-			case "choose", "import-save", "export-save", "import-master":
+			case "choose", "choose-folder", "choose-in-place", "resource-link", "import-save", "export-save", "import-master":
 				if w.services {
 					http.Error(out, "Close and reopen the launcher to change files while Lunar Tear is stopped.", 409)
 					return
@@ -349,6 +376,22 @@ func firstRunWindow(root, server, assets, master, dump string, ready bool) (*res
 				if action == "export-save" && !regularFile(save) {
 					http.Error(out, "There is no save to export yet.", 409)
 					return
+				}
+				if action == "resource-link" {
+					data, e := io.ReadAll(http.MaxBytesReader(out, r.Body, 8192))
+					link := strings.TrimSpace(string(data))
+					u, parseErr := url.Parse(link)
+					if e != nil || parseErr != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Hostname() == "" || u.User != nil {
+						http.Error(out, "Enter an HTTP or HTTPS archive link.", 400)
+						return
+					}
+					if e = os.WriteFile(lastLink, []byte(link), 0600); e != nil {
+						http.Error(out, e.Error(), 500)
+						return
+					}
+					w.busy = true
+					go importFile("stage-link", link)
+					break
 				}
 				w.busy = true
 				w.send(action)
@@ -389,16 +432,20 @@ func firstRunWindow(root, server, assets, master, dump string, ready bool) (*res
 				if handle, err := strconv.ParseUint(value, 10, 64); err == nil && handle != 0 {
 					opened <- value
 				}
-			case "picked":
-				go importFile(value)
+			case "picked", "picked-folder", "picked-in-place":
+				mode := map[string]string{"picked": "picked", "picked-folder": "stage-folder", "picked-in-place": "stage-in-place"}[action]
+				go importFile(mode, value)
 			case "import-master":
-				load := exec.CommandContext(ctx, server, "import", "-assets", assets, "-master", value)
+				w.mu.Lock()
+				current := w.assetRoot
+				w.mu.Unlock()
+				load := exec.CommandContext(ctx, server, "import", "-assets", current, "-master", value)
 				hideHelperWindow(load)
 				out, err := load.CombinedOutput()
 				w.mu.Lock()
 				if err == nil {
 					w.status = "Master data imported."
-					w.verified = resourcesReady(assets)
+					w.verified = resourcesReady(current)
 				} else {
 					w.status = strings.TrimSpace(string(out))
 				}
@@ -441,7 +488,7 @@ func firstRunWindow(root, server, assets, master, dump string, ready bool) (*res
 		w.mu.Lock()
 		w.busy = true
 		w.mu.Unlock()
-		go importFile(dump)
+		go importFile("picked", dump)
 	}
 	transferred = true
 	handle, _ := strconv.ParseUint(w.handle, 10, 64)

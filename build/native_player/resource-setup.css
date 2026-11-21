@@ -73,6 +73,7 @@ dialog .panel {margin:0;padding:12px 14px;border-width:3px}
 dialog .scroll {max-height:calc(100dvh - 72px);overflow:auto;overscroll-behavior:contain;scrollbar-width:thin}
 dialog p,dialog pre {line-height:1.5;overflow-wrap:anywhere;white-space:pre-wrap}
 dialog h2 {font-size:17px}
+#resource-link {display:block;width:100%;box-sizing:border-box;margin:10px 0 16px;padding:8px;color:var(--ink);background:var(--paper);border:1px solid var(--ink);font:inherit}
 #options .section-title {margin:14px 0 4px}
 #options .section-title:first-child {margin-top:4px}
 .option {display:flex;align-items:center;gap:16px;text-decoration:none;text-align:left;border:0;border-bottom:1px solid var(--line);width:100%;min-height:44px;padding:6px 8px;font:13px var(--mono);letter-spacing:.12em;text-transform:uppercase}

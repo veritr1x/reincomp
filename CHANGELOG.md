@@ -3,6 +3,17 @@
 What changed, newest first, by date and area. A release's heading comes
 above the dated sections it holds.
 
+## 0.2.0
+
+- Build the portable Windows player from the original Global APK and April
+  2024 master data with `python build/portable.py`. The build regenerates the
+  adapter tables from the APK and Unity 2019.4.29f1 player and symbols.
+- Bunker's Windows launcher offers the four Android resource choices. Copy
+  the extracted folder, use it in place, pick a 7z or ZIP, or paste an archive
+  link. The launcher verifies the complete Android revision before Deploy.
+- The Windows implementation includes Bunker's in-game pages, display
+  settings, FSR 3.1, touch gestures, keyboard movement and controller input.
+
 ## 0.1.1 (2026-11-18)
 
 Ctrl+B in the game opens the Bunker (Pod Programs) in a pane over the game.

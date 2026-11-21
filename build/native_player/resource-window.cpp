@@ -4,6 +4,7 @@
 #include <windows.h>
 #include <commdlg.h>
 #include <shellapi.h>
+#include <shobjidl.h>
 #include <algorithm>
 #include <filesystem>
 #include <iostream>
@@ -84,6 +85,27 @@ LRESULT CALLBACK events(HWND w,UINT message,WPARAM wp,LPARAM lp) {
     }
     case WM_APP+0x36d: if (page) page->Visible(!wp); return 0;
     case choose: {
+        if (wp==4 || wp==5) {
+            IFileOpenDialog *dialog=nullptr;
+            IShellItem *selected=nullptr;
+            PWSTR path=nullptr;
+            const auto initialized=CoInitializeEx(nullptr,COINIT_APARTMENTTHREADED);
+            if (SUCCEEDED(CoCreateInstance(CLSID_FileOpenDialog,nullptr,CLSCTX_INPROC_SERVER,IID_PPV_ARGS(&dialog)))) {
+                FILEOPENDIALOGOPTIONS options{};
+                dialog->GetOptions(&options);
+                dialog->SetOptions(options|FOS_PICKFOLDERS|FOS_FORCEFILESYSTEM|FOS_PATHMUSTEXIST|FOS_NOCHANGEDIR);
+                dialog->SetTitle(L"Choose the extracted Android game files");
+                if (SUCCEEDED(dialog->Show(w)) && SUCCEEDED(dialog->GetResult(&selected)))
+                    selected->GetDisplayName(SIGDN_FILESYSPATH,&path);
+            }
+            if (path) std::cout << (wp==4?"picked-folder":"picked-in-place") << "\t" << std::filesystem::path(path).u8string() << std::endl;
+            else std::cout << "cancel" << std::endl;
+            CoTaskMemFree(path);
+            if (selected) selected->Release();
+            if (dialog) dialog->Release();
+            if (SUCCEEDED(initialized)) CoUninitialize();
+            return 0;
+        }
         wchar_t file[32768]{};
         OPENFILENAMEW dlg{sizeof(dlg)};
         dlg.hwndOwner=w; dlg.lpstrFile=file; dlg.nMaxFile=32768;
@@ -154,6 +176,7 @@ int WINAPI wWinMain(HINSTANCE instance,HINSTANCE,PWSTR,int) {
         std::string line;
         while (std::getline(std::cin,line)) {
             if (line=="choose") PostMessageW(w,choose,0,0);
+            else if (line=="choose-folder" || line=="choose-in-place") PostMessageW(w,choose,line=="choose-folder"?4:5,0);
             else if (line=="reset-program") PostMessageW(w,resetProgram,0,0);
             else if (line=="import-master") PostMessageW(w,choose,3,0);
             else if (line=="import-save" || line=="export-save") PostMessageW(w,choose,line=="import-save"?1:2,0);
