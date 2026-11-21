@@ -11,6 +11,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"sync/atomic"
@@ -124,8 +125,8 @@ func resourceRevision(folder string) (string, error) {
 }
 
 func checkResourceFolder(revision, copyTo string) error {
-	const readers = 6
-	var results [readers][]resourceEntry
+	readers := min(24, 2*runtime.GOMAXPROCS(0))
+	results := make([][]resourceEntry, readers)
 	var count atomic.Int64
 	group, ctx := errgroup.WithContext(context.Background())
 	jobs := make(chan string, readers)
@@ -202,7 +203,9 @@ func readResourceFile(revision, rel, copyTo string, buffer []byte) (resourceEntr
 		}
 		dest = io.MultiWriter(out, checksum)
 	}
-	n, err := io.CopyBuffer(dest, in, buffer)
+	// os.File.WriteTo falls back to io.Copy with a new buffer on Windows.
+	// Expose just Read so this worker's buffer is reused for every file.
+	n, err := io.CopyBuffer(dest, struct{ io.Reader }{in}, buffer)
 	if out != nil {
 		closeErr := out.Close()
 		if err == nil {

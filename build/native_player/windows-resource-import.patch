@@ -1,0 +1,156 @@
+--- a/archive.go
++++ b/archive.go
+@@ -7,6 +7,7 @@
+ 	"encoding/json"
+ 	"errors"
+ 	"fmt"
++	"hash/crc32"
+ 	"io"
+ 	"os"
+ 	"path"
+@@ -159,6 +160,11 @@
+ // fails or is cancelled: the next import from the same link skips those
+ // blocks. A stage from another link is cleared first.
+ func ImportLink(link, stage string, freeBytes int64) string {
++	return ImportLinkChecked(link, stage, freeBytes, nil)
++}
++
++// ImportLinkChecked reports completed, checksum-verified entries to the Windows launcher.
++func ImportLinkChecked(link, stage string, freeBytes int64, checked func(string, int64, uint32)) string {
+ 	defer releaseMemory()
+ 	resetProgress()
+ 	ctx, cancel := context.WithCancel(context.Background())
+@@ -202,7 +208,7 @@
+ 	if f.Host() == "mega" {
+ 		workers = 1 // Mega's limit is per account; one block finishes soonest
+ 	}
+-	e = extractArchive(f, f.Size(), stage, extractOptions{free: freeBytes, link: record, workers: workers})
++	e = extractArchive(f, f.Size(), stage, extractOptions{free: freeBytes, link: record, workers: workers, checked: checked})
+ 	// Another platform's files are of no use to resume: they go.
+ 	var other wrongPlatform
+ 	if errors.As(e, &other) {
+@@ -301,6 +307,7 @@
+ // stage's file system; link is set for a link import; workers caps the
+ // blocks unpacked at once (0: up to 4).
+ type extractOptions struct {
++	checked func(string, int64, uint32)
+ 	free    int64
+ 	link    *linkRecord
+ 	workers int
+@@ -407,12 +414,12 @@
+ }
+ 
+ // writeEntry copies one entry into stage, counting progress and honouring cancel.
+-func writeEntry(stage, rel string, open func() (io.ReadCloser, error), link bool) error {
++func (w *resourceWriter) writeEntry(stage, rel string, open func() (io.ReadCloser, error), link bool, expected uint32) error {
+ 	if importCancelled.Load() {
+ 		return errCancelled
+ 	}
+ 	target := filepath.Join(stage, filepath.FromSlash(rel))
+-	if e := os.MkdirAll(filepath.Dir(target), 0700); e != nil {
++	if e := w.ensureParent(target); e != nil {
+ 		return e
+ 	}
+ 	in, e := open()
+@@ -427,8 +434,9 @@
+ 	if e != nil {
+ 		return e
+ 	}
+-	buf := make([]byte, 1<<20)
++	buf := w.buffer
+ 	var written int64
++	checksum := crc32.NewIEEE()
+ 	for {
+ 		if importCancelled.Load() {
+ 			out.Close()
+@@ -442,6 +450,7 @@
+ 			}
+ 			importDone.Add(int64(n))
+ 			written += int64(n)
++			checksum.Write(buf[:n])
+ 		}
+ 		if readErr == io.EOF {
+ 			break
+@@ -461,6 +470,12 @@
+ 		return e
+ 	}
+ 	importFiles.Add(1)
++	if checksum.Sum32() != expected {
++		return fmt.Errorf("Damaged resource: %s", rel)
++	}
++	if w.checked != nil {
++		w.checked(rel, written, expected)
++	}
+ 	return checkPlatform(target, written)
+ }
+ 
+@@ -523,10 +538,7 @@
+ 		work <- s
+ 	}
+ 	close(work)
+-	workers := runtime.NumCPU()
+-	if workers > 4 {
+-		workers = 4 // each LZMA2 decoder holds its dictionary (64 MB for the dump)
+-	}
++	workers := solidBlockWorkers()
+ 	if opt.workers > 0 && workers > opt.workers {
+ 		workers = opt.workers
+ 	}
+@@ -543,18 +555,14 @@
+ 		wg.Add(1)
+ 		go func() {
+ 			defer wg.Done()
+-			// Each worker reads its blocks in archive order with its own reader.
+-			reader, err := sevenzip.NewReader(source, size)
+-			if err != nil {
+-				fail(err)
+-				return
+-			}
++			// sevenzip.File.Open supports concurrent reads. Each worker owns a distinct solid block.
++			writer := newResourceWriter(opt.checked)
+ 			for stream := range work {
+ 				decodedStreams.Add(1)
+ 				for _, i := range byStream[stream] {
+-					file := reader.File[i]
++					file := archive.File[i]
+ 					rel, _ := revisionPath(file.Name)
+-					if err := writeEntry(stage, rel, file.Open, opt.link != nil); err != nil {
++					if err := writer.writeEntry(stage, rel, file.Open, opt.link != nil, file.CRC32); err != nil {
+ 						fail(err)
+ 						return
+ 					}
+@@ -580,11 +588,7 @@
+ 	if e != nil {
+ 		return fmt.Errorf("Cannot read the archive: %w", e)
+ 	}
+-	type entry struct {
+-		rel  string
+-		file *zip.File
+-	}
+-	var entries []entry
++	var entries []resourceZipEntry
+ 	var totalBytes, skippedBytes, skippedFiles int64
+ 	for _, file := range archive.File {
+ 		rel, err := revisionPath(file.Name)
+@@ -603,7 +607,7 @@
+ 				continue
+ 			}
+ 		}
+-		entries = append(entries, entry{rel, file})
++		entries = append(entries, resourceZipEntry{rel, file})
+ 	}
+ 	if e := checkSpace(stage, totalBytes-skippedBytes, opt); e != nil {
+ 		return e
+@@ -611,10 +615,5 @@
+ 	importDone.Add(skippedBytes)
+ 	importFiles.Add(skippedFiles)
+ 	publishTotals(totalBytes, int64(len(entries))+skippedFiles)
+-	for _, en := range entries {
+-		if e := writeEntry(stage, en.rel, en.file.Open, opt.link != nil); e != nil {
+-			return e
+-		}
+-	}
+-	return nil
+-}
++	return writeResourceZip(stage, entries, opt)
++}

@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"lunar-tear/server/mobile"
@@ -25,8 +26,25 @@ func stageResources(mode, source, stage string) error {
 		if len(raw) == 0 || len(raw) > 8192 {
 			return fmt.Errorf("Enter an archive URL.")
 		}
+		// A resumed download may skip previously extracted files. Recheck that
+		// stage on disk. A fresh download observes every verified write directly.
+		_, statErr := os.Lstat(stage)
+		fresh := os.IsNotExist(statErr)
+		if statErr != nil && !fresh {
+			return statErr
+		}
+		var files []resourceEntry
+		var mu sync.Mutex
+		var checked func(string, int64, uint32)
+		if fresh {
+			checked = func(name string, size int64, crc uint32) {
+				mu.Lock()
+				files = append(files, resourceEntry{name, uint64(size), crc})
+				mu.Unlock()
+			}
+		}
 		result := make(chan string, 1)
-		go func() { result <- mobile.ImportLink(string(raw), stage, -1) }()
+		go func() { result <- mobile.ImportLinkChecked(string(raw), stage, -1, checked) }()
 		tick := time.NewTicker(time.Second)
 		defer tick.Stop()
 		for {
@@ -34,6 +52,9 @@ func stageResources(mode, source, stage string) error {
 			case problem := <-result:
 				if problem != "" {
 					return fmt.Errorf("%s", problem)
+				}
+				if fresh {
+					return checkResourceIndex(files)
 				}
 				fmt.Println("Verifying downloaded game files")
 				return checkResourceFolder(target, "")

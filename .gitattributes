@@ -9,6 +9,7 @@
 launcher/*.go text eol=lf
 launcher/go.mod text eol=lf
 build/native_player/*.go text eol=lf
+build/native_player/*.patch text eol=lf
 build/native_player/*.py text eol=lf
 build/native_player/*.css text eol=lf
 build/native_player/*.html text eol=lf

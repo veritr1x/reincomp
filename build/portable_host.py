@@ -73,7 +73,7 @@ def build_go(bunker, work, go, game):
             raise ValueError('Expected Go 1.25.8 for Windows x64, found '+version)
         source = native_release.archive_server_source(Namespace(bunker=None,no_download=False), bunker, work, go)
         native_release.build_windows_server(go,source,work,server,os.environ.copy())
-        run(go,'build','-trimpath','-o',game/'archive-media.exe',NATIVE/'archive_media.go',NATIVE/'resource_archive.go',cwd=source)
+        native_release.build_archive_helper(go,source,work,game,os.environ.copy())
         run(go,'build','-trimpath','-buildvcs=false','-ldflags','-H=windowsgui','-o',work/'launcher.exe','.',cwd=ROOT/'launcher')
 
 

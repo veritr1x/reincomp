@@ -147,31 +147,33 @@ def build_windows_server(go, source, work, destination, env):
         raise ValueError('The pinned Bunker notice image routes changed')
     portraits = (work/'windows-notice-images.go').resolve()
     portraits.write_text(pages.replace(category, category+'|companion'), encoding='utf-8')
-    # The browser's portable launcher verifies the complete catalog before
-    # import. Verify each file's contents during extraction, before the server
-    # swaps the staged revision into place (also for solid 7z streams).
-    archive = (source/'mobile/archive.go').resolve()
-    content = archive.read_text(encoding='utf-8')
-    for old, new in (
-        ('"archive/zip"', '"archive/zip"\n "hash/crc32"'),
-        ('open func() (io.ReadCloser, error), link bool)', 'open func() (io.ReadCloser, error), link bool, expected uint32)'),
-        ('var written int64', 'var written int64\n checksum := crc32.NewIEEE()'),
-        ('written += int64(n)', 'written += int64(n)\n checksum.Write(buf[:n])'),
-        ('return checkPlatform(target, written)', 'if checksum.Sum32() != expected { return fmt.Errorf("Damaged resource: %s", rel) }; return checkPlatform(target, written)'),
-        ('writeEntry(stage, rel, file.Open, opt.link != nil)', 'writeEntry(stage, rel, file.Open, opt.link != nil, file.CRC32)'),
-        ('writeEntry(stage, en.rel, en.file.Open, opt.link != nil)', 'writeEntry(stage, en.rel, en.file.Open, opt.link != nil, en.file.CRC32)'),
-    ):
-        if content.count(old) != 1:
-            raise ValueError('The pinned Bunker resource extractor changed: '+old)
-        content = content.replace(old, new)
-    checked = (work/'windows-resource-import.go').resolve()
-    checked.write_text(content, encoding='utf-8')
-    overlay = (work/'windows-server-overlay.json').resolve()
-    overlay.write_text(json.dumps({'Replace': {str(original): str(patched), str(web): str(portraits), str(archive):str(checked)}}), encoding='utf-8')
+    overlay = windows_archive_overlay(source, work, {original: patched, web: portraits})
     release = json.loads((ROOT/'bunker.lock.json').read_text())['bunker']['release'].removeprefix('v')
     flags = '-s -w -X lunar-tear/server/internal/bunkerversion.Version='+release
     run(go, 'build', '-trimpath', '-buildvcs=false', '-overlay='+str(overlay), '-ldflags='+flags,
         '-o', destination.resolve(), './cmd/bunker-server', cwd=source, env={**env, 'CGO_ENABLED': '0'})
+
+
+def windows_archive_overlay(source, work, extra=None):
+    # Apply the same streaming verifier to the server's local imports and
+    # the Archive helper's resumable HTTP imports.
+    archive = (source/'mobile/archive.go').resolve()
+    scratch = (work/'import-overlay').resolve()
+    scratch.mkdir(parents=True, exist_ok=True)
+    checked = scratch/'archive.go'
+    checked.write_text(archive.read_text(encoding='utf-8'), encoding='utf-8', newline='\n')
+    run('git', '-c', 'core.autocrlf=false', 'apply', '--no-index', NATIVE/'windows-resource-import.patch', cwd=scratch,
+        env={**os.environ, 'GIT_CEILING_DIRECTORIES': str(scratch.parent)})
+    replacements = {archive: checked, archive.with_name('resource_workers_windows.go'): NATIVE/'resource_workers.go', **(extra or {})}
+    overlay = (work/('windows-server-overlay.json' if extra else 'windows-archive-overlay.json')).resolve()
+    overlay.write_text(json.dumps({'Replace': {str(k): str(v) for k,v in replacements.items()}}), encoding='utf-8')
+    return overlay
+
+
+def build_archive_helper(go, source, work, game, env):
+    overlay = windows_archive_overlay(source, work)
+    run(go, 'build', '-trimpath', '-overlay='+str(overlay), '-o', game/'archive-media.exe',
+        NATIVE/'archive_media.go', NATIVE/'resource_archive.go', cwd=source, env=env)
 
 
 def prepare(a, folder, work, server, deps, pods, bunker, cxx):
@@ -274,7 +276,7 @@ def prepare(a, folder, work, server, deps, pods, bunker, cxx):
         shutil.copy2(server, packaged_server)
     else:
         build_windows_server(go, source, work, packaged_server, env)
-    run(go,'build','-trimpath','-o',game/'archive-media.exe',NATIVE/'archive_media.go',NATIVE/'resource_archive.go',cwd=source,env=env)
+    build_archive_helper(go, source, work, game, env)
     run(cxx, '-std=c++17', '-O2', '-static', '-municode', '-mwindows', NATIVE/'resource-window.cpp',
         ROOT/'host/bunker_view.cpp', '-lole32', '-luuid', '-lcomdlg32', '-lshell32', '-o', game/'resource-window.exe')
     if a.launcher:
