@@ -32,6 +32,8 @@
 #include "native_window.h"
 #include "unity_touch_input.h"
 #include "game_frame_rate.h"
+#include "component_type_query.h"
+#include "scene_route.h"
 #include "keyboard_confirm.h"
 #include "android_cpu_topology.h"
 #include "keyboard_touch.h"
@@ -97,6 +99,9 @@
 #include <windows.h>
 #include <pthread.h>
 #include <bcrypt.h>
+#ifdef REINCOMP_EMBEDDED_PLAYER
+extern "C" void RegisterPlayerJni(bunker::jni::Host *);
+#endif
 #if defined(BUNKER_GAME_COLLECTOR_DELIVERY) && BUNKER_GAME_COLLECTOR_DELIVERY
 #if !defined(BUNKER_GAME_COOPERATIVE_POLLS) || !BUNKER_GAME_COOPERATIVE_POLLS
 #error Original collector delivery requires the qualified cooperative cohort
@@ -112,6 +117,9 @@ extern "C" Memory *__real_sub_70a8a5c4(State &,addr_t,Memory *);
 extern "C" Memory *__real_sub_70a8aa08(State &,addr_t,Memory *);
 extern "C" Memory *sub_7042cab4(State &,addr_t,Memory *);  // Unity core topology (lifted)
 
+#ifdef REINCOMP_EMBEDDED_PLAYER
+extern "C" bool NativePlayerSenderRoots(State *const *,size_t);
+#endif
 namespace {
 using namespace unity_image;
 const auto &kInitializers=unity_image::kConstructors;
@@ -181,11 +189,12 @@ GameFrameRunOptions ParseGameFrameRunTail(int &argc,char **argv){
 }
 // ~1ms sleep without changing the process timer resolution (the default
 // 15.6ms tick otherwise adds up to a full tick of latency per frame poll).
-void FramePollSleep(){
+void FramePollSleep(std::chrono::nanoseconds delay=std::chrono::milliseconds(1)){
+  if(delay.count()<=0)return;
   static thread_local HANDLE timer=CreateWaitableTimerExW(nullptr,nullptr,0x00000002/*HIGH_RESOLUTION*/,TIMER_ALL_ACCESS);
-  LARGE_INTEGER due;due.QuadPart=-10000; // 1ms, relative
+  LARGE_INTEGER due;due.QuadPart=-((delay.count()+99)/100); // relative, in 100 ns units
   if(timer&&SetWaitableTimer(timer,&due,0,nullptr,nullptr,FALSE)){WaitForSingleObject(timer,INFINITE);return;}
-  std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  std::this_thread::sleep_for(delay);
 }
 // --target-fps N: Unity's Android frame pacing (libunity 22be08) waits
 // round(refresh/target) Choreographer vsyncs after each frame, where target is
@@ -231,6 +240,19 @@ class GameFrameLimiter {
  public:
   explicit GameFrameLimiter(int32_t cap):interval_(cap>0?std::chrono::nanoseconds(1000000000/cap):std::chrono::nanoseconds(0)){}
   bool Ready(std::chrono::steady_clock::time_point now) const {return interval_.count()==0||now>=next_;}
+  std::chrono::nanoseconds PollDelay() const {
+    const auto remaining=std::chrono::duration_cast<std::chrono::nanoseconds>(next_-std::chrono::steady_clock::now());
+    return std::min(remaining,std::chrono::nanoseconds(1000000));
+  }
+  void WaitForSwap(){
+    auto now=std::chrono::steady_clock::now();
+    if(now<next_){
+      constexpr auto margin=std::chrono::microseconds(160);
+      FramePollSleep(next_-now-margin);
+      while((now=std::chrono::steady_clock::now())<next_)YieldProcessor();
+    }
+    Started(now);
+  }
   void Started(std::chrono::steady_clock::time_point now){
     if(interval_.count()==0)return;
     next_=now-next_>interval_?now+interval_:next_+interval_;
@@ -336,9 +358,16 @@ addr_t TryGlImport(bunker::windows::GlHost &provider,const std::string &name){
 }
 bool Translated(addr_t entry){
   // Generated trace table is ordered. Data exports are intentionally excluded.
+  // The table is immutable. Frequently repeated callback PCs can reuse a
+  // positive lookup. Collisions only cause another search of the full table.
+  static std::atomic<addr_t> known[256]{};
+  auto &slot=known[((entry>>2)^(entry>>11))&255];
+  if(entry && slot.load(std::memory_order_relaxed)==entry)return true;
   size_t low=0,high=std::size(kTraces);
   while(low<high){size_t mid=low+(high-low)/2;if(kTraces[mid].address<entry)low=mid+1;else high=mid;}
-  return low<std::size(kTraces)&&kTraces[low].address==entry;
+  if(low==std::size(kTraces)||kTraces[low].address!=entry)return false;
+  slot.store(entry,std::memory_order_relaxed);
+  return true;
 }
 bool Executable(addr_t address){
   if(address&3)return false;
@@ -456,7 +485,8 @@ int main(int argc,char **argv){
   if(first_frame&&!collector_delivery){std::fputs("First frame diagnostic requires the explicit muted collector profile\n",stderr);return 2;}
   if(firebase_dll_argument&&!first_frame){std::fputs("Windows Firebase SDK requires the explicit first-frame profile\n",stderr);return 2;}
   if(argc!=4&&!(argc==5&&!std::strcmp(argv[4],"--init-jni"))&&!surface_gate){std::fprintf(stderr,"Usage: bunker-game-bootstrap.exe <verified-native-directory> <original-game.apk> <writable-storage-directory> [--init-jni | --surface-gate <landscape-client-width> <height> | --frame-gate <width> <height> <pinned-ANGLE-DLL-directory> [--mute-audio [--collector-delivery]]] [--first-frame [--firebase-app-dll <pinned-SDK-DLL>] [--run-frames <positive-count> | --run-until-close]]\n");return 2;}
-  if(frame_run.Continuing())std::fprintf(stderr,"Frame continuation: enabled mode=%s returnedFrameLimit=%llu; original first-frame capture retained\n",frame_run.mode==GameFrameRunOptions::Mode::ReturnedFrames?"returned-frames":"until-close",(unsigned long long)frame_run.returned_frames);
+  const bool capture_frame = !(GameQuietTrace() && GameServerProfile() && frame_run.mode == GameFrameRunOptions::Mode::UntilClose);
+  if(frame_run.Continuing())std::fprintf(stderr,"Frame continuation: enabled mode=%s returnedFrameLimit=%llu; first-frame capture %s\n",frame_run.mode==GameFrameRunOptions::Mode::ReturnedFrames?"returned-frames":"until-close",(unsigned long long)frame_run.returned_frames,capture_frame?"enabled":"off");
 #if !defined(BUNKER_GAME_COLLECTOR_DELIVERY) || !BUNKER_GAME_COLLECTOR_DELIVERY
   if(collector_delivery){std::fputs("Game GC: original delivery profile is unavailable in this build\n",stderr);return 2;}
 #endif
@@ -481,7 +511,12 @@ int main(int argc,char **argv){
     // identical entries, with the settings asset stored instead of deflated.
     const bool windows_presentation_apk=first_frame&&collector_delivery&&(runtime_apk_sha256=="fd0d0d357a4e8c316d0e732783d795f0e100a675d0c7a0fcf252873deb84f538"||runtime_apk_sha256=="c9919b7799637455095738a57987255c79fb2669cdc81568f2138b4fcc50c362"
       // ... and the launcher's variant that leaves audio on (--sound).
-      ||runtime_apk_sha256=="3eeada0a6e29b0833af7e8a3de5143dd8db83c68fad2741115a8125e50847377");
+      ||runtime_apk_sha256=="3eeada0a6e29b0833af7e8a3de5143dd8db83c68fad2741115a8125e50847377"
+#ifdef REINCOMP_EMBEDDED_PLAYER
+      // The desktop player reads its own configured globalgamemanagers.
+      ||runtime_apk_sha256=="9ded0797ee607b6892b531ba3a02f4c4510774f5fe098ccada78ccff881c9209"
+#endif
+      );
     if(Sha256(library)!=kUnitySha256||Sha256(il2cpp_library)!=il2cpp_image::kIl2cppSha256||(runtime_apk_sha256!=kApkSha256&&!windows_presentation_apk))throw std::runtime_error("runtime original Unity/IL2CPP/APK SHA256 differs from verified translation/metadata");
     if(collector_delivery)Require(std::string(il2cpp_image::kIl2cppSha256)=="ff5c66ad2fdaa957fa005f1957988b3277331abefcdedcdb0c82e59ba2e80522"&&il2cpp_image::kIl2cppBase==0x80000000,"original collector profile byte/base pins differ");
     if(kExploratory)std::fprintf(stderr,"Unity bootstrap: EXPLORATORY DIAGNOSTIC ONLY: %zu unsupported translated traces remain; every real constructor will still execute\n",kUnsupportedTraces);
@@ -501,11 +536,11 @@ int main(int argc,char **argv){
     for(auto &trace:selected){if(trace.address==0x70a8a5c4){decode_outer_present=true;trace.entry=GameOriginalUnityDecodeOuter;}if(trace.address==0x70a8aa08){decode_inner_present=true;trace.entry=GameOriginalUnityDecodeInner;}}
     Require(decode_outer_present&&decode_inner_present,"current Unity decode automatic owner helpers are absent from union");
     bool original_raise_present=false;
-    if(first_frame)for(auto &trace:selected)if(trace.address==0x826263cc){
+    if(first_frame&&!GameQuietTrace())for(auto &trace:selected)if(trace.address==0x826263cc){
       GameExceptionDiagnostic::ConfigureRaise(trace.entry,true);
       trace.entry=GameExceptionDiagnostic::Raise;original_raise_present=true;
     }
-    Require(!first_frame||original_raise_present,"original Raise observation entry is absent from union");
+    Require(!first_frame||GameQuietTrace()||original_raise_present,"original Raise observation entry is absent from union");
     recomp::Runtime runtime;runtime.AddTraces(selected.data(),selected.size());
     if(first_frame)runtime.AddImport(0,[](State &s){
       GameExceptionDiagnostic::ReportNull(s);
@@ -533,14 +568,14 @@ int main(int argc,char **argv){
     if(GameServerProfile())bunker::windows::server_profile::InstallEntryOverrides();
     bunker::windows::guest_probes::AddFromEnvironment();
     // --render-size: the game picks its own render resolution through
-    // UnityEngine.Screen.SetResolution (e.g. 1280x720). Scale each request up so
+    // UnityEngine.Screen.SetResolution (e.g. 1280x720). Scale each request so
     // its height is the configured render height, keeping the game's aspect;
     // Unity then sizes its fixed buffers and the presenter scales to the window.
     if(render_height){
       for(const addr_t entry:{addr_t(0x84d7801c),addr_t(0x84d78084),addr_t(0x84d780f4)})  // SetResolution(w,h,mode,rate)/(w,h,bool,rate)/(w,h,bool)
         recomp::AddGuestProbe(entry,[render_width,render_height](State &s){
           const int32_t w=int32_t(s.gpr.x0.dword),h=int32_t(s.gpr.x1.dword);
-          if(w<=0||h<=0||h>=render_height)return;
+          if(w<=0||h<=0||h==render_height)return;
           const int32_t sw=int32_t((int64_t(w)*render_height+h/2)/h),sh=render_height;
           std::fprintf(stderr,"Game bootstrap: Screen.SetResolution %dx%d -> %dx%d (render size %dx%d)\n",w,h,sw,sh,render_width,render_height);
           s.gpr.x0.qword=uint32_t(sw);s.gpr.x1.qword=uint32_t(sh);});
@@ -548,6 +583,7 @@ int main(int argc,char **argv){
     // Automatic-environment owners. --wrap redirects cross-object references
     // only; same-shard direct calls reach these through the guest-call
     // protocol's override filter (previously a --wrap of __bunker_guest_call).
+    SceneRoute scene_route;
     bunker::windows::frame_rate::AddOverrides(GameFrameCap());
     // Unity's core topology (libunity 42CAB4) returns {count A | count B<<32,
     // mask A | mask B<<32}; its job-worker pool and the threaded-GfxDevice
@@ -711,21 +747,32 @@ int main(int argc,char **argv){
     std::unique_ptr<EglHost> egl;
     std::unique_ptr<GlHost> graphics;
     std::atomic<uint64_t> observed_egl_calls{0},observed_presentations{0};
-    struct WindowPresent {uint64_t ticket;addr_t display,surface;};
+    // Above refresh the guest's swap interval is disabled. Pace successful
+    // window draws on their render thread; keep request pacing for frames
+    // that only load assets or draw offscreen.
+    const bool pace_window_swaps=frame_gate&&GameFrameCap()>DisplayRefreshFps();
+    struct WindowPresent {uint64_t ticket;addr_t display,surface;bool window;};
     std::mutex present_mutex;std::map<DWORD,WindowPresent> pending_window_presentations;
     // ModuleRegistry owns 0x7ff400000000; keep this combined provider disjoint.
     if(surface_gate)native_windows=std::make_unique<NativeWindows>(java,0x7ff440000000ULL);
 
     if(frame_gate){
       auto dlls=fs::canonical(fs::u8path(argv[7]));
-      egl=std::make_unique<EglHost>(*native_windows,dlls.wstring());graphics=std::make_unique<GlHost>(*egl,dlls.wstring());
+      egl=std::make_unique<EglHost>(*native_windows,dlls.wstring());
+      if(pace_window_swaps)egl->UseHostFramePacing();
+      graphics=std::make_unique<GlHost>(*egl,dlls.wstring());
       if(first_frame){
-        graphics->EnableFrameDiagnostics((storage/L"first-frame.png").wstring());
+        if(capture_frame)graphics->EnableFrameDiagnostics((storage/L"first-frame.png").wstring());
         egl->SetDiagnosticObserver([&](const std::string &name,const State &state,bool completed){
           if(!completed){++observed_egl_calls;if(!GameQuietTrace())std::fprintf(stderr,"First frame: EGL ENTER %s native_tid=%lu guestLR=%#llx\n",name.c_str(),GetCurrentThreadId(),(unsigned long long)state.gpr.x30.qword);
             if(name=="eglSwapBuffers"){
-              WindowPresent pending{0,state.gpr.x0.qword,state.gpr.x1.qword};
+              WindowPresent pending{0,state.gpr.x0.qword,state.gpr.x1.qword,false};
+              pending.window=egl->IsCurrentDrawWindow(pending.display,pending.surface);
               pending.ticket=graphics->BeginWindowPresent(pending.display,pending.surface);
+              if(pending.window&&pace_window_swaps){
+                static thread_local GameFrameLimiter swaps(GameFrameCap());
+                swaps.WaitForSwap();
+              }
               std::lock_guard<std::mutex> lock(present_mutex);
               if(!pending_window_presentations.emplace(GetCurrentThreadId(),pending).second)throw std::logic_error("nested original window presentation observation");
             }
@@ -735,19 +782,32 @@ int main(int argc,char **argv){
               {std::lock_guard<std::mutex> lock(present_mutex);auto found=pending_window_presentations.find(GetCurrentThreadId());
                 if(found!=pending_window_presentations.end()){pending=found->second;pending_window_presentations.erase(found);}}
               graphics->FinishWindowPresent(pending.ticket,pending.display,pending.surface,state.gpr.x0.dword);
-              if(state.gpr.x0.dword==1)++observed_presentations;
-              {  // presents per second, every 5 s (kept under --quiet-trace)
-                static auto window=std::chrono::steady_clock::now();static uint64_t at_window=0;
-                const auto now=std::chrono::steady_clock::now();const double seconds=std::chrono::duration<double>(now-window).count();
-                if(seconds>=5){const uint64_t total=observed_presentations.load();
-                  std::fprintf(stderr,"Present rate: %.1f fps (%llu presents in %.1fs, total %llu)\n",(total-at_window)/seconds,(unsigned long long)(total-at_window),seconds,(unsigned long long)total);
-                  window=now;at_window=total;}
+              if(pending.window&&state.gpr.x0.dword==1){
+                ++observed_presentations;
+                const auto now=std::chrono::steady_clock::now();
+                static thread_local auto window=now,previous=now;
+                static thread_local std::vector<double> intervals;
+                if(now!=previous)intervals.push_back(std::chrono::duration<double,std::milli>(now-previous).count());
+                previous=now;
+                const double seconds=std::chrono::duration<double>(now-window).count();
+                if(seconds>=5){
+                  std::sort(intervals.begin(),intervals.end());
+                  const size_t n=intervals.size();
+                  const auto within_budget=std::upper_bound(intervals.begin(),intervals.end(),1000.0/120.0);
+                  const size_t over_budget=static_cast<size_t>(intervals.end()-within_budget);
+                  const auto first_miss=std::lower_bound(intervals.begin(),intervals.end(),8.30);
+                  const size_t misses=static_cast<size_t>(intervals.end()-first_miss);
+                  std::fprintf(stderr,"Present rate: %.1f fps (%zu presents in %.1fs) frame ms p50=%.2f p95=%.2f p99=%.2f max=%.2f over_120hz_budget=%zu/%zu at_or_above_8_30ms=%zu/%zu\n",
+                    n/seconds,n,seconds,intervals[(n-1)/2],intervals[n-1-n/20],intervals[n-1-n/100],intervals.back(),over_budget,n,misses,n);
+                  intervals.clear();
+                  window=now;
+                }
               }
             }
             if(!GameQuietTrace())std::fprintf(stderr,"First frame: EGL RETURN %s x0=%#llx successfulPresentations=%llu\n",name.c_str(),(unsigned long long)state.gpr.x0.qword,(unsigned long long)observed_presentations.load());
           }
         });
-        std::fputs("First frame: diagnostics enabled; original EGL/GLES only, window readback before original presentation; initial EGL/draw/presentation counts=0\n",stderr);
+        if(capture_frame)std::fputs("First frame: diagnostics enabled; original EGL/GLES only, window readback before original presentation; initial EGL/draw/presentation counts=0\n",stderr);
       }
       egl->SetProcedureResolver([&](const std::string &name){
         std::fprintf(stderr,"Unity bootstrap: requested typed GL procedure %s\n",name.c_str());return FindTypedGlesProcedure(*graphics,name);
@@ -799,15 +859,15 @@ int main(int argc,char **argv){
     std::unique_ptr<AndroidChoreographer> choreographer;
     modules.SetProgramHeaderRunner([&](addr_t callback,addr_t info,uint64_t size,addr_t data){
       Require(Translated(callback),"program-header callback is not translated");
-      {
+      Require(size==sizeof(AndroidDlPhdrInfo),"program-header callback ABI extent differs from Android13");
+      if(!GameQuietTrace()){
         GameWorkerObservation::NativeEnvironment native;
-        Require(size==sizeof(AndroidDlPhdrInfo),"program-header callback ABI extent differs from Android13");
         const auto entry=Read<AndroidDlPhdrInfo>(info);
         const auto name=entry.dlpi_name?recomp::ReadGuestString(entry.dlpi_name):std::string();
         std::fprintf(stderr,"Game bootstrap: original phdr callback=%#llx info=%#llx size=%llu data=%#llx module=%s bias=%#llx phdr=%#llx phnum=%u adds=%llu subs=%llu; actual active guest ELF metadata\n",(unsigned long long)callback,(unsigned long long)info,(unsigned long long)size,(unsigned long long)data,name.c_str(),(unsigned long long)entry.dlpi_addr,(unsigned long long)entry.dlpi_phdr,unsigned(entry.dlpi_phnum),(unsigned long long)entry.dlpi_adds,(unsigned long long)entry.dlpi_subs);
       }
       const auto result=static_cast<int32_t>(threads.Run(callback,{info,size,data}));
-      {GameWorkerObservation::NativeEnvironment native;std::fprintf(stderr,"Game bootstrap: original phdr callback=%#llx returned=%d\n",(unsigned long long)callback,result);}
+      if(!GameQuietTrace()){GameWorkerObservation::NativeEnvironment native;std::fprintf(stderr,"Game bootstrap: original phdr callback=%#llx returned=%d\n",(unsigned long long)callback,result);}
       return result;
     });
     // Existing profiles retain observation-only hooks and the nonzero guard.
@@ -815,11 +875,15 @@ int main(int argc,char **argv){
     if(collector_delivery){
       worker_collector=std::make_unique<GameUnityWorkerCollector>(threads,process_signals,semaphores,runtime);worker_collector_notify=worker_collector.get();
       GameCollectorDelivery::WorkerExtension extension;
+#ifdef REINCOMP_EMBEDDED_PLAYER
+      extension.sender_parent_roots=NativePlayerSenderRoots;
+#endif
       extension.prepare=[&](const auto&info,auto&lifecycle){worker_collector->Prepare(info,lifecycle);};
       extension.enter=[&](const auto&info){worker_collector->Enter(info);};
       extension.before_tls=[&](const auto&info){worker_collector->BeforeTls(info);};
       extension.retire=[&](const auto&info,auto reason){worker_collector->Retire(info,reason);};
       extension.owns=[&](uint64_t token){return worker_collector->Owns(token);};
+      extension.select_mutex=[&](const auto&context){return worker_collector->SelectMutex(context);};
       extension.checkpoint=[&](const auto&context){worker_collector->Checkpoint(context);};
       extension.main_owns=[&](uint64_t token){return main_collector&&main_collector->Owns(token);};
       extension.main_select=[&](const auto&context){return main_collector->SelectMutex(context);};
@@ -980,7 +1044,10 @@ int main(int argc,char **argv){
     auto mmap_bridge=recomp::MakeBridge<addr_t(addr_t,uint64_t,int32_t,int32_t,int32_t,int64_t)>([&files](auto address,auto length,auto protection,auto flags,auto descriptor,auto offset){return files.Mmap(address,length,protection,flags,descriptor,offset);});
     runtime.AddImport(mmap_audit_marker,[&,mmap_bridge](State &s){
       const auto length=s.gpr.x1.qword,caller=s.gpr.x30.qword;const auto flags=s.gpr.x3.dword;
-      try{mmap_bridge(s);std::fprintf(stderr,"Game bootstrap: original mmap length=%llu flags=%#x LR=%#llx result=%#llx errno=%d\n",(unsigned long long)length,flags,(unsigned long long)caller,(unsigned long long)s.gpr.x0.qword,files.Error());}
+      try{
+        mmap_bridge(s);
+        if(!GameQuietTrace())std::fprintf(stderr,"Game bootstrap: original mmap length=%llu flags=%#x LR=%#llx result=%#llx errno=%d\n",(unsigned long long)length,flags,(unsigned long long)caller,(unsigned long long)s.gpr.x0.qword,files.Error());
+      }
       catch(const std::exception &e){std::fprintf(stderr,"Game bootstrap: original mmap length=%llu flags=%#x LR=%#llx failed:%s\n",(unsigned long long)length,flags,(unsigned long long)caller,e.what());std::abort();}
     });
     constexpr addr_t sscanf_audit_marker=0x7ffc68000008ULL;
@@ -1079,6 +1146,10 @@ int main(int argc,char **argv){
       grpc_config.library_path=fs::absolute(fs::u8path(GameGrpcNative())).u8string();
       // The client serializes port 443; the local backend's gRPC port is 38003.
       if(GameServerProfile())grpc_config.target_rewrites["127.0.0.1:443"]="127.0.0.1:38003";
+#ifdef REINCOMP_EMBEDDED_PLAYER
+      if(GameServerProfile() && std::getenv("REINCOMP_ISOLATED_SERVER"))
+        grpc_config.target_rewrites["127.0.0.1:443"]="127.0.0.1:39003";
+#endif
       if(const char*v=std::getenv("BUNKER_GRPC_TRACE");v&&std::strcmp(v,"0"))grpc_config.trace=true;
       stage="gRPC native extension setup";grpc_service=std::make_unique<bunker::windows::grpc_native::Service>(std::move(grpc_config));
       grpc_service->Install(runtime);modules.Add(grpc_service->MakeModule());
@@ -1113,16 +1184,25 @@ int main(int argc,char **argv){
     modules.Install(module_bridges);
     for(const char *name:{"dlopen","dlsym","dlclose","dlerror","dladdr","dl_iterate_phdr"}){auto marker=modules.Marker(name);runtime.AddImport(marker,[&,name,marker](State &s){try{
       const auto argument=s.gpr.x0.qword,output=s.gpr.x1.qword,caller=s.gpr.x30.qword;
-      const auto text=!std::strcmp(name,"dlopen")?(argument?recomp::ReadGuestString(argument):"<null>"):!std::strcmp(name,"dlsym")?(s.gpr.x1.qword?recomp::ReadGuestString(s.gpr.x1.qword):"<null>"):std::string();
+      std::string text;
+      if(!GameQuietTrace()){
+        if(!std::strcmp(name,"dlopen"))text=argument?recomp::ReadGuestString(argument):"<null>";
+        if(!std::strcmp(name,"dlsym"))text=output?recomp::ReadGuestString(output):"<null>";
+      }
 #if defined(BUNKER_GAME_COLLECTOR_DELIVERY) && BUNKER_GAME_COLLECTOR_DELIVERY
       GameCollectorDelivery::Opaque opaque{bool(collector)};
       GameUnityMainCollector::Opaque main_opaque{bool(main_collector)};
       GameUnityWorkerCollector::Opaque worker_opaque{bool(worker_collector)};
 #endif
-      module_bridges.Dispatch(s,marker,nullptr);std::fprintf(stderr,"Game bootstrap: original %s argument=%#llx name=%s result=%#llx LR=%#llx Unity refs=%zu IL2CPP refs=%zu\n",name,(unsigned long long)argument,text.c_str(),(unsigned long long)s.gpr.x0.qword,(unsigned long long)caller,modules.ReferenceCount("libunity.so"),modules.ReferenceCount("libil2cpp.so"));
+      module_bridges.Dispatch(s,marker,nullptr);
+      if(GameQuietTrace())return;
+      std::fprintf(stderr,"Game bootstrap: original %s argument=%#llx name=%s result=%#llx LR=%#llx Unity refs=%zu IL2CPP refs=%zu\n",name,(unsigned long long)argument,text.c_str(),(unsigned long long)s.gpr.x0.qword,(unsigned long long)caller,modules.ReferenceCount("libunity.so"),modules.ReferenceCount("libil2cpp.so"));
       if(!std::strcmp(name,"dladdr")&&s.gpr.x0.dword){const auto info=Read<AndroidDlInfo>(output);const auto file=info.filename?recomp::ReadGuestString(info.filename):std::string();const auto symbol=info.symbol_name?recomp::ReadGuestString(info.symbol_name):std::string();std::fprintf(stderr,"Game bootstrap: original dladdr info filename=%s base=%#llx symbol=%s address=%#llx; registered ELF metadata, not native PE ownership\n",file.c_str(),(unsigned long long)info.base,symbol.c_str(),(unsigned long long)info.symbol_address);}
     }catch(const std::exception &e){std::fprintf(stderr,"Game bootstrap: module bridge %s failed:%s\n",name,e.what());std::abort();}});}
     if(init_jni)InstallDiagnosticJni(java,runtime);else java.Install(runtime);
+#ifdef REINCOMP_EMBEDDED_PLAYER
+    RegisterPlayerJni(&java);
+#endif
     zlib.Install(runtime);
     AndroidChoreographer::Config choreographer_config;
     choreographer_config.prepare_worker=[&](const std::u16string&)->AndroidChoreographer::Config::WorkerLease{
@@ -1190,9 +1270,13 @@ int main(int argc,char **argv){
     for(const char *name:{"sigaction","pthread_sigmask","sigprocmask","pthread_kill","sigsuspend","sigpending","sigemptyset","sigfillset","sigaddset","sigdelset","sigismember","sigaltstack"}){auto marker=process_signals.Marker(name);runtime.AddImport(marker,[&,name,marker](State &s){try{if(!std::strcmp(name,"pthread_kill")&&s.gpr.x1.dword){
 #if defined(BUNKER_GAME_COLLECTOR_DELIVERY) && BUNKER_GAME_COLLECTOR_DELIVERY
       if(collector){GameWorkerObservation::NativeEnvironment native;const auto target=s.gpr.x0.qword;const auto signal=s.gpr.x1.dword;
-        std::fprintf(stderr,"Game GC: nonzero send ENTRY caller_native_tid=%lu observed_worker_token=%#llx signal=%u target=%#llx PC=%#llx SP=%#llx FP=%#llx LR=%#llx x19=%#llx x20=%#llx x21=%#llx x22=%#llx x26=%#llx x27=%#llx x28=%#llx; arguments only before ownership validation\n",GetCurrentThreadId(),(unsigned long long)GameWorkerObservation::Token(),signal,(unsigned long long)target,(unsigned long long)s.gpr.pc.qword,(unsigned long long)s.gpr.sp.qword,(unsigned long long)s.gpr.x29.qword,(unsigned long long)s.gpr.x30.qword,(unsigned long long)s.gpr.x19.qword,(unsigned long long)s.gpr.x20.qword,(unsigned long long)s.gpr.x21.qword,(unsigned long long)s.gpr.x22.qword,(unsigned long long)s.gpr.x26.qword,(unsigned long long)s.gpr.x27.qword,(unsigned long long)s.gpr.x28.qword);
-        std::fflush(stderr);
-        if(main_collector->Owns(target))main_collector->Send(s,[&]{signal_bridges.Dispatch(s,marker,nullptr);});else if(worker_collector->Owns(target))worker_collector->Send(s,[&]{signal_bridges.Dispatch(s,marker,nullptr);});else collector->Send(s,[&]{signal_bridges.Dispatch(s,marker,nullptr);});std::fprintf(stderr,"Game GC: actual pthread_kill returned signal=%u target=%#llx status=%d; no queue inference from pre-call witness\n",signal,(unsigned long long)target,int32_t(s.gpr.x0.dword));return;}else
+        if(!GameQuietTrace()){
+          std::fprintf(stderr,"Game GC: nonzero send ENTRY caller_native_tid=%lu observed_worker_token=%#llx signal=%u target=%#llx PC=%#llx SP=%#llx FP=%#llx LR=%#llx x19=%#llx x20=%#llx x21=%#llx x22=%#llx x26=%#llx x27=%#llx x28=%#llx; arguments only before ownership validation\n",GetCurrentThreadId(),(unsigned long long)GameWorkerObservation::Token(),signal,(unsigned long long)target,(unsigned long long)s.gpr.pc.qword,(unsigned long long)s.gpr.sp.qword,(unsigned long long)s.gpr.x29.qword,(unsigned long long)s.gpr.x30.qword,(unsigned long long)s.gpr.x19.qword,(unsigned long long)s.gpr.x20.qword,(unsigned long long)s.gpr.x21.qword,(unsigned long long)s.gpr.x22.qword,(unsigned long long)s.gpr.x26.qword,(unsigned long long)s.gpr.x27.qword,(unsigned long long)s.gpr.x28.qword);
+          std::fflush(stderr);
+        }
+        if(main_collector->Owns(target))main_collector->Send(s,[&]{signal_bridges.Dispatch(s,marker,nullptr);});else if(worker_collector->Owns(target))worker_collector->Send(s,[&]{signal_bridges.Dispatch(s,marker,nullptr);});else collector->Send(s,[&]{signal_bridges.Dispatch(s,marker,nullptr);});
+        if(!GameQuietTrace())std::fprintf(stderr,"Game GC: actual pthread_kill returned signal=%u target=%#llx status=%d; no queue inference from pre-call witness\n",signal,(unsigned long long)target,int32_t(s.gpr.x0.dword));
+        return;}else
 #endif
       {std::fprintf(stderr,"Game bootstrap: unsupported nonzero signal delivery signal=%u target=%#llx guestPC=%#llx LR=%#llx\n",s.gpr.x1.dword,(unsigned long long)s.gpr.x0.qword,(unsigned long long)s.gpr.pc.qword,(unsigned long long)s.gpr.x30.qword);std::abort();}}
       const auto input=s.gpr.x0.qword,output=s.gpr.x1.qword;
@@ -1210,7 +1294,7 @@ int main(int argc,char **argv){
       const auto microseconds=s.gpr.x0.dword;const auto caller=s.gpr.x30.qword;
       try{
         sleep_bridges.Dispatch(s,usleep_marker,nullptr);
-        std::fprintf(stderr,"Game bootstrap: original usleep microseconds=%u LR=%#llx result=%d errno=%d\n",microseconds,(unsigned long long)caller,int32_t(s.gpr.x0.dword),files.Error());
+        if(!GameQuietTrace())std::fprintf(stderr,"Game bootstrap: original usleep microseconds=%u LR=%#llx result=%d errno=%d\n",microseconds,(unsigned long long)caller,int32_t(s.gpr.x0.dword),files.Error());
       }catch(const std::exception &e){std::fprintf(stderr,"Game bootstrap: original usleep LR=%#llx failed:%s\n",(unsigned long long)caller,e.what());std::abort();}
       catch(...){std::fprintf(stderr,"Game bootstrap: original usleep LR=%#llx failed:unknown host exception\n",(unsigned long long)caller);std::abort();}
     });
@@ -1328,8 +1412,8 @@ int main(int argc,char **argv){
       const auto actual=identity=="sigsuspend"?process_signals.Marker(identity):identity=="sem_wait"||identity=="sem_timedwait"?semaphores.Marker(identity):threads.Marker(identity);
       const auto observed=tls_audit.Marker(identity);
       runtime.AddImport(observed,[&,identity,actual](State &s){
-        bool record_wait=true;
-        if(first_frame){
+        bool record_wait=!GameQuietTrace();
+        if(first_frame && record_wait){
           GameWorkerObservation::NativeEnvironment native;
           // Per-thread diagnostic counters contain no guest addresses. Bound
           // repeated fast-lock output while retaining complete sampled pairs.
@@ -1343,7 +1427,7 @@ int main(int argc,char **argv){
         }
         // UnityMain is an external Pthreads lifetime, not a prepared worker.
         // Its own diagnostic must not rely on GameWorkerObservation::Token.
-        const bool observe_main=first_frame&&ObserveFourthFrameThread();
+        const bool observe_main=first_frame&&!GameQuietTrace()&&ObserveFourthFrameThread();
         static thread_local uint64_t main_wait_sequence=0;
         const auto main_sequence=observe_main?++main_wait_sequence:0;
         if(observe_main)ObserveFourthFrameWait("ENTRY",identity.c_str(),main_sequence,s);
@@ -1354,8 +1438,8 @@ int main(int argc,char **argv){
         // Dispatch the existing checked provider. No nested Runtime::Run or
         // new guest State is introduced; original arguments/results survive.
 #if defined(BUNKER_GAME_COLLECTOR_DELIVERY) && BUNKER_GAME_COLLECTOR_DELIVERY
-        if(main_collector&&main_collector->Owns(threads.Self()))main_collector->WithWait(identity,s,[&]{runtime.Dispatch(s,actual,nullptr);});else
-        if(worker_collector&&worker_collector->Owns(threads.Self()))worker_collector->WithWait(identity,s,[&]{runtime.Dispatch(s,actual,nullptr);});else
+        if(main_collector&&main_collector->OwnsCurrentThread())main_collector->WithWait(identity,s,[&]{runtime.Dispatch(s,actual,nullptr);});else
+        if(worker_collector&&worker_collector->OwnsCurrentThread())worker_collector->WithWait(identity,s,[&]{runtime.Dispatch(s,actual,nullptr);});else
         if(collector)collector->WithWait(identity,s,[&]{runtime.Dispatch(s,actual,nullptr);});else
 #endif
         runtime.Dispatch(s,actual,nullptr);
@@ -1370,7 +1454,9 @@ int main(int argc,char **argv){
       if(worker_collector)worker_collector->BeforeNonlocal();
 #endif
       if(!std::strcmp(name,"setjmp")){const auto token=current_signal_thread();automatic_environments.BeforeSetjmp(s,token);font_environments.BeforeSetjmp(s,token);decode_environments.BeforeSetjmp(s,token);}jump_bridges.Dispatch(s,marker,nullptr);}catch(const std::exception &e){std::fprintf(stderr,"Game bootstrap: nonlocal bridge %s failed:%s\n",name,e.what());std::abort();}});}}
-    if(graphics){
+    if(graphics && GameQuietTrace()){
+      graphics->Install(runtime);
+    }else if(graphics){
       graphics->Install(gl_bridges);
       for(const auto &name:GlHost::Commands()){
         auto marker=graphics->Marker(name);runtime.AddImport(marker,[&,marker,name](State &s){
@@ -1554,7 +1640,11 @@ int main(int argc,char **argv){
           }
           if(actual_render&&target==actual_render&&!GameQuietTrace())std::fprintf(stderr,"Game bootstrap: before original nativeRender IL2CPP constructors=%zu refs=%zu\n",il2cpp_ledger.constructed,modules.ReferenceCount("libil2cpp.so"));
           if(!GameQuietTrace())std::fprintf(stderr,"Unity bootstrap: UnityMain host-thread=%lu native=%#llx argc=%zu env=%#llx receiver=%#llx display=%#llx surface=%#llx\n",GetCurrentThreadId(),static_cast<unsigned long long>(target),args.size(),static_cast<unsigned long long>(args.at(0)),static_cast<unsigned long long>(args.at(1)),static_cast<unsigned long long>(args.size()>2?args[2]:0),static_cast<unsigned long long>(args.size()>3?args[3]:0));
-          auto result=threads.Run(target,args);
+          auto result=[&] {
+            if(!actual_render || target!=actual_render)return threads.Run(target,args);
+            bunker::windows::ComponentTypeQueryFrame queries;
+            return threads.Run(target,args);
+          }();
           if(firebase)firebase->CheckHealthy();
           if(first_frame&&actual_render&&target==actual_render&&render_observation_calls==4&&ObserveFourthFrameThread()){
             FourthFrameNativeEnvironment environment;fourth_frame_observation_thread.store(0,std::memory_order_relaxed);
@@ -1811,6 +1901,8 @@ int main(int argc,char **argv){
             // return->request (host continuation latency), averaged per 60 frames.
             auto requested_at=std::chrono::steady_clock::now(),returned_at=requested_at;double render_ms=0,gap_ms=0;
             GameFrameLimiter limiter(GameFrameCap());
+            uint64_t presents_at_request=0;
+            bool frame_presented=false;
             while(!close){
               for(const auto &event:native_windows->DrainEvents(window)){
                 if(event.kind==NativeWindows::Event::Focus)lifecycle.WindowFocusChanged(event.focused);
@@ -1823,27 +1915,39 @@ int main(int argc,char **argv){
               if(!next_frame){
                 if(auto result=lifecycle.PollFrame()){
                   keep_running=*result;render_returned=true;frame_continues=keep_running;++completed_frames;
+                  frame_presented=pace_window_swaps&&observed_presentations.load(std::memory_order_relaxed)!=presents_at_request;
                   returned_at=std::chrono::steady_clock::now();render_ms+=std::chrono::duration<double,std::milli>(returned_at-requested_at).count();
                   auto diagnostic=graphics->DescribeFrameDiagnostics();
                   const bool witness=diagnostic.frame_png&&diagnostic.nonuniform&&diagnostic.draw_submissions&&diagnostic.presented_capture_serial;
-                  std::fprintf(stderr,"First frame: original nativeRender returned frame=%llu continue=%d presentedCandidate=%d draws=%llu\n",(unsigned long long)completed_frames,int(keep_running),int(witness),(unsigned long long)diagnostic.draw_submissions);
+                  if(!GameQuietTrace())std::fprintf(stderr,"First frame: original nativeRender returned frame=%llu continue=%d presentedCandidate=%d draws=%llu\n",(unsigned long long)completed_frames,int(keep_running),int(witness),(unsigned long long)diagnostic.draw_submissions);
                   if(!keep_running||frame_run.StopAfterReturnedFrame(completed_frames,witness))break;
                   if(frame_run.SnapshotBeforeNextFrame(completed_frames)){
                     later_snapshot_request=graphics->RequestFrameSnapshot((storage/L"later-frame.png").wstring());
                     std::fprintf(stderr,"Frame continuation: snapshot request=%llu after returnedFrame=%llu; next genuine successful swap only\n",(unsigned long long)later_snapshot_request,(unsigned long long)completed_frames);
                   }
+                  scene_route.AfterFrame([&](bool down){
+                    auto lease=native_windows->FromSurface(surface);
+                    if(!lease)throw std::runtime_error("scene route lost its surface");
+                    auto geometry=native_windows->Describe(lease);
+                    native_windows->Release(lease);
+                    using T=bunker::windows::touch_input::Injector;
+                    touch.Inject(down?T::Down:T::Up,geometry.width*0.5f,geometry.height*0.90f);
+                  },[&](const std::wstring &path){graphics->RequestFrameSnapshot(path,true);});
                   next_frame=true;
                 }
               }
-              if(next_frame)ApplyGameTargetFps();
-              if(next_frame&&limiter.Ready(std::chrono::steady_clock::now())&&lifecycle.RequestNextFrame()){
+
+              if(next_frame&&(frame_presented||limiter.Ready(std::chrono::steady_clock::now()))){
+                ApplyGameTargetFps();
+                presents_at_request=observed_presentations.load(std::memory_order_relaxed);
+                if(!lifecycle.RequestNextFrame()){FramePollSleep();continue;}
                 next_frame=false;requested_at=std::chrono::steady_clock::now();limiter.Started(requested_at);gap_ms+=std::chrono::duration<double,std::milli>(requested_at-returned_at).count();
                 if(completed_frames%60==0){std::fprintf(stderr,"Frame timing: frames=%llu avg_render_ms=%.2f avg_host_gap_ms=%.2f (last 60)\n",(unsigned long long)completed_frames,render_ms/60,gap_ms/60);render_ms=gap_ms=0;}
                 if(completed_frames<=8||completed_frames%60==0)std::fprintf(stderr,"First frame: requesting next original nativeRender after frame=%llu; same UnityMain/window, no repeated nativeResume\n",(unsigned long long)completed_frames);
               }
               // A frame in flight: wake the moment it returns (the next request
               // goes out without a poll-tick delay); otherwise tick for the cap.
-              if(!next_frame)lifecycle.AwaitFrame(std::chrono::milliseconds(2));else FramePollSleep();
+              if(!next_frame)lifecycle.AwaitFrame(std::chrono::milliseconds(2));else FramePollSleep(limiter.PollDelay());
             }
             if(frame_run.Continuing())std::fprintf(stderr,"Frame continuation: stopped returnedFrames=%llu reason=%s; same original UnityMain/window, no repeated nativeResume\n",(unsigned long long)completed_frames,close?"real window close":!keep_running?"original nativeRender returned false":"requested returned-frame limit");
             if(later_snapshot_request){

@@ -1,6 +1,7 @@
 #ifdef _WIN32
 #include <windows.h>
 #endif
+#include <algorithm>
 #include <atomic>
 #include <cfenv>
 #include <cstddef>
@@ -10,6 +11,7 @@
 #include <limits>
 #include <memory>
 #include <mutex>
+#include <shared_mutex>
 #include <stdexcept>
 
 #include "runtime.h"
@@ -20,7 +22,6 @@
 #include <unordered_map>
 
 namespace {
-struct ActiveTag; constexpr recomp::ThreadLocalRef<recomp::Runtime *, ActiveTag> active{};
 // ARM IDC is not x86's denormal-operand status bit. Instructions that flush
 // an input explicitly raise IDC; ordinary subnormal inputs must not set it.
 struct DenormalTag; constexpr recomp::ThreadLocalRef<int, DenormalTag> explicit_denormal{};
@@ -64,6 +65,7 @@ struct ExecutionContext {
   ExecutionContext *previous = nullptr;
   recomp::ThreadExitDomain *terminal = nullptr;
   Reservation reservation{};
+  recomp::Runtime *runtime = nullptr;
 };
 static_assert(offsetof(GuestCallFrame, previous) == 0 && offsetof(GuestCallFrame, expected_pc) == 8 &&
               offsetof(GuestCallFrame, caller_sp) == 16 && offsetof(GuestCallFrame, root) == 24 &&
@@ -108,33 +110,36 @@ Memory *finish_guest_call(ExecutionContext &context, GuestCallFrame &frame,
       return memory;
     }
     const auto resume=context.transfer;
-    if (!active || !active->HasGuestTrace(resume.pc))
+    if (!context.runtime->HasGuestTrace(resume.pc))
       fail("unselectable guest resume target",resume.pc);
     // The intervening native guest frames have already returned via their
     // guards. Dispatch only at the frame with the restored caller SP, without
     // resetting FENV, constructing a new Run, or changing architectural State.
     context.transfer={};
-    memory=active->Dispatch(state,resume.pc,memory);
+    memory=context.runtime->Dispatch(state,resume.pc,memory);
     if (!context.transfer.active && state.gpr.pc.qword==resume.pc && state.gpr.sp.qword==resume.sp)
       fail("guest resume returned without a continuation",resume.pc);
     // A nested rethrow may have installed a distinct pending transfer while
     // this landing body was running. The same loop handles it independently.
   }
 }
-// Every exclusive load/store and every plain store made while a reservation is
-// live takes this lock for a few hundred nanoseconds. MinGW's std::mutex
-// (winpthreads) parks contending threads on a kernel semaphore; a slim
-// reader/writer lock spins briefly first, which suits these short sections.
+// Exclusive operations and provider callbacks share this lock. Plain guest
+// stores update reservation epochs atomically. The Windows slim lock spins
+// briefly before parking, which suits these short sections.
 class TrackingLock {
  public:
 #ifdef _WIN32
   void lock() noexcept { AcquireSRWLockExclusive(&lock_); }
   void unlock() noexcept { ReleaseSRWLockExclusive(&lock_); }
+  void lock_shared() noexcept { AcquireSRWLockShared(&lock_); }
+  void unlock_shared() noexcept { ReleaseSRWLockShared(&lock_); }
  private:
   SRWLOCK lock_ = SRWLOCK_INIT;
 #else
   void lock() { lock_.lock(); }
   void unlock() noexcept { lock_.unlock(); }
+  void lock_shared() { lock(); }
+  void unlock_shared() noexcept { unlock(); }
  private:
   std::mutex lock_;
 #endif
@@ -159,10 +164,15 @@ MemoryTracking &memory_tracking() {
 inline std::atomic<uint64_t> &granule_epoch_unlocked(addr_t granule) {
   return memory_tracking().epochs[size_t((granule / kReservationGranule) * UINT64_C(0x9E3779B97F4A7C15) >> (64 - kEpochTableBits))];
 }
-// Number of held reservations, changed only under the tracking lock. Plain
-// guest stores read it without the lock: with no live reservation there is
-// nothing to invalidate, so ordinary loads/stores never touch the lock.
-std::atomic<size_t> live_reservations{0};
+// Check a small page counter before writing epoch cache lines. A reservation
+// on an audio queue should not make every unrelated renderer store update
+// the epoch table. Pages that share a bucket only cause extra invalidations.
+constexpr size_t kReservationPageBuckets = 1024;
+constexpr unsigned kReservationPageShift = 12;
+std::atomic<size_t> reserved_pages[kReservationPageBuckets]{};
+std::atomic<size_t> &page_reservations(addr_t address) {
+  return reserved_pages[(address >> kReservationPageShift) & (kReservationPageBuckets - 1)];
+}
 void check_range(addr_t address, size_t size) {
   if (size && size - 1 > std::numeric_limits<addr_t>::max() - address)
     throw std::invalid_argument("guest memory range overflows address space");
@@ -181,13 +191,14 @@ void invalidate_unlocked(addr_t address, size_t size) {
   }
 }
 void clear_reservation_unlocked(Reservation &reservation) {
-  if (reservation.held) live_reservations.fetch_sub(1, std::memory_order_seq_cst);
+  if (reservation.held) page_reservations(reservation.address).fetch_sub(1, std::memory_order_seq_cst);
   reservation = Reservation{};
 }
 void clear_current_reservation() {
-  if (!execution || !execution->reservation.held) return;
+  auto *current = execution.get();
+  if (!current || !current->reservation.held) return;
   std::lock_guard<TrackingLock> lock(memory_tracking().lock);
-  clear_reservation_unlocked(execution->reservation);
+  clear_reservation_unlocked(current->reservation);
 }
 ExecutionContext &exclusive_context(State &state, addr_t address, uint64_t size, bool pair = false) {
   if (!execution || execution->state != &state) fail("exclusive access outside active execution", address);
@@ -205,11 +216,11 @@ template <typename T> bool exclusive_store_unlocked(addr_t address, uint64_t exp
   return __atomic_compare_exchange_n(reinterpret_cast<T *>(address), &previous, static_cast<T>(desired),
                                      false, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST);
 }
-// The live count is raised before the value is loaded, so a concurrent
+// The page's live count is raised before the value is loaded, so a concurrent
 // lock-free plain store either precedes the load or observes the live
 // reservation and invalidates it. Returns the granule's current epoch.
 uint64_t publish_granule_unlocked(addr_t address) {
-  live_reservations.fetch_add(1, std::memory_order_seq_cst);
+  page_reservations(address).fetch_add(1, std::memory_order_seq_cst);
   return granule_epoch_unlocked(address & ~(kReservationGranule - 1)).load(std::memory_order_seq_cst);
 }
 void reserve_unlocked(ExecutionContext &context, uint64_t epoch,
@@ -234,24 +245,52 @@ template <typename T> T load(addr_t address) {
 // store-exclusive's compare-and-swap still fails on any changed value, and an
 // epoch bump is never lost.
 void invalidate_if_reserved(addr_t address, size_t size) {
-  if (live_reservations.load(std::memory_order_relaxed)) {
-#if !(defined(__x86_64__) || defined(_M_X64))
-    // x86-64: the epoch bump below is a locked RMW, already a full barrier
-    // that orders the data store before it; an extra MFENCE per guest store
-    // only cost time (Windows and Linux hosts alike).
-    std::atomic_thread_fence(std::memory_order_seq_cst);
-#endif
-    invalidate_unlocked(address, size);
+  if (!size) return;
+  const addr_t last = address + size - 1;
+  if (!page_reservations(address).load(std::memory_order_relaxed)) {
+    const addr_t first_page = address >> kReservationPageShift;
+    const addr_t distance = (last >> kReservationPageShift) - first_page;
+    if (!distance) return;
+    // Scan each additional bucket at most once, even for a large allocation.
+    const addr_t count = std::min<addr_t>(distance, kReservationPageBuckets - 1);
+    addr_t i = 1;
+    while (!reserved_pages[(first_page + i) & (kReservationPageBuckets - 1)].load(std::memory_order_relaxed)) {
+      if (i == count) return;
+      ++i;
+    }
   }
+#if !(defined(__x86_64__) || defined(_M_X64))
+  // The x86-64 locked epoch increment already orders the data store.
+  std::atomic_thread_fence(std::memory_order_seq_cst);
+#endif
+  invalidate_unlocked(address, size);
+}
+// Keep the usual scalar store a leaf on Windows. A store that reaches an
+// actively reserved page takes the full range invalidation path.
+__attribute__((noinline)) Memory *invalidate_store(Memory *memory, addr_t address, size_t size) {
+#if !(defined(__x86_64__) || defined(_M_X64))
+  std::atomic_thread_fence(std::memory_order_seq_cst);
+#endif
+  invalidate_unlocked(address, size);
+  return memory;
 }
 template <typename T> Memory *store(Memory *memory, addr_t address, T value) {
   std::memcpy(reinterpret_cast<void *>(address), &value, sizeof(value));
-  invalidate_if_reserved(address, sizeof(value));
+  constexpr size_t page_size = size_t(1) << kReservationPageShift;
+  static_assert(sizeof(T) <= page_size);
+  if (page_reservations(address).load(std::memory_order_relaxed))
+    return invalidate_store(memory, address, sizeof(T));
+  if constexpr (sizeof(T) > 1) {
+    if ((address & (page_size - 1)) > page_size - sizeof(T) &&
+        page_reservations(address + sizeof(T) - 1).load(std::memory_order_relaxed))
+      return invalidate_store(memory, address, sizeof(T));
+  }
   return memory;
 }
 Memory *dispatch(State &state, addr_t address, Memory *memory) {
-  if (!active) fail("no active runtime for indirect target", address);
-  return active->Dispatch(state, address, memory);
+  auto *current = execution.get();
+  if (!current) fail("no active runtime for indirect target", address);
+  return current->runtime->Dispatch(state, address, memory);
 }
 inline __attribute__((always_inline)) int host_exceptions(int mask) {
   int flags = 0;
@@ -302,7 +341,9 @@ void recomp::WithGuestMemoryWrite(addr_t address, size_t size, const std::functi
   std::lock_guard<TrackingLock> lock(memory_tracking().lock);
   // Invalidate before invoking the write, including its partial effects if it
   // throws. The callback must not reenter this non-recursive memory protocol.
-  invalidate_unlocked(address, size);
+  // The lock also prevents a new reservation from being published between
+  // the page check and the completion of the callback.
+  invalidate_if_reserved(address, size);
   write();
 }
 bool recomp::WithGuestMemoryMutation(addr_t address, size_t size,
@@ -339,6 +380,10 @@ std::vector<State *> recomp::CurrentExecutionFrames(State &top) {
   for (ExecutionContext *frame = execution; frame; frame = frame->previous) frames.push_back(frame->state);
   return frames;
 }
+bool recomp::IsOnlyExecutionState(const State &state) noexcept {
+  const auto *frame = execution.get();
+  return frame && frame->state == &state && !frame->previous;
+}
 State *recomp::CurrentExecutionState() noexcept { return execution ? execution->state : nullptr; }
 Memory *recomp::Runtime::Run(State &state, addr_t address, Memory *memory) {
   return RunInDomain(state,address,memory,nullptr);
@@ -347,12 +392,13 @@ Memory *recomp::Runtime::RunWithThreadExit(State &state,addr_t address,ThreadExi
   return RunInDomain(state,address,memory,&domain);
 }
 bool recomp::Runtime::RequestThreadExit(State &state,ThreadExitDomain &domain,uint64_t value) {
-  if (active!=this || !execution || execution->state!=&state || execution->terminal!=&domain)
+  auto *current = execution.get();
+  if (!current || current->runtime!=this || current->state!=&state || current->terminal!=&domain)
     return false;
   if (domain.owner_!=std::this_thread::get_id() || domain.runtime_!=this || domain.requested_)
     throw std::logic_error("terminal thread exit has a foreign or pending domain");
   size_t count=0;
-  for (ExecutionContext *frame=execution;frame;frame=frame->previous) {
+  for (ExecutionContext *frame=current;frame;frame=frame->previous) {
     if (frame->terminal!=&domain || !frame->call_protocol_used || frame->transfer.active ||
         !frame->calls || frame->calls->root || frame->calls->expected_pc!=frame->state->gpr.x30.qword ||
         frame->calls->caller_sp!=frame->state->gpr.sp.qword)
@@ -383,28 +429,26 @@ Memory *recomp::Runtime::RunInDomain(State &state,addr_t address,Memory *memory,
   }
   ExecutionContext context{};
   context.state=&state;
+  context.runtime=this;
   context.previous=execution;
   context.terminal=terminal;
   if (terminal) context.terminal_pending=&terminal->requested_;
   GuestCallFrame root_call{nullptr,state.gpr.x30.qword,state.gpr.sp.qword,true};
   context.calls=&root_call;
   struct Scope {
-    Runtime *previous;
     ExecutionContext *previous_execution;
     int denormal;
     recomp::fpenv::Saved environment;
     ThreadExitDomain *terminal;
-    explicit Scope(ThreadExitDomain *t) : previous(active), previous_execution(execution), denormal(explicit_denormal), environment(recomp::fpenv::Save()), terminal(t) {}
+    explicit Scope(ThreadExitDomain *t) : previous_execution(execution), denormal(explicit_denormal), environment(recomp::fpenv::Save()), terminal(t) {}
     ~Scope() {
       clear_current_reservation();
-      active = previous;
       execution = previous_execution;
       explicit_denormal = denormal;
       recomp::fpenv::Restore(environment);
       if (terminal) --terminal->active_frames_;
     }
   } scope(terminal);
-  active = this;
   execution = &context;
   recomp::fpenv::Clear(FE_ALL_EXCEPT);
   explicit_denormal = 0;
@@ -422,9 +466,9 @@ namespace {
 // per dispatching Runtime (the main trace set and the bridge Runtimes all
 // dispatch; with one shared cache only the first claimant hit it, and the
 // ~600k-node trace map was walked on most indirect calls).
-// A slot holds a pointer to a std::map node, tagged in bit 0 for an import
-// node. Nodes are never erased or moved while their Runtime lives, and a hit
-// is validated by the node's own key, so a racing overwrite only misses.
+// Common traces fit their guest PC and native entry in one atomic slot.
+// Other traces and imports use pointers to stable map nodes. Each form
+// validates the full guest address, so a racing overwrite only misses.
 // Slot arrays are sized by the trace count and are reused, never freed.
 using TraceNode = const std::pair<const addr_t, recomp::Entry>;
 using ImportNode = const std::pair<const addr_t, std::function<void(State &)>>;
@@ -436,6 +480,21 @@ struct DispatchCache {
 constexpr size_t kDispatchCaches = 16;
 DispatchCache dispatch_caches[kDispatchCaches];
 std::mutex dispatch_cache_claims;
+static_assert(alignof(TraceNode) >= 4 && alignof(ImportNode) >= 4);
+constexpr uintptr_t kCompactTrace = 2;
+uintptr_t trace_entry_base() {
+  return reinterpret_cast<uintptr_t>(dispatch_caches) - UINT32_C(0x80000000);
+}
+uintptr_t trace_cache_value(TraceNode &trace) {
+  if constexpr (sizeof(uintptr_t) == 8) {
+    // AArch64 instructions are four-byte aligned. The two unused PC bits
+    // distinguish this encoding from the aligned node pointer and import tag.
+    const uintptr_t offset = reinterpret_cast<uintptr_t>(trace.second) - trace_entry_base();
+    if (trace.first <= UINT32_MAX && !(trace.first & 3) && offset <= UINT32_MAX)
+      return (uint64_t(offset) << 32) | trace.first | kCompactTrace;
+  }
+  return reinterpret_cast<uintptr_t>(&trace);
+}
 inline size_t dispatch_slot(addr_t address, unsigned bits) {
   return size_t((address >> 2) * UINT64_C(0x9E3779B97F4A7C15) >> (64 - bits));
 }
@@ -536,15 +595,19 @@ Memory *invoke_host_bridge(State &state, const std::function<void(State &)> &bri
   // guest MSR FPSR may have cleared those flags since the last host FP op.
   // Attribute only exceptions from this import to the guest call.
   recomp::fpenv::Clear(FE_ALL_EXCEPT);
-  explicit_denormal = 0;
+  if (explicit_denormal) explicit_denormal = 0;
   bridge(state);
-  const int mask = guest_exceptions(recomp::fpenv::Test(FE_ALL_EXCEPT)) | explicit_denormal;
-  state.sr.ioc |= (mask & kFPUExceptionInvalid) != 0;
-  state.sr.dzc |= (mask & kFPUExceptionDivByZero) != 0;
-  state.sr.ofc |= (mask & kFPUExceptionOverflow) != 0;
-  state.sr.ufc |= (mask & kFPUExceptionUnderflow) != 0;
-  state.sr.ixc |= (mask & kFPUExceptionPrecision) != 0;
-  state.sr.idc |= (mask & kFPUExceptionDenormal) != 0;
+  const int raised = recomp::fpenv::Test(FE_ALL_EXCEPT);
+  const int denormal = explicit_denormal;
+  if (raised || denormal) {
+    const int mask = guest_exceptions(raised) | denormal;
+    state.sr.ioc |= (mask & kFPUExceptionInvalid) != 0;
+    state.sr.dzc |= (mask & kFPUExceptionDivByZero) != 0;
+    state.sr.ofc |= (mask & kFPUExceptionOverflow) != 0;
+    state.sr.ufc |= (mask & kFPUExceptionUnderflow) != 0;
+    state.sr.ixc |= (mask & kFPUExceptionPrecision) != 0;
+    state.sr.idc |= (mask & kFPUExceptionDenormal) != 0;
+  }
   state.gpr.pc.qword = state.gpr.x30.qword;
   return memory;
 }
@@ -596,7 +659,12 @@ Memory *recomp::Runtime::Dispatch(State &state, addr_t address, Memory *memory) 
     auto *slots = cache->slots.load(std::memory_order_acquire);
     slot = &slots[dispatch_slot(address, cache->bits)];
     if (const uintptr_t hit = slot->load(std::memory_order_acquire)) {
-      if (hit & 1) {
+      if (hit & kCompactTrace) {
+        if ((uint32_t(hit) & ~uint32_t(3)) == address) {
+          const auto entry = reinterpret_cast<Entry>(trace_entry_base() + (uint64_t(hit) >> 32));
+          return entry(state, address, memory);
+        }
+      } else if (hit & 1) {
         auto *node = reinterpret_cast<ImportNode *>(hit & ~uintptr_t(1));
         if (node->first == address) return invoke_host_bridge(state, node->second, memory);
       } else if (auto *node = reinterpret_cast<TraceNode *>(hit); node->first == address) {
@@ -605,7 +673,7 @@ Memory *recomp::Runtime::Dispatch(State &state, addr_t address, Memory *memory) 
     }
   }
   if (auto found = traces_.find(address); found != traces_.end()) {
-    if (slot) slot->store(reinterpret_cast<uintptr_t>(&*found), std::memory_order_release);
+    if (slot) slot->store(trace_cache_value(*found), std::memory_order_release);
     return found->second(state, address, memory);
   }
   if (auto found = imports_.find(address); found != imports_.end()) {
@@ -619,10 +687,8 @@ Memory *recomp::Runtime::Dispatch(State &state, addr_t address, Memory *memory) 
 extern "C" Memory *__bunker_guest_call(State &state,addr_t target,Memory *memory,
                                       addr_t expected_pc,addr_t caller_sp,
                                       recomp::Entry direct_entry) noexcept {
-  // Each ThreadLocalRef access is a guard check plus a TEB load; read once.
-  auto *const runtime=active.get();
   auto *const current=execution.get();
-  if (!runtime || !current || current->state!=&state)
+  if (!current || current->state!=&state)
     fail("guest call outside its active Run/State",target);
   auto &context=*current;
   if (context.transfer.active || state.gpr.sp.qword!=caller_sp)
@@ -638,9 +704,9 @@ extern "C" Memory *__bunker_guest_call(State &state,addr_t target,Memory *memory
     // A direct call to an overridden entry must reach the host replacement;
     // a direct-entry substitution replaces the lifted body directly.
     if(direct_entry)if(auto *hook=find_guest_override(target))direct_entry=hook->direct;
-    auto *result=direct_entry?direct_entry(state,target,memory):runtime->Dispatch(state,target,memory);
+    auto *result=direct_entry?direct_entry(state,target,memory):context.runtime->Dispatch(state,target,memory);
     // Ordinary return to this frame: exactly finish_guest_call's first exit.
-    if (!context.terminal && !context.transfer.active && returns_to(state,frame)) return result;
+    if (!*context.terminal_pending && !context.transfer.active && returns_to(state,frame)) return result;
     return finish_guest_call(context,frame,state,result);
   } catch (const std::exception &error) {
     std::fprintf(stderr,"recomp: native exception at explicit guest-call boundary: %s\n",error.what());
@@ -655,7 +721,7 @@ extern "C" Memory *__bunker_guest_call(State &state,addr_t target,Memory *memory
 // finish exactly as __bunker_guest_call would have.
 extern "C" Memory *__bunker_guest_call_finish(State &state,Memory *memory,void *raw_frame) noexcept {
   auto *const current=execution.get();
-  if (!active.get() || !current || current->state!=&state)
+  if (!current || current->state!=&state)
     fail("inline guest call finished outside its active Run/State",state.gpr.pc.qword);
   auto &frame=*static_cast<GuestCallFrame *>(raw_frame);
   if (current->calls!=frame.previous || frame.root)
@@ -686,13 +752,15 @@ extern "C" uint32_t __bunker_guest_transfer_pending(State &state) noexcept {
   auto *const current=execution.get();
   if (!current || current->state!=&state)
     fail("guest transfer query outside its active Run/State",state.gpr.pc.qword);
-  return current->transfer.active || (current->terminal && current->terminal->Pending())?1U:0U;
+  return current->transfer.active || *current->terminal_pending ? 1U : 0U;
 }
 
 extern "C" {
 uint64_t __remill_aarch64_load_exclusive(State &state, addr_t address, uint64_t size, uint64_t) {
   auto &context = exclusive_context(state, address, size);
-  std::lock_guard<TrackingLock> lock(memory_tracking().lock);
+  // Loads publish into their own execution context. The shared page counters
+  // are atomic, and the read lock excludes provider writes and store-exclusive.
+  std::shared_lock<TrackingLock> lock(memory_tracking().lock);
   clear_reservation_unlocked(context.reservation);
   const auto epoch = publish_granule_unlocked(address);
   uint64_t value = 0;
@@ -732,7 +800,7 @@ void __remill_aarch64_load_exclusive_pair(State &state, addr_t address, uint64_t
   if (element_size != 4 && element_size != 8) fail("unsupported exclusive pair element width", address);
   if (!first || !second) fail("invalid exclusive pair output", address);
   auto &context = exclusive_context(state, address, element_size * 2, true);
-  std::lock_guard<TrackingLock> lock(memory_tracking().lock);
+  std::shared_lock<TrackingLock> lock(memory_tracking().lock);
   clear_reservation_unlocked(context.reservation);
   const auto epoch = publish_granule_unlocked(address);
   uint128_t value = 0;

@@ -20,7 +20,7 @@ ROOT = Path(__file__).resolve().parent.parent
 DEFINES = ['-DADDRESS_SIZE_BITS=64', '-DBUNKER_GAME_COOPERATIVE_POLLS=1', '-DBUNKER_GAME_COLLECTOR_DELIVERY=1']
 INCLUDES = ['game', 'third_party/remill-include', 'third_party/zlib', 'third_party/angle-include']
 # Game functions the host replaces: the linker routes calls to its __wrap_ versions.
-WRAPS = ['sub_825b0544', 'sub_708d905c', 'sub_70a8a5c4', 'sub_70a8aa08']
+WRAPS = ['sub_825b0544', 'sub_708d905c', 'sub_70a8a5c4', 'sub_70a8aa08', 'sub_703aea94']
 LIBRARIES = ['atomic', 'bcrypt', 'ws2_32', 'user32', 'gdi32', 'mfplat', 'mfreadwrite', 'mfuuid', 'ole32', 'uuid',
              'advapi32', 'synchronization', 'winmm']
 HEADS = ['game/heads-unity.txt', 'game/heads-il2cpp.txt']
@@ -57,11 +57,14 @@ def stale(obj, dep):
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('--pack', type=Path, help='the pack of recompiled game objects (not needed with --compile-only)')
+    ap.add_argument('--spring-group', type=Path, help='directory produced by build_spring_group.py')
     ap.add_argument('--out', type=Path, required=True)
     ap.add_argument('--cxx', default=shutil.which('g++') or 'C:/mingw64/bin/g++.exe')
     ap.add_argument('--jobs', type=int, default=os.cpu_count() or 4)
     ap.add_argument('--no-inline', action='store_true', help='skip the post-link helper inliner')
     ap.add_argument('--compile-only', action='store_true', help='compile the host layer and stop: needs no pack')
+    ap.add_argument('--embedded-player', action='store_true', help='compile the bootstrap embedded in the portable player DLL')
+    ap.add_argument('--link-plan', action='store_true', help='prepare host objects and the link response for the Windows Unity player')
     a = ap.parse_args()
     if not a.compile_only and not a.pack:
         ap.error('--pack is required unless --compile-only is given')
@@ -74,9 +77,13 @@ def main():
              *[f'-I{(ROOT / name).as_posix()}' for name in INCLUDES], '-Wa,-mbig-obj']
     sources = [line.strip() for line in (ROOT / 'build/host_sources.txt').read_text().splitlines()
                if line.strip() and not line.startswith('#')]
-    jobs = [('host/game_bootstrap.cpp', out / 'host/game-bootstrap.o', [a.cxx, *flags]),
+    bootstrap_flags = ['-DREINCOMP_EMBEDDED_PLAYER'] if a.embedded_player else []
+    bootstrap_name = 'embedded-bootstrap.o' if a.embedded_player else 'game-bootstrap.o'
+    jobs = [('host/game_bootstrap.cpp', out / 'host' / bootstrap_name, [a.cxx, *flags, *bootstrap_flags]),
             ('runtime/elfload.c', out / 'host/elfload.o', [tool('gcc'), '-O2'])]
-    jobs += [(s, out / 'host' / f'host-{i:03d}.o', [a.cxx, *flags]) for i, s in enumerate(sources)]
+    for i, source in enumerate(sources):
+        view_flags = ['-DREINCOMP_VIEW_REVISION=0'] if a.embedded_player and source == 'host/bunker_view.cpp' else []
+        jobs.append((source, out / 'host' / f'host-{i:03d}.o', [a.cxx, *flags, *view_flags]))
 
     def compile_one(job):
         source, obj, command = job
@@ -112,7 +119,11 @@ def main():
             (ROOT / 'third_party/zlib/libz-inflate.a').as_posix(), *[f'-Wl,--wrap={name}' for name in WRAPS],
             *[f'-l{name}' for name in LIBRARIES], '-o', exe.as_posix()]
     response = out / 'link.rsp'
+    if a.spring_group:
+        link.insert(link.index('-o'), '@' + (a.spring_group / 'spring.rsp').resolve(strict=True).as_posix())
     response.write_text('\n'.join(f'"{x}"' for x in link) + '\n')
+    if a.link_plan:
+        return
     t0 = time.time()
     subprocess.run([a.cxx, f'@{response.as_posix()}'], check=True)
     print(f'link: {time.time() - t0:.0f}s')

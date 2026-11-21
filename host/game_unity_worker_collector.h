@@ -45,6 +45,7 @@ class GameUnityWorkerCollector {
   static const Witness*&Creating(){static thread_local const Witness* value=nullptr;return value;}
   static unsigned &OpaqueDepth(){static thread_local unsigned depth=0;return depth;}
   static constexpr uint64_t kOrdinal=UINT64_MAX-2;
+  static constexpr uint64_t kMutexOrdinal=UINT64_MAX-5;
   static constexpr addr_t kReturn=0x825aada0,kAck=0x87cb1e68,kEpoch=0x879a6b08,kStopped=0x879a6b10;
   static constexpr addr_t kSyscall=0x7ff600400000ULL;
   static void Check(bool okay,const char*why){if(!okay)throw std::runtime_error(std::string("ordinary Unity worker collector: ")+why);}
@@ -95,7 +96,10 @@ class GameUnityWorkerCollector {
   bool Admit(const recomp::PollAdmissionContext&context)const noexcept{
     if(const auto*owner=Current())if(const auto*socket=owner->socket_wait.load())return owner->live&&owner->phase&&!OpaqueDepth()&&socket->Admit(context);
     const auto *owner=Current();
-    if(owner&&owner->live&&!owner->phase&&!owner->depth&&!OpaqueDepth()&&!owner->socket_wait.load()&&context.site.ordinal<UINT64_MAX-16&&context.frames.size()==1&&context.frames[0]==&context.state)return true;
+    if(owner&&owner->live&&!owner->phase&&!owner->depth&&!OpaqueDepth()&&!owner->socket_wait.load()&&context.frames.size()==1&&context.frames[0]==&context.state){
+      if(context.site.ordinal<UINT64_MAX-16)return true;
+      if(context.site.ordinal==kMutexOrdinal&&WorkerMutexSite(context.state)&&context.site.trace==context.state.gpr.pc.qword&&context.program_counter==context.site.trace)return true;
+    }
     return owner&&owner->live&&owner->phase&&owner->eligible&&owner->copied&&!owner->returned&&owner->provider_boundary&&!OpaqueDepth()&&context.site.ordinal==kOrdinal&&context.frames.size()==1&&context.frames[0]==&context.state&&owner->sleep_state==&context.state&&context.program_counter==context.state.gpr.pc.qword&&context.site.trace==context.state.gpr.pc.qword;
   }
   void Pump(Owner&owner){
@@ -137,6 +141,7 @@ class GameUnityWorkerCollector {
   GameUnityWorkerCollector(Pthreads&threads,SignalHost&signals,bunker::windows::Semaphores&sem,recomp::Runtime&runtime):threads_(threads),signals_(signals),semaphores_(sem),runtime_(runtime){Check(Translated(kReturn)&&Executable(kReturn)&&Translated(0x825beb3c)&&Translated(0x825b2af4)&&Translated(0x825b2c70),"genuine original signal heads are unavailable");}
   ~GameUnityWorkerCollector(){if(!closed_||!owners_.empty())std::terminate();}
   bool Owns(uint64_t token){auto owner=Lookup(token);return owner&&owner->live;}
+  bool OwnsCurrentThread()const{const auto *owner=Current();return owner&&owner->live;}
   template<class F>void WithCreate(State&state,F&&invoke){
     Witness witness;const Witness* previous=Creating();
     if(state.gpr.x2.qword==0x70383624&&state.gpr.x30.qword==0x704389a8){Check(state.gpr.x3.qword!=0,"Unity create has null original threadData");witness.data=state.gpr.x3.qword;}
@@ -164,7 +169,33 @@ class GameUnityWorkerCollector {
     else Check(reason==Pthreads::WorkerRetirement::cancelled,"unentered worker retirement is not cancellation");
     owner->live=false;std::lock_guard guard(mutex_);owners_.erase(info.token);
   }
-  void Checkpoint(const Pthreads::WaitContext&context){auto owner=Lookup(context.token);if(owner){const auto retained=signals_.DispatchOneAdmittedSubset(context.token,SignalHost::Bit(30)|SignalHost::Bit(24),0,{});Check(!retained.error,"unknown eligible signal at unqualified Pthreads wait phase");}}
+  // This IL2CPP caller loads its mutex pointer from 0x879a79a8. Pthreads keeps the
+  // original lock request enrolled while the worker runs its stop handler.
+  static bool WorkerMutexSite(const State&state){
+    if(state.gpr.pc.qword!=0x7ffc60000030ULL)return false;
+    // Unity's shared-mutex wrapper at 0x7025ad4c tail-calls through to the
+    // pthread_mutex_lock PLT entry at 0x700b8540, preserving the caller LR.
+    const auto lr=state.gpr.x30.qword;
+    return lr==0x825c3680||lr==0x7018f8c0;
+  }
+  bool SelectMutex(const Pthreads::WaitContext&context)const{
+    const auto *owner=Current();
+    if(!owner||!context.active_state||context.phase!=Pthreads::WaitPhase::MutexLock||!WorkerMutexSite(*context.active_state))return false;
+    if(!owner->live||owner->token!=context.token||owner->native_tid!=GetCurrentThreadId()||owner->phase||owner->depth||OpaqueDepth()||owner->socket_wait.load())return false;
+    return recomp::IsOnlyExecutionState(*context.active_state)&&AsyncShape(*owner,*context.active_state);
+  }
+  void Checkpoint(const Pthreads::WaitContext&context){
+    if(SelectMutex(context)){
+      auto&owner=*Current();
+      if(SignalHost::NeedsPoll(owner.signal_thread)){
+        auto&state=*context.active_state;
+        owner.requests.Request();
+        if(__bunker_guest_poll_requested())__bunker_guest_poll_slow(&state,state.gpr.pc.qword,kMutexOrdinal,state.gpr.pc.qword);
+      }
+      return;
+    }
+    auto owner=Lookup(context.token);if(owner){const auto retained=signals_.DispatchOneAdmittedSubset(context.token,SignalHost::Bit(30)|SignalHost::Bit(24),0,{});Check(!retained.error,"unknown eligible signal at unqualified Pthreads wait phase");}
+  }
   void Notify(uint64_t token){auto owner=Lookup(token);Check(owner&&owner->live,"notify has no attached worker lifetime");if(SignalHost::NeedsPoll(owner->signal_thread))owner->requests.Request();}
   uint64_t FutexAdmission(uint64_t token)const noexcept{auto *owner=Current();return owner&&owner->token==token&&owner->live&&owner->phase&&owner->eligible&&owner->copied&&!owner->returned&&!owner->depth&&!OpaqueDepth()&&SignalHost::NeedsPoll(owner->signal_thread)?SignalHost::Bit(30):0;}
   template<class F>void WithSocketWait(const std::string&name,State&state,F&&invoke,const GameSocketWaitContext::SitePolicy&policy={}){

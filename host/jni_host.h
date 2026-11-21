@@ -87,6 +87,8 @@ class Host {
                                         std::function<void(addr_t,const MethodArguments&)> handler);
   void DefineBooleanMethod(const std::string &class_name,const std::string &name,const std::string &signature,
                            std::function<bool(addr_t,const MethodArguments&)> handler);
+  void DefineStaticBooleanMethod(const std::string &owner,const std::string &name,const std::string &signature,
+                                 std::function<bool(addr_t,const MethodArguments&)> handler);
   void DefineIntMethod(const std::string &owner,const std::string &name,const std::string &signature,
                        std::function<int32_t(addr_t,const MethodArguments&)> handler);
   // Instance jlong callbacks return the exact signed 64-bit value in X0.

@@ -1,4 +1,5 @@
 #include "windows_shared_preferences.h"
+#include "windows_app_registry.h"
 #include <algorithm>
 #include <stdexcept>
 #include <system_error>
@@ -47,7 +48,7 @@ SharedPreferencesSnapshot DecodeSharedPreferencesSnapshot(const std::vector<uint
 SharedPreferencesBackend MakeWindowsSharedPreferencesBackend(std::u16string package){
   Package(package);
 #ifdef _WIN32
-  static_assert(sizeof(wchar_t)==2);std::wstring path=L"Software\\Bunker\\Apps\\";path.append(package.begin(),package.end());path+=L"\\SharedPreferences";
+  static_assert(sizeof(wchar_t)==2);const auto path=WindowsAppRegistryPath(package)+L"\\SharedPreferences";
   const auto legacy=package,modern=package+u".v2.playerprefs";
   auto name=[legacy,modern](const std::u16string&store){if(store!=legacy&&store!=modern)throw std::runtime_error("SharedPreferences unsupported store name");return std::wstring(store.begin(),store.end());};
   struct Key {HKEY key=nullptr;~Key(){if(key)RegCloseKey(key);}};

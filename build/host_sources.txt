@@ -49,3 +49,4 @@ host/signal_delivery.cpp
 runtime/signal_frame.cpp
 host/reflection_helper.cpp
 host/firebase_app.cpp
+host/component_type_query.cpp

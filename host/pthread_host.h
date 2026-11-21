@@ -95,6 +95,7 @@ class Pthreads {
   addr_t Marker(const std::string &) const;
   uint64_t Run(addr_t entry, std::initializer_list<addr_t> args = {});
   uint64_t Run(addr_t entry, const std::vector<addr_t> &args);
+  uint64_t Run(addr_t entry, const addr_t *args, size_t count);
   // Same, with a float argument and/or result in s0 (AAPCS64 float/return).
   uint64_t RunFloat(addr_t entry, const std::vector<addr_t> &args, const float *s0_in, float *s0_out);
   // For callers that invoke Runtime themselves: register the actual guest stack

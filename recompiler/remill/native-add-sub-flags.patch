@@ -1,0 +1,69 @@
+--- a/lib/Arch/AArch64/Semantics/BINARY.cpp
++++ b/lib/Arch/AArch64/Semantics/BINARY.cpp
+@@ -58,22 +58,41 @@
+   return result;
+ }
+ 
++// A plain ADDS/SUBS (including CMP and conditional compares) has no
++// incoming carry. Compute its flags at the guest operand width, so a
++// 64-bit guest comparison lowers to a 64-bit host comparison.
++template <bool subtract, typename T>
++ALWAYS_INLINE T AddSubNZCV(State &state, T lhs, T rhs) {
++  const T result = subtract ? USub(lhs, rhs) : UAdd(lhs, rhs);
++  FLAG_N = SignFlag(result, lhs, rhs);
++  FLAG_Z = ZeroFlag(result, lhs, rhs);
++  FLAG_C = subtract ? lhs >= rhs : result < lhs;
++  bool overflow;
++  if constexpr (subtract) {
++    // N xor V is the signed less-than condition after subtraction.
++    overflow = (Signed(result) < 0) != (Signed(lhs) < Signed(rhs));
++  } else {
++    decltype(Signed(lhs)) signed_result;
++    overflow = __builtin_add_overflow(Signed(lhs), Signed(rhs), &signed_result);
++  }
++  FLAG_V = __remill_flag_computation_overflow(overflow, lhs, rhs, result);
++  return result;
++}
++
+ template <typename D, typename S1, typename S2>
+ DEF_SEM(SUBS, D dst, S1 src1, S2 src2) {
+-  using T = typename BaseType<S2>::BT;
+   auto lhs = Read(src1);
+   auto rhs = Read(src2);
+-  auto res = AddWithCarryNZCV(state, lhs, UNot(rhs), rhs, T(1));
++  auto res = AddSubNZCV<true>(state, lhs, rhs);
+   WriteZExt(dst, res);
+   return memory;
+ }
+ 
+ template <typename D, typename S1, typename S2>
+ DEF_SEM(ADDS, D dst, S1 src1, S2 src2) {
+-  using T = typename BaseType<S2>::BT;
+   auto lhs = Read(src1);
+   auto rhs = Read(src2);
+-  auto res = AddWithCarryNZCV(state, lhs, rhs, rhs, T(0));
++  auto res = AddSubNZCV<false>(state, lhs, rhs);
+   WriteZExt(dst, res);
+   return memory;
+ }
+--- a/lib/Arch/AArch64/Semantics/COND.cpp
++++ b/lib/Arch/AArch64/Semantics/COND.cpp
+@@ -116,8 +116,7 @@
+ DEF_SEM(CCMP, S1 src1, S2 src2, S2 nzcv) {
+   using T = typename BaseType<S1>::BT;
+   if (check_cond(state)) {
+-    (void) AddWithCarryNZCV(state, Read(src1), UNot(Read(src2)), Read(src2),
+-                            T(1));
++    (void) AddSubNZCV<true>(state, Read(src1), Read(src2));
+   } else {
+     auto nzcv_val = Read(nzcv);
+     FLAG_V = UCmpNeq(UAnd(nzcv_val, T(1)), T(0));
+@@ -132,7 +131,7 @@
+ DEF_SEM(CCMN, S1 src1, S2 src2, S2 nzcv) {
+   using T = typename BaseType<S1>::BT;
+   if (check_cond(state)) {
+-    (void) AddWithCarryNZCV(state, Read(src1), Read(src2), Read(src2), T(0));
++    (void) AddSubNZCV<false>(state, Read(src1), Read(src2));
+   } else {
+     auto nzcv_val = Read(nzcv);
+     FLAG_V = UCmpNeq(UAnd(nzcv_val, T(1)), T(0));

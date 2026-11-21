@@ -1,0 +1,14 @@
+diff --git a/src/glog/platform.h b/src/glog/platform.h
+--- a/src/glog/platform.h
++++ b/src/glog/platform.h
+@@ -34,7 +34,9 @@
+ #ifndef GLOG_PLATFORM_H
+ #define GLOG_PLATFORM_H
+ 
+-#if defined(WIN32) || defined(_WIN32) || defined(__WIN32__)
++#if defined(__EMSCRIPTEN__)
++#define GLOG_OS_EMSCRIPTEN
++#elif defined(WIN32) || defined(_WIN32) || defined(__WIN32__)
+ #define GLOG_OS_WINDOWS
+ #elif defined(__CYGWIN__) || defined(__CYGWIN32__)
+ #define GLOG_OS_CYGWIN

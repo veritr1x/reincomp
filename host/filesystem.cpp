@@ -21,6 +21,7 @@
 #include <sddl.h>
 
 #include "filesystem.h"
+#include "provider_memory.h"
 #include "growdown_memory.h"
 #include "unicode.h"
 #include "libc_uname_detail.h"
@@ -69,7 +70,7 @@ bool SnapshotString(const char *source, std::string &value, size_t limit) {
   return false;
 }
 const char *names[] = {"__errno", "open", "close", "read", "write", "lseek", "lseek64", "stat", "lstat", "fstat", "access",
-  "fopen", "fclose", "fread", "fscanf", "fwrite", "fseek", "fseeko", "ftell", "ftello", "feof", "ferror", "fflush", "mmap", "munmap", "mprotect", "madvise", "mkdir", "setvbuf", "unlink", "rmdir", "opendir", "readdir", "closedir", "rename", "dup"};
+  "fopen", "fclose", "fread", "fscanf", "fwrite", "fseek", "fseeko", "ftell", "ftello", "feof", "ferror", "fflush", "mmap", "munmap", "mprotect", "madvise", "mkdir", "setvbuf", "unlink", "rmdir", "opendir", "readdir", "closedir", "rename", "dup", "getcwd"};
 struct ScopedDescriptor {
   int value;
   explicit ScopedDescriptor(int fd):value(fd){}
@@ -1230,6 +1231,19 @@ void FileSystem::Install(recomp::Runtime &runtime,DescriptorImportInterceptor in
     });
   };
   add("__errno", recomp::MakeBridge<addr_t()>([this] { return ErrnoAddress(); }));
+  add("getcwd", recomp::MakeBridge<char *(char *, uint64_t)>([this](char *buffer, uint64_t size) -> char * {
+    std::lock_guard lock(impl_->mutex);
+    if (buffer && !size) { impl_->Error(22); return nullptr; }
+    const auto required = impl_->cwd.size() + 1;
+    if (required > (size ? size : kPage)) { impl_->Error(34); return nullptr; }
+    if (!buffer) {
+      const auto allocation = size ? size : required;
+      buffer = allocation <= INT64_MAX ? static_cast<char *>(provider_memory::Allocate(allocation)) : nullptr;
+      if (!buffer) { impl_->Error(12); return nullptr; }
+    }
+    recomp::WriteGuestMemory(reinterpret_cast<addr_t>(buffer), impl_->cwd.c_str(), required);
+    return buffer;
+  }));
   add("open", recomp::MakeBridge<int32_t(const char *, int32_t, uint32_t)>([this](auto path, auto flags, auto mode) { return Open(path, flags, mode); }));
   add("close", recomp::MakeBridge<int32_t(int32_t)>([this](auto fd) { return Close(fd); }));
   add("dup", recomp::MakeBridge<int32_t(int32_t)>([this](auto fd) { return Dup(fd); }));

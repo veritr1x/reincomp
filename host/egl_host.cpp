@@ -104,6 +104,7 @@ template<class T>T Symbol(HMODULE module,const char *name){
 struct EglHost::Impl {
   NativeWindows &windows;const uint64_t owner=next_owner++;
   addr_t marker;HMODULE egl=nullptr,gles=nullptr;bool installed=false;
+  bool host_frame_pacing=false;
   // No guest callbacks or guest-memory lock span native EGL operations.
   std::mutex mutex;
   std::atomic<uint64_t> generation{1};
@@ -373,6 +374,10 @@ struct EglHost::Impl {
       E display=Native(d,Display),context=ctx?Native(ctx,Context,d):nullptr,ds=draw?Native(draw,Surface,d):nullptr,rs=read?Native(read,Surface,d):nullptr;
       if(!display||(ctx&&!context)||(draw&&!ds)||(read&&!rs))return U(0);
       U ok=eglMakeCurrent(display,ds,rs,context);Capture();
+      if(ok && host_frame_pacing && draw && objects.at(draw).window){
+        if(!eglSwapInterval(display,0))
+          std::fprintf(stderr,"Host pacing: EGL interval zero unavailable (error %#x)\n",eglGetError());
+      }
       if(ok){if(ctx)currents[std::this_thread::get_id()]={ctx,draw,read};else currents.erase(std::this_thread::get_id());Prune();}return ok;});
     Bind<addr_t()>("eglGetCurrentContext",[this]{return Find(eglGetCurrentContext(),Context);});
     Bind<addr_t(I)>("eglGetCurrentSurface",[this](I which){E surface=eglGetCurrentSurface(which);Capture();return Find(surface,Surface);});
@@ -381,7 +386,7 @@ struct EglHost::Impl {
       I value=0;U ok=eglQuerySurface(display,surface,attr,&value);Capture();if(ok)Write(out,value);
       return ok;});
     Bind<U(addr_t,addr_t)>("eglSwapBuffers",[this](addr_t d,addr_t s){E display=Native(d,Display),surface=Native(s,Surface,d);if(!display||!surface)return U(0);U ok=eglSwapBuffers(display,surface);Capture();return ok;});
-    Bind<U(addr_t,I)>("eglSwapInterval",[this](addr_t d,I interval){E display=Native(d,Display);if(!display)return U(0);U ok=eglSwapInterval(display,interval);Capture();return ok;});
+    Bind<U(addr_t,I)>("eglSwapInterval",[this](addr_t d,I interval){E display=Native(d,Display);if(!display)return U(0);U ok=eglSwapInterval(display,host_frame_pacing?0:interval);Capture();return ok;});
     Bind<U(addr_t,addr_t)>("eglDestroySurface",[this](addr_t d,addr_t s){E display=Native(d,Display),surface=Native(s,Surface,d);if(!display||!surface)return U(0);
       // ANGLE's default Vulkan workaround eagerly unbinds a current surface.
       // Defer the actual host destruction to preserve EGL current-object rules.
@@ -421,6 +426,7 @@ void EglHost::Invoke(const std::string &name,State &state){
 }
 void EglHost::Install(recomp::Runtime &runtime){if(impl_->installed)throw std::logic_error("EGL imports already installed");for(const auto *name:names)runtime.AddImport(Marker(name),[this,name](State &state){try{Invoke(name,state);}catch(const std::exception &e){std::fprintf(stderr,"EGL %s: %s\n",name,e.what());std::abort();}});impl_->installed=true;}
 void EglHost::ReleaseCurrentThread(){EglNativeEnvironment environment;StorageRetirementObserver observer;{std::lock_guard lock(impl_->mutex);impl_->ReleaseThread();impl_->generation.fetch_add(1,std::memory_order_release);observer=impl_->storage_retirement_observer;}if(observer)observer();}
+void EglHost::UseHostFramePacing(){std::lock_guard lock(impl_->mutex);impl_->host_frame_pacing=true;}
 void EglHost::SetProcedureResolver(std::function<addr_t(const std::string&)> resolver){std::lock_guard lock(impl_->mutex);impl_->procedure_resolver=std::move(resolver);}
 addr_t EglHost::CurrentContextToken(){std::lock_guard lock(impl_->mutex);return impl_->Find(impl_->eglGetCurrentContext(),Impl::Context);}
 bool EglHost::ContextAlive(addr_t token){std::lock_guard lock(impl_->mutex);auto at=impl_->objects.find(token);return at!=impl_->objects.end()&&at->second.kind==Impl::Context&&!at->second.native_destroyed;}
@@ -432,6 +438,14 @@ void EglHost::SetDiagnosticObserver(DiagnosticObserver observer){std::lock_guard
 void *EglHost::CurrentDpiWindow(){std::lock_guard lock(impl_->mutex);return impl_->DpiWindow("");}
 uint64_t EglHost::StateGeneration() const{return impl_->generation.load(std::memory_order_acquire);}
 std::unique_ptr<WindowDpiScope> EglHost::CurrentWindowDpiScope(){std::lock_guard lock(impl_->mutex);if(auto window=impl_->DpiWindow(""))return std::make_unique<WindowDpiScope>(window);return {};}
+bool EglHost::IsCurrentDrawWindow(addr_t display,addr_t surface){
+  std::lock_guard lock(impl_->mutex);
+  const auto current=impl_->currents.find(std::this_thread::get_id());
+  if(current==impl_->currents.end()||current->second.draw!=surface)return false;
+  const auto entry=impl_->objects.find(surface);
+  return entry!=impl_->objects.end()&&entry->second.kind==Impl::Surface&&entry->second.window&&
+         entry->second.display==display&&!entry->second.native_destroyed;
+}
 std::optional<EglHost::DrawWindowExtent> EglHost::CurrentDrawWindowExtent(){
   std::lock_guard lock(impl_->mutex);impl_->Capture();const auto saved=Errors()[impl_->owner];
   struct Restore{Impl&host;I saved;~Restore(){host.eglGetError();Errors()[host.owner]=saved;}} restore{*impl_,saved};

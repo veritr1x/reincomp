@@ -1,0 +1,257 @@
+--- a/lib/Arch/AArch64/Semantics/FLAGS.cpp
++++ b/lib/Arch/AArch64/Semantics/FLAGS.cpp
+@@ -158,6 +158,29 @@
+   }
+ };
+ 
++// Narrow an exact finite binary64 value whose nonzero magnitude is normal
++// in binary32. A zero here comes from exact cancellation of nonzero terms.
++ALWAYS_INLINE static uint32_t RoundNormalToBinary32(State &state, double exact) {
++  const uint64_t bits = __builtin_bit_cast(uint64_t, exact);
++  const uint64_t magnitude = bits & UINT64_C(0x7fffffffffffffff);
++  const unsigned mode = state.fpcr.rmode;
++  if (!magnitude) return mode == kFPURoundDownNegInf ? UINT32_C(0x80000000) : 0;
++
++  constexpr uint64_t half = UINT64_C(1) << 28;
++  const uint64_t remainder = magnitude & (2 * half - 1);
++  const uint32_t sign = static_cast<uint32_t>(bits >> 63) << 31;
++  uint32_t rounded = static_cast<uint32_t>((magnitude >> 29) - (uint64_t(1023 - 127) << 23));
++  if (remainder) {
++    state.sr.ixc = 1;
++    if (mode == kFPURoundToNearestEven) {
++      rounded += remainder > half || (remainder == half && (rounded & 1));
++    } else {
++      rounded += (mode == kFPURoundUpInf && !sign) || (mode == kFPURoundDownNegInf && sign);
++    }
++  }
++  return sign | rounded;
++}
++
+ ALWAYS_INLINE static void SetFPSRStatusFlags(State &state, int mask) {
+   state.sr.ioc |= static_cast<uint8_t>(0 != (mask & kFPUExceptionInvalid));
+   state.sr.dzc |= static_cast<uint8_t>(0 != (mask & kFPUExceptionDivByZero));
+--- a/lib/Arch/AArch64/Semantics/FP_FUSED_INDEXED.cpp
++++ b/lib/Arch/AArch64/Semantics/FP_FUSED_INDEXED.cpp
+@@ -8,27 +8,34 @@
+  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+  */
+ namespace {
++ALWAYS_INLINE unsigned FusedHighestBit(uint64_t value) {
++  return 63U - __builtin_clzll(value);
++}
++
+ ALWAYS_INLINE unsigned FusedHighestBit(uint128_t value) {
+   auto high = static_cast<uint64_t>(value >> 64);
+   return high ? 127U - __builtin_clzll(high)
+               : 63U - __builtin_clzll(static_cast<uint64_t>(value));
+ }
+ 
+-ALWAYS_INLINE uint128_t FusedShiftRightJam(uint128_t value, unsigned distance) {
++template <typename Wide>
++ALWAYS_INLINE Wide FusedShiftRightJam(Wide value, unsigned distance) {
+   if (!distance) return value;
+-  if (distance >= 128) return value != 0;
+-  const auto lost = value & ((uint128_t(1) << distance) - 1);
++  if (distance >= 8 * sizeof(Wide)) return value != 0;
++  const auto lost = value & ((Wide(1) << distance) - 1);
+   return (value >> distance) | (lost != 0);
+ }
+ 
+-// Compute a*b+c with one rounding, without host FP or intermediate overflow.
+-// Binary64's exact product has at most106 bits. Normalize each term at bit126,
+-// retaining at least21 zero low bits before alignment. If alignment discards
+-// bits, the exponent gap precludes deep cancellation; a jammed bit preserves
+-// all information needed for any53-bit rounding (also after a one-bit borrow).
+-// Close opposing terms retain their complete significands and cancel exactly.
++// Compute a*b+c with a single rounding and no intermediate overflow.
++// Binary32 and binary64 products need at most 48 and 106 significand bits.
++// Align at bit 62 or 126, leaving room for a carry and at least 15 low
++// zero bits. Nearby terms cancel exactly. If alignment discards any bits,
++// the exponent gap precludes deep cancellation and a jammed bit suffices.
+ template <typename T>
+ ALWAYS_INLINE T IndexedFusedFPBits(State &state, T accumulator, T lhs, T rhs) {
++  using Wide = typename IntegerType<T>::WBT;
++  constexpr int wide_bits = sizeof(Wide) * 8;
++  constexpr int alignment_bit = wide_bits - 2;
+   constexpr unsigned fraction_bits = sizeof(T) == 4 ? 23 : 52;
+   constexpr int bias = sizeof(T) == 4 ? 127 : 1023;
+   constexpr int minimum = 1 - bias, maximum = bias;
+@@ -77,37 +84,51 @@
+     return exponent | product_sign;
+   }
+   if (addend_inf) return accumulator;
++  if (lhs_zero || rhs_zero) {
++    if (accumulator & ~sign) return accumulator;
++    return product_sign == addend_sign ? product_sign
++        : state.fpcr.rmode == kFPURoundDownNegInf ? sign : T(0);
++  }
+ 
+   const unsigned lhs_exp = static_cast<unsigned>((lhs & exponent) >> fraction_bits);
+   const unsigned rhs_exp = static_cast<unsigned>((rhs & exponent) >> fraction_bits);
+   const unsigned acc_exp = static_cast<unsigned>((accumulator & exponent) >> fraction_bits);
+-  const uint128_t lhs_sig = (lhs & fraction) | (lhs_exp ? T(1) << fraction_bits : T(0));
+-  const uint128_t rhs_sig = (rhs & fraction) | (rhs_exp ? T(1) << fraction_bits : T(0));
+-  uint128_t product = lhs_sig * rhs_sig;
+-  uint128_t addend = (accumulator & fraction) | (acc_exp ? T(1) << fraction_bits : T(0));
+-  if (!product && !addend) {
+-    return product_sign == addend_sign ? product_sign
+-        : state.fpcr.rmode == kFPURoundDownNegInf ? sign : T(0);
+-  }
+-  int product_top = 0, addend_top = 0;
+-  if (product) {
+-    const unsigned highest = FusedHighestBit(product);
+-    product_top = static_cast<int>(lhs_exp ? lhs_exp : 1) +
+-                  static_cast<int>(rhs_exp ? rhs_exp : 1) - 2 * bias -
+-                  2 * static_cast<int>(fraction_bits) + static_cast<int>(highest);
+-    product <<= 126 - highest;
+-  }
++  if constexpr (sizeof(T) == 4) {
++    // A normal binary32 product is an integer multiple of 2^(k-46), where
++    // k is the sum of the unbiased input exponents. In this interval even
++    // the smallest cancellation stays normal. With a nearby addend, both
++    // the product and sum fit exactly in binary64 before the one rounding.
++    const int k = static_cast<int>(lhs_exp + rhs_exp) - 254;
++    const int gap = static_cast<int>(acc_exp) - 127 - k;
++    if (lhs_exp && rhs_exp && k >= -70 && k <= 100 &&
++        ((acc_exp && gap >= -24 && gap <= 4) || !(accumulator & ~sign))) {
++      const double a = __builtin_bit_cast(float32_t, lhs);
++      const double b = __builtin_bit_cast(float32_t, rhs);
++      const double c = __builtin_bit_cast(float32_t, accumulator);
++      return RoundNormalToBinary32(state, a * b + c);
++    }
++  }
++  const Wide lhs_sig = (lhs & fraction) | (lhs_exp ? T(1) << fraction_bits : T(0));
++  const Wide rhs_sig = (rhs & fraction) | (rhs_exp ? T(1) << fraction_bits : T(0));
++  Wide product = lhs_sig * rhs_sig;
++  Wide addend = (accumulator & fraction) | (acc_exp ? T(1) << fraction_bits : T(0));
++  const unsigned product_highest = FusedHighestBit(product);
++  const int product_top = static_cast<int>(lhs_exp ? lhs_exp : 1) +
++      static_cast<int>(rhs_exp ? rhs_exp : 1) - 2 * bias -
++      2 * static_cast<int>(fraction_bits) + static_cast<int>(product_highest);
++  product <<= alignment_bit - product_highest;
++  int addend_top = 0;
+   if (addend) {
+     const unsigned highest = FusedHighestBit(addend);
+     addend_top = static_cast<int>(acc_exp ? acc_exp : 1) - bias -
+                  static_cast<int>(fraction_bits) + static_cast<int>(highest);
+-    addend <<= 126 - highest;
+-  }
+-  const int top = !product ? addend_top : !addend ? product_top
++    addend <<= alignment_bit - highest;
++  }
++  const int top = !addend ? product_top
+                   : product_top > addend_top ? product_top : addend_top;
+-  if (product) product = FusedShiftRightJam(product, static_cast<unsigned>(top - product_top));
++  product = FusedShiftRightJam(product, static_cast<unsigned>(top - product_top));
+   if (addend) addend = FusedShiftRightJam(addend, static_cast<unsigned>(top - addend_top));
+-  uint128_t sum;
++  Wide sum;
+   T result_sign;
+   if (product_sign == addend_sign) { sum = product + addend; result_sign = product_sign; }
+   else if (product >= addend) { sum = product - addend; result_sign = product_sign; }
+@@ -115,22 +136,22 @@
+   if (!sum) return state.fpcr.rmode == kFPURoundDownNegInf ? sign : T(0);
+ 
+   const int highest = static_cast<int>(FusedHighestBit(sum));
+-  int result_top = top - 126 + highest;
++  int result_top = top - alignment_bit + highest;
+   const bool tiny = result_top < minimum;
+   if (tiny && state.fpcr.fz) {
+     state.sr.ufc = 1;  // ARM flushes before rounding, without adding IXC.
+     return result_sign;
+   }
+-  const int shift = tiny ? minimum - static_cast<int>(fraction_bits) - (top - 126)
++  const int shift = tiny ? minimum - static_cast<int>(fraction_bits) - (top - alignment_bit)
+                          : highest - static_cast<int>(fraction_bits);
+-  uint128_t rounded;
++  Wide rounded;
+   bool inexact = false, above_half = false, at_half = false;
+   if (shift <= 0) rounded = sum << -shift;
+-  else if (shift > 128) { rounded = 0; inexact = true; }
++  else if (shift > wide_bits) { rounded = 0; inexact = true; }
+   else {
+-    const uint128_t half = uint128_t(1) << (shift - 1);
+-    const uint128_t discarded = shift == 128 ? sum : sum & ((uint128_t(1) << shift) - 1);
+-    rounded = shift == 128 ? 0 : sum >> shift;
++    const Wide half = Wide(1) << (shift - 1);
++    const Wide discarded = shift == wide_bits ? sum : sum & ((Wide(1) << shift) - 1);
++    rounded = shift == wide_bits ? 0 : sum >> shift;
+     inexact = discarded != 0;
+     above_half = discarded > half;
+     at_half = discarded == half;
+@@ -140,7 +161,7 @@
+       : mode == kFPURoundUpInf ? inexact && !result_sign
+       : mode == kFPURoundDownNegInf ? inexact && result_sign : false;
+   rounded += increment;
+-  if (!tiny && rounded >= (uint128_t(1) << (fraction_bits + 1))) {
++  if (!tiny && rounded >= (Wide(1) << (fraction_bits + 1))) {
+     rounded >>= 1;
+     ++result_top;
+   }
+--- a/lib/Arch/AArch64/Semantics/FP_RECIP_STEPS.cpp
++++ b/lib/Arch/AArch64/Semantics/FP_RECIP_STEPS.cpp
+@@ -57,6 +57,18 @@
+ RECIP_FUSED_FP(64, float64_t)
+ #undef RECIP_FUSED_FP
+ 
++// Around the Newton iteration's fixed point the binary32 product has at most
++// 48 significant bits. With the exponent sum within four of zero, subtracting
++// it from 2 or 3 needs at most 52 bits and halving remains exact in binary64.
++// Every nonzero result is normal in binary32. Round just once and record IXC.
++template <bool square_root_step>
++ALWAYS_INLINE uint32_t RecipNormalStep32(State &state, uint32_t lhs, uint32_t rhs) {
++  const double a = RecipFPBitCast<float32_t>(lhs);
++  const double b = RecipFPBitCast<float32_t>(rhs);
++  const double exact = square_root_step ? (3.0 - a * b) * 0.5 : 2.0 - a * b;
++  return RoundNormalToBinary32(state, exact);
++}
++
+ template <typename T, bool square_root_step>
+ ALWAYS_INLINE T ReciprocalStepFPBits(State &state, T lhs, T rhs) {
+   constexpr unsigned fraction_bits = sizeof(T) == 4 ? 23 : 52;
+@@ -67,6 +79,14 @@
+   constexpr T two = sizeof(T) == 4 ? T(0x40000000) : T(0x4000000000000000ULL);
+   constexpr T one_and_half = sizeof(T) == 4 ? T(0x3fc00000) : T(0x3ff8000000000000ULL);
+   constexpr T constant = square_root_step ? one_and_half : two;
++
++  if constexpr (sizeof(T) == 4) {
++    const unsigned a = (lhs & exponent) >> fraction_bits;
++    const unsigned b = (rhs & exponent) >> fraction_bits;
++    if (a && a < 255 && b && b < 255 && a + b >= 250 && a + b <= 258) {
++      return RecipNormalStep32<square_root_step>(state, lhs, rhs);
++    }
++  }
+ 
+   // ARM negates operand one before unpacking and NaN processing. Consequently
+   // a propagated lhs NaN changes sign, while a rhs NaN does not. DN overrides
+--- a/tests/AArch64/SIMD/FP_FUSED_INDEXED.S
++++ b/tests/AArch64/SIMD/FP_FUSED_INDEXED.S
+@@ -11,7 +11,7 @@
+ TEST_END
+ 
+ TEST_BEGIN(FMLA_ASIMDELEM_R_SD_4S, fmla_indexed_4s, 3)
+-TEST_INPUTS(0, 0x3f800001, 0x3f7fffff, 0x7fc12345, 0, 0x7f800000, 1, 0x80000001, 0x3f800000)
++TEST_INPUTS(0, 0x3f800001, 0x3f7fffff, 0x7fc12345, 0, 0x7f800000, 1, 0x80000001, 0x3f800000, 0xbf800000, 0x3f800001, 0x3f7ffffe, 0x3f800000, 0xbf800000, 0x3f800000, 0x3f800000, 0x3f000000, 0x3f800001)
+     dup v20.4s, ARG1_32
+     dup v17.4s, ARG2_32
+     dup v0.4s, ARG3_32
+--- a/tests/AArch64/SIMD/FP_RECIP_STEPS.S
++++ b/tests/AArch64/SIMD/FP_RECIP_STEPS.S
+@@ -24,7 +24,7 @@
+ TEST_END
+ 
+ TEST_BEGIN(FRECPS_ASIMDSAME_ONLY_4S, frecps_raw_4s, 3)
+-TEST_INPUTS(0x7fc12345, 0x3f800000, 0, 0xffc12345, 0x3f800000, 0, 0x3f800000, 0xffc12345, 0, 0x7fc12345, 0x7f800001, 0, 0x7fc12345, 0x3f800000, 0x02000000, 0, 0x7f800000, 0, 0x80000000, 0xff800000, 0, 1, 0x7f800000, 0x01000000, 0x7f7fffff, 0x40000000, 0, 0x7f7fffff, 0x40000000, 0x00400000, 1, 1, 0, 1, 1, 0x00800000, 0x3f800000, 0x40000000, 0x00800000, 0x3f800000, 0x40400000, 0x00800000)
++TEST_INPUTS(0x7fc12345, 0x3f800000, 0, 0xffc12345, 0x3f800000, 0, 0x3f800000, 0xffc12345, 0, 0x7fc12345, 0x7f800001, 0, 0x7fc12345, 0x3f800000, 0x02000000, 0, 0x7f800000, 0, 0x80000000, 0xff800000, 0, 1, 0x7f800000, 0x01000000, 0x7f7fffff, 0x40000000, 0, 0x7f7fffff, 0x40000000, 0x00400000, 1, 1, 0, 1, 1, 0x00800000, 0x3f800000, 0x40000000, 0x00800000, 0x3f800000, 0x40400000, 0x00800000, 0x3f000000, 0x3f800001, 0x0, 0x3f000000, 0x3f800001, 0x400000, 0x3f000000, 0x3f800001, 0x800000, 0x3f000000, 0x3f800001, 0xc00000)
+     dup v1.4s, ARG1_32
+     dup v2.4s, ARG2_32
+     msr fpcr, ARG3_64
+@@ -74,7 +74,7 @@
+ TEST_END
+ 
+ TEST_BEGIN(FRSQRTS_ASIMDSAME_ONLY_4S, frsqrts_raw_4s, 3)
+-TEST_INPUTS(0x7fc12345, 0x3f800000, 0, 0xffc12345, 0x3f800000, 0, 0x3f800000, 0xffc12345, 0, 0x7fc12345, 0x7f800001, 0, 0x7fc12345, 0x3f800000, 0x02000000, 0, 0x7f800000, 0, 0x80000000, 0xff800000, 0, 1, 0x7f800000, 0x01000000, 0x7f7fffff, 0x40000000, 0, 0x7f7fffff, 0x40000000, 0x00400000, 1, 1, 0, 1, 1, 0x00800000, 0x3f800000, 0x40000000, 0x00800000, 0x3f800000, 0x40400000, 0x00800000)
++TEST_INPUTS(0x7fc12345, 0x3f800000, 0, 0xffc12345, 0x3f800000, 0, 0x3f800000, 0xffc12345, 0, 0x7fc12345, 0x7f800001, 0, 0x7fc12345, 0x3f800000, 0x02000000, 0, 0x7f800000, 0, 0x80000000, 0xff800000, 0, 1, 0x7f800000, 0x01000000, 0x7f7fffff, 0x40000000, 0, 0x7f7fffff, 0x40000000, 0x00400000, 1, 1, 0, 1, 1, 0x00800000, 0x3f800000, 0x40000000, 0x00800000, 0x3f800000, 0x40400000, 0x00800000, 0x3f000000, 0x3f800002, 0x0, 0x3f000000, 0x3f800002, 0x400000, 0x3f000000, 0x3f800002, 0x800000, 0x3f000000, 0x3f800002, 0xc00000)
+     dup v1.4s, ARG1_32
+     dup v2.4s, ARG2_32
+     msr fpcr, ARG3_64

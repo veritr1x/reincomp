@@ -1,0 +1,110 @@
+--- a/lib/Arch/AArch64/Arch.cpp
++++ b/lib/Arch/AArch64/Arch.cpp
+@@ -5294,7 +5294,8 @@
+   return true;
+ }
+ 
+-static bool TryDecodeSIMDRightShiftImmediate(const InstData &data, Instruction &inst, bool scalar) {
++static bool TryDecodeSIMDRightShiftImmediate(const InstData &data, Instruction &inst, bool scalar,
++                                             bool insert = false) {
+   if (!data.immh.uimm || (scalar && !(data.immh.uimm & 8)) ||
+       (!scalar && (data.immh.uimm & 8) && !data.Q)) return false;
+   uint64_t esize = 0;
+@@ -5306,6 +5307,7 @@
+ 
+   uint64_t shift = (esize * 2) - ((data.immh.uimm << 3) + data.immb.uimm);
+   AddRegOperand(inst, kActionWrite, kRegV, kUseAsValue, data.Rd);
++  if (insert) AddRegOperand(inst, kActionRead, kRegV, kUseAsValue, data.Rd);
+   AddRegOperand(inst, kActionRead, kRegV, kUseAsValue, data.Rn);
+   AddImmOperand(inst, shift);
+   return true;
+@@ -5321,6 +5323,14 @@
+ SIMD_RIGHT_SHIFT_DECODERS(USHR)
+ SIMD_RIGHT_SHIFT_DECODERS(SSHR)
+ #undef SIMD_RIGHT_SHIFT_DECODERS
++
++bool TryDecodeSRI_ASIMDSHF_R(const InstData &data, Instruction &inst) {
++  return TryDecodeSIMDRightShiftImmediate(data, inst, false, true);
++}
++
++bool TryDecodeSRI_ASISDSHF_R(const InstData &data, Instruction &inst) {
++  return TryDecodeSIMDRightShiftImmediate(data, inst, true, true);
++}
+ 
+ // USHL <Vd>.<T>, <Vn>.<T>, <Vm>.<T>
+ bool TryDecodeUSHL_ASIMDSAME_ONLY(const InstData &data, Instruction &inst) {
+--- a/lib/Arch/AArch64/Decode.cpp
++++ b/lib/Arch/AArch64/Decode.cpp
+@@ -34113,10 +34113,6 @@
+ //  30 1
+ //  31 0
+ // SRI  <V><d>, <V><n>, #<shift>
+-bool TryDecodeSRI_ASISDSHF_R(const InstData &, Instruction &) {
+-  return false;
+-}
+-
+ // SRI SRI_asimdshf_R:
+ //   0 x Rd       0
+ //   1 x Rd       1
+@@ -34151,10 +34147,6 @@
+ //  30 x Q        0
+ //  31 0
+ // SRI  <Vd>.<T>, <Vn>.<T>, #<shift>
+-bool TryDecodeSRI_ASIMDSHF_R(const InstData &, Instruction &) {
+-  return false;
+-}
+-
+ // SYS IC_SYS_CR_system:
+ //   0 x Rt       0
+ //   1 x Rt       1
+--- a/lib/Arch/AArch64/Semantics/SIMD_INTEGER.cpp
++++ b/lib/Arch/AArch64/Semantics/SIMD_INTEGER.cpp
+@@ -141,6 +141,32 @@
+ 
+ // Snapshot both source registers before writing any aliased destination. The
+ // unsigned predicate produces a lane mask, with inactive upper bits cleared.
++// Shift right and insert into the low bits of each destination lane.
++// A shift equal to the lane width leaves that lane's destination intact.
++#define INTEGER_SHIFT_INSERT(bits) \
++  template <size_t lanes> \
++  DEF_SEM(IntegerSRI##bits, V128W dst, V128 previous, V128 src, I64 imm) { \
++    const auto a = UReadV##bits(previous); \
++    const auto b = UReadV##bits(src); \
++    const auto shift = Read(imm); \
++    constexpr uint64_t mask = UINT64_MAX >> (64 - bits); \
++    auto result = UClearV##bits(UReadV##bits(dst)); \
++    _Pragma("unroll") for (size_t i = 0; i < lanes; ++i) { \
++      const uint64_t original = UExtractV##bits(a, i); \
++      const uint64_t source = UExtractV##bits(b, i); \
++      const uint64_t value = shift == bits ? original : \
++          (original & ~(mask >> shift)) | (source >> shift); \
++      result = UInsertV##bits(result, i, static_cast<uint##bits##_t>(value)); \
++    } \
++    UWriteV##bits(dst, result); \
++    return memory; \
++  }
++INTEGER_SHIFT_INSERT(8)
++INTEGER_SHIFT_INSERT(16)
++INTEGER_SHIFT_INSERT(32)
++INTEGER_SHIFT_INSERT(64)
++#undef INTEGER_SHIFT_INSERT
++
+ #define INTEGER_UNSIGNED_HIGHER(bits) \
+   template <size_t lanes> \
+   DEF_SEM(IntegerCMHI##bits, V128W dst, V128 lhs, V128 rhs) { \
+@@ -173,6 +199,7 @@
+ 
+ #define INTEGER_SHIFT_ISEL(arr, size, lanes) \
+   DEF_ISEL(USHL_ASIMDSAME_ONLY_##arr) = IntegerUSHL##size<lanes>; \
++  DEF_ISEL(SRI_ASIMDSHF_R_##arr) = IntegerSRI##size<lanes>; \
+   DEF_ISEL(SHL_ASIMDSHF_R_##arr) = IntegerSHL##size<lanes>; \
+   DEF_ISEL(USHR_ASIMDSHF_R_##arr) = IntegerSHR##size<lanes, false>; \
+   DEF_ISEL(SSHR_ASIMDSHF_R_##arr) = IntegerSHR##size<lanes, true>;
+@@ -186,6 +213,7 @@
+ #undef INTEGER_SHIFT_ISEL
+ 
+ DEF_ISEL(USHL_ASISDSAME_ONLY) = IntegerUSHL64<1>;
++DEF_ISEL(SRI_ASISDSHF_R) = IntegerSRI64<1>;
+ DEF_ISEL(SHL_ASISDSHF_R) = IntegerSHL64<1>;
+ DEF_ISEL(SSHR_ASISDSHF_R) = IntegerSHR64<1, true>;
+ 

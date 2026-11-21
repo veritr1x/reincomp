@@ -1,0 +1,61 @@
+--- a/lib/Arch/AArch64/Semantics/BINARY.cpp
++++ b/lib/Arch/AArch64/Semantics/BINARY.cpp
+@@ -540,18 +540,28 @@
+ 
+ namespace {
+ 
+-// Vector forms: each lane goes through CheckedFloatBinOp, so FPSR's cumulative
+-// exception bits collect the exceptions of every lane, as on hardware.
+-#define MAKE_FP_VECTOR_OP(name, op, size) \
++// A full-width subtract or divide has the same operand order in every lane.
++// Collect the union of its exceptions once. Keep 64-bit vectors scalar so
++// inactive lanes cannot raise exceptions on hosts with 128-bit SIMD. Keep
++// the existing add/multiply path to preserve NaN operand selection.
++#define MAKE_FP_VECTOR_OP(name, op, symbol, packed, size) \
+   template <typename S, typename V> \
+   DEF_SEM(name##_V##size, V128W dst, S src1, S src2) { \
+     auto vec1 = FReadV##size(src1); \
+     auto vec2 = FReadV##size(src2); \
+     V res = {}; \
+-    _Pragma("unroll") for (size_t i = 0; i < NumVectorElems(res); ++i) { \
+-      res.elems[i] = CheckedFloatBinOp(state, op##size, \
+-                                       FExtractV##size(vec1, i), \
+-                                       FExtractV##size(vec2, i)); \
++    if constexpr (packed && sizeof(V) == 16) { \
++      using Packed = float##size##_t __attribute__((vector_size(16))); \
++      auto apply = [](Packed a, Packed b) { return a symbol b; }; \
++      auto result = CheckedFloatBinOp(state, apply, __builtin_bit_cast(Packed, vec1), \
++                                      __builtin_bit_cast(Packed, vec2)); \
++      res = __builtin_bit_cast(V, result); \
++    } else { \
++      _Pragma("unroll") for (size_t i = 0; i < NumVectorElems(res); ++i) { \
++        res.elems[i] = CheckedFloatBinOp(state, op##size, \
++                                         FExtractV##size(vec1, i), \
++                                         FExtractV##size(vec2, i)); \
++      } \
+     } \
+     FWriteV##size(dst, res); \
+     return memory; \
+@@ -577,14 +587,14 @@
+     return memory; \
+   }
+ 
+-MAKE_FP_VECTOR_OP(FADD, FAdd, 32)
+-MAKE_FP_VECTOR_OP(FADD, FAdd, 64)
+-MAKE_FP_VECTOR_OP(FSUB, FSub, 32)
+-MAKE_FP_VECTOR_OP(FSUB, FSub, 64)
+-MAKE_FP_VECTOR_OP(FMUL, FMul, 32)
+-MAKE_FP_VECTOR_OP(FMUL, FMul, 64)
+-MAKE_FP_VECTOR_OP(FDIV, FDiv, 32)
+-MAKE_FP_VECTOR_OP(FDIV, FDiv, 64)
++MAKE_FP_VECTOR_OP(FADD, FAdd, +, false, 32)
++MAKE_FP_VECTOR_OP(FADD, FAdd, +, false, 64)
++MAKE_FP_VECTOR_OP(FSUB, FSub, -, true, 32)
++MAKE_FP_VECTOR_OP(FSUB, FSub, -, true, 64)
++MAKE_FP_VECTOR_OP(FMUL, FMul, *, false, 32)
++MAKE_FP_VECTOR_OP(FMUL, FMul, *, false, 64)
++MAKE_FP_VECTOR_OP(FDIV, FDiv, /, true, 32)
++MAKE_FP_VECTOR_OP(FDIV, FDiv, /, true, 64)
+ MAKE_FP_PAIRWISE_OP(FADDP, FAdd, 32)
+ MAKE_FP_PAIRWISE_OP(FADDP, FAdd, 64)
+ 

@@ -22,12 +22,28 @@ inline std::vector<unsigned char> Bytes(const void *p, size_t size) {
   recomp::ReadGuestMemory(bytes.data(), Address(p), size); return bytes;
 }
 inline void *Copy(void *destination, const void *source, size_t size) {
-  auto bytes=Bytes(source,size);
-  recomp::WriteGuestMemory(Address(destination),bytes.data(),size);return destination;
+  if (!size) return destination;
+  // Finish reading the source before publishing any destination bytes, including
+  // when memmove overlaps or a guest reservation covers the destination.
+  unsigned char local[256];
+  if (size <= sizeof(local)) {
+    recomp::ReadGuestMemory(local, Address(source), size);
+    recomp::WriteGuestMemory(Address(destination), local, size);
+  } else {
+    auto bytes = Bytes(source, size);
+    recomp::WriteGuestMemory(Address(destination), bytes.data(), size);
+  }
+  return destination;
 }
 inline void *Fill(void *destination, int value, size_t size) {
-  if(!size)return destination;
-  recomp::WithGuestMemoryWrite(Address(destination),size,[&]{std::memset(destination,value,size);});
+  if (!size) return destination;
+  // The synchronous callback fits in std::function's inline storage when it
+  // references one stack object instead of capturing three separate arguments.
+  struct FillArgs { void *destination; int value; size_t size; };
+  const FillArgs args{destination, value, size};
+  recomp::WithGuestMemoryWrite(Address(destination), size, [&args] {
+    std::memset(args.destination, args.value, args.size);
+  });
   return destination;
 }
 inline size_t NativeSize(void *p) {

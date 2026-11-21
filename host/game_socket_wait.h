@@ -25,7 +25,7 @@ class GameSocketWaitCollector {
     GameSocketWaitContext::NativeEnvironment preserve;
     const auto token=threads_.Self();
     const bool main=main_.Owns(token),worker=!main&&workers_.Owns(token),ordinary=!main&&!worker&&ordinary_.Owns(token);
-    {
+    if(!GameQuietTrace()){
       static thread_local std::map<std::pair<uint64_t,std::string>,uint64_t> counts;
       auto&count=counts[{token,name}];if(count!=UINT64_MAX)++count;
       if(count<=64||count%4096==0)std::fprintf(stderr,"Game socket import: name=%s token=%#llx native_tid=%lu PC=%#llx LR=%#llx lifetime=%s site=%s calls=%llu; first64 then every4096, GC record not inferred\n",name.c_str(),(unsigned long long)token,GetCurrentThreadId(),(unsigned long long)state.gpr.pc.qword,(unsigned long long)state.gpr.x30.qword,main?"attached_main":worker?"prepared_Unity_worker":ordinary?"prepared_worker":"unknown",(policy_?policy_(name,state):GameSocketWaitContext::OriginalSite(name,state))?"listed":"unlisted",(unsigned long long)count);

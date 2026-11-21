@@ -1,0 +1,91 @@
+--- a/lib/Arch/AArch64/Arch.cpp
++++ b/lib/Arch/AArch64/Arch.cpp
+@@ -4451,14 +4451,19 @@
+   return TryDecodeFMAXV_ASIMDALL_ONLY_SD(data, inst);
+ }
+ 
++// CNT  <Vd>.<T>, <Vn>.<T>
++bool TryDecodeCNT_ASIMDMISC_R(const InstData &data, Instruction &inst) {
++  return data.size == 0 && TryDecodeADDV_ASIMDALL_ONLY(data, inst);
++}
++
+ // UADDLV  <V><d>, <Vn>.<T>
+-bool TryDecodeUADDLV_ASIMDALL_ONLY(const InstData &, Instruction &) {
+-  return false;
++bool TryDecodeUADDLV_ASIMDALL_ONLY(const InstData &data, Instruction &inst) {
++  return TryDecodeADDV_ASIMDALL_ONLY(data, inst);
+ }
+ 
+ // SADDLV  <V><d>, <Vn>.<T>
+-bool TryDecodeSADDLV_ASIMDALL_ONLY(const InstData &, Instruction &) {
+-  return false;
++bool TryDecodeSADDLV_ASIMDALL_ONLY(const InstData &data, Instruction &inst) {
++  return TryDecodeADDV_ASIMDALL_ONLY(data, inst);
+ }
+ 
+ // DMB  <option>|#<imm>
+--- a/lib/Arch/AArch64/Decode.cpp
++++ b/lib/Arch/AArch64/Decode.cpp
+@@ -28387,11 +28387,6 @@
+ //  29 0 U        0
+ //  30 x Q        0
+ //  31 0
+-// CNT  <Vd>.<T>, <Vn>.<T>
+-bool TryDecodeCNT_ASIMDMISC_R(const InstData &, Instruction &) {
+-  return false;
+-}
+-
+ // SQSHL SQSHL_asisdshf_R:
+ //   0 x Rd       0
+ //   1 x Rd       1
+--- a/lib/Arch/AArch64/Semantics/SIMD.cpp
++++ b/lib/Arch/AArch64/Semantics/SIMD.cpp
+@@ -881,3 +881,48 @@
+ }
+ 
+ DEF_ISEL(USHR_ASISDSHF_R) = USHR_64B;
++
++namespace {
++// Count each byte independently. The masks keep carries inside each byte.
++template <typename S>
++DEF_SEM(CountByteBits, V128W dst, S src) {
++  auto words = UReadV64(src);
++  _Pragma("unroll") for (auto &word : words.elems) {
++    word -= (word >> 1) & UINT64_C(0x5555555555555555);
++    word = (word & UINT64_C(0x3333333333333333)) +
++           ((word >> 2) & UINT64_C(0x3333333333333333));
++    word = (word + (word >> 4)) & UINT64_C(0x0f0f0f0f0f0f0f0f);
++  }
++  UWriteV64(dst, words);
++  return memory;
++}
++
++#define WIDEN_SUM_LANES(prefix, bits, wide, type) \
++  template <typename S> \
++  DEF_SEM(prefix##WidenSum##bits, V128W dst, S src) { \
++    const auto lanes = prefix##ReadV##bits(src); \
++    type sum = 0; \
++    _Pragma("unroll") for (const auto lane : lanes.elems) sum += lane; \
++    prefix##WriteV##wide(dst, sum); \
++    return memory; \
++  }
++WIDEN_SUM_LANES(U, 8, 16, uint16_t)
++WIDEN_SUM_LANES(U, 16, 32, uint32_t)
++WIDEN_SUM_LANES(U, 32, 64, uint64_t)
++WIDEN_SUM_LANES(S, 8, 16, int16_t)
++WIDEN_SUM_LANES(S, 16, 32, int32_t)
++WIDEN_SUM_LANES(S, 32, 64, int64_t)
++#undef WIDEN_SUM_LANES
++}  // namespace
++
++DEF_ISEL(CNT_ASIMDMISC_R_8B) = CountByteBits<V64>;
++DEF_ISEL(CNT_ASIMDMISC_R_16B) = CountByteBits<V128>;
++#define WIDEN_SUM_ISEL(op, prefix) \
++  DEF_ISEL(op##_ASIMDALL_ONLY_8B) = prefix##WidenSum8<V64>; \
++  DEF_ISEL(op##_ASIMDALL_ONLY_16B) = prefix##WidenSum8<V128>; \
++  DEF_ISEL(op##_ASIMDALL_ONLY_4H) = prefix##WidenSum16<V64>; \
++  DEF_ISEL(op##_ASIMDALL_ONLY_8H) = prefix##WidenSum16<V128>; \
++  DEF_ISEL(op##_ASIMDALL_ONLY_4S) = prefix##WidenSum32<V128>;
++WIDEN_SUM_ISEL(UADDLV, U)
++WIDEN_SUM_ISEL(SADDLV, S)
++#undef WIDEN_SUM_ISEL

@@ -54,6 +54,25 @@ def fetch(work, name, source):
     return target
 
 
+def lifter_sources(remill, build):
+    """Translation units shared by the Windows and WebAssembly builds."""
+    sources = [remill / 'lib/Arch' / n for n in ('Arch.cpp', 'Context.cpp', 'Instruction.cpp', 'Name.cpp')]
+    sources += [remill / 'lib/Arch/AArch64' / n for n in ('Arch.cpp', 'Decode.cpp', 'Extract.cpp')]
+    sources += [remill / 'lib/Arch/Sleigh/AArch64Base.cpp']
+    sources += [p for p in sorted((remill / 'lib/BC').glob('*.cpp')) if p.name not in ('SleighLifter.cpp', 'PcodeCFG.cpp')]
+    sources += sorted((remill / 'lib/OS').glob('*.cpp'))
+    return sources + [remill / 'bin/lift/Lift.cpp', remill / 'bin/lift/GuestCallLowering.cpp', build / 'Version.cpp', build / 'OtherArchitectures.cpp']
+
+
+def generate_lifter_sources(remill, build):
+    (build / 'include/sleigh').mkdir(parents=True, exist_ok=True)
+    (build / 'include/sleigh/libsleigh.hh').write_text(SLEIGH_STAND_IN)
+    (build / 'OtherArchitectures.cpp').write_text(OTHER_ARCHITECTURES)
+    version = (remill / 'lib/Version/Version.cpp.in').read_text()
+    version = version.replace('@GIT_RETRIEVED_STATE@', 'true').replace('@GIT_IS_DIRTY@', 'false').replace('@GIT_HEAD_SHA1@', REMILL[1])
+    (build / 'Version.cpp').write_text(re.sub(r'@[A-Z_0-9]+@', '', version))
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('--llvm', type=Path, required=True)
@@ -104,18 +123,8 @@ def main():
 
     # The lifter.
     build = work / 'build-lift'
-    (build / 'include/sleigh').mkdir(parents=True, exist_ok=True)
-    (build / 'include/sleigh/libsleigh.hh').write_text(SLEIGH_STAND_IN)
-    (build / 'OtherArchitectures.cpp').write_text(OTHER_ARCHITECTURES)
-    version = (remill / 'lib/Version/Version.cpp.in').read_text()
-    version = version.replace('@GIT_RETRIEVED_STATE@', 'true').replace('@GIT_IS_DIRTY@', 'false').replace('@GIT_HEAD_SHA1@', REMILL[1])
-    (build / 'Version.cpp').write_text(re.sub(r'@[A-Z_0-9]+@', '', version))
-    sources = [remill / 'lib/Arch' / n for n in ('Arch.cpp', 'Context.cpp', 'Instruction.cpp', 'Name.cpp')]
-    sources += [remill / 'lib/Arch/AArch64' / n for n in ('Arch.cpp', 'Decode.cpp', 'Extract.cpp')]
-    sources += [remill / 'lib/Arch/Sleigh/AArch64Base.cpp']
-    sources += [p for p in sorted((remill / 'lib/BC').glob('*.cpp')) if p.name not in ('SleighLifter.cpp', 'PcodeCFG.cpp')]
-    sources += sorted((remill / 'lib/OS').glob('*.cpp'))
-    sources += [remill / 'bin/lift/Lift.cpp', remill / 'bin/lift/GuestCallLowering.cpp', build / 'Version.cpp', build / 'OtherArchitectures.cpp']
+    generate_lifter_sources(remill, build)
+    sources = lifter_sources(remill, build)
     flags = ['/nologo', '/std:c++20', '/O2', '/EHsc', '/MD', '/GR', '/w', f'/I{remill / "include"}', f'/I{remill}', f'/I{deps / "include"}',
              f'/I{llvm / "include"}', f'/I{build / "include"}', '/DNOMINMAX', '/D_CRT_SECURE_NO_WARNINGS', '/DWIN32_LEAN_AND_MEAN', '/DNDEBUG',
              '/DGLOG_NO_ABBREVIATED_SEVERITIES', '/DGFLAGS_IS_A_DLL=0', '/DGLOG_STATIC_DEFINE', '/DGOOGLE_GLOG_DLL_DECL=',

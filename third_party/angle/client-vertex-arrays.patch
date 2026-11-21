@@ -1,0 +1,51 @@
+--- a/src/libGLESv2/global_state.cpp
++++ b/src/libGLESv2/global_state.cpp
+@@ -11,7 +11,9 @@
+ #include "common/debug.h"
+ #include "common/platform.h"
+ #include "common/system_utils.h"
++#include "libANGLE/Context.h"
+ #include "libANGLE/ErrorStrings.h"
++#include "libANGLE/VertexArray.h"
+ #include "libANGLE/Thread.h"
+ #include "libGLESv2/egl_stubs_autogen.h"
+ #include "libGLESv2/resource.h"
+@@ -315,3 +317,38 @@
+     return TRUE;
+ }
+ #endif  // defined(ANGLE_PLATFORM_WINDOWS) && !defined(ANGLE_STATIC)
++
++#if defined(ANGLE_PLATFORM_WINDOWS) && !defined(ANGLE_STATIC)
++// The Windows host rejects enabled client-memory attributes before a draw.
++// Read the same buffer names as GL_VERTEX_ATTRIB_ARRAY_BUFFER_BINDING under
++// the same context lock. A lost context goes through the public query path.
++extern "C" __declspec(dllexport) int __cdecl reincompHasClientVertexArrays()
++{
++    gl::Context *context = gl::GetValidGlobalContext();
++    if (context == nullptr)
++    {
++        return -1;
++    }
++    SCOPED_SHARE_CONTEXT_LOCK(context);
++    if (context->isContextLost() || context->getClientVersion() < gl::ES_2_0)
++    {
++        return -1;
++    }
++    const gl::VertexArray *vao = context->getState().getVertexArray();
++    if (vao == nullptr || vao->getMaxAttribs() > 4096 ||
++        vao->getMaxAttribs() != static_cast<size_t>(context->getCaps().maxVertexAttributes))
++    {
++        return -1;
++    }
++    const auto &attributes = vao->getVertexAttributes();
++    const auto &bindings = vao->getVertexBindings();
++    for (size_t index : vao->getEnabledAttributesMask())
++    {
++        if (bindings[attributes[index].bindingIndex].getBuffer().id().value == 0)
++        {
++            return 1;
++        }
++    }
++    return 0;
++}
++#endif

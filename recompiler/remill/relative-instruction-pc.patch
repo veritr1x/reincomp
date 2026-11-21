@@ -1,0 +1,19 @@
+--- a/lib/BC/TraceLifter.cpp
++++ b/lib/BC/TraceLifter.cpp
+@@ -349,6 +349,16 @@
+       // TODO(Ian): not passing context around in trace lifter
+       std::ignore = arch->DecodeInstruction(inst_addr, inst_bytes, inst,
+                                             this->arch->CreateInitialContext());
++
++      // An AArch64 trace enters this decoded block only along a statically
++      // known edge. Indirect jumps leave the trace. Use the caller's actual
++      // entry PC so this also holds when executing a relocated trace.
++      if (arch->IsAArch64()) {
++        llvm::IRBuilder<> ir(block);
++        auto *delta = llvm::ConstantInt::get(word_type, inst_addr - trace_addr);
++        auto *pc = ir.CreateAdd(LoadProgramCounterArg(func), delta);
++        ir.CreateStore(pc, LoadNextProgramCounterRef(block));
++      }
+ 
+       auto lift_status =
+           inst.GetLifter()->LiftIntoBlock(inst, block, state_ptr);

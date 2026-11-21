@@ -198,9 +198,14 @@ GL_DRAW_API(DRAW_NAME)
 #undef GL_PASSTHROUGH_COMMAND
 };
 std::string Hex(GLenum value){std::ostringstream out;out<<"0x"<<std::hex<<value;return out.str();}
-template<class T>T Symbol(HMODULE module,const char *name){
-  const auto native=GetProcAddress(module,name);if(!native)throw std::runtime_error(std::string("Missing ANGLE GL symbol: ")+name);
+template<class T>T OptionalSymbol(HMODULE module,const char *name){
+  const auto native=GetProcAddress(module,name);
   T typed;static_assert(sizeof(typed)==sizeof(native));std::memcpy(&typed,&native,sizeof(typed));return typed;
+}
+template<class T>T Symbol(HMODULE module,const char *name){
+  auto typed=OptionalSymbol<T>(module,name);
+  if(!typed)throw std::runtime_error(std::string("Missing ANGLE GL symbol: ")+name);
+  return typed;
 }
 }
 struct GlHost::Impl {
@@ -218,6 +223,8 @@ struct GlHost::Impl {
   PFNGLGETINTEGERVPROC getInteger=nullptr;PFNGLGETFLOATVPROC getFloat=nullptr;
   PFNGLGETBOOLEANVPROC getBoolean=nullptr;PFNGLGETERRORPROC getError=nullptr;
   PFNGLGETVERTEXATTRIBIVPROC getVertexAttrib=nullptr;
+  using ClientVertexArrays = int (__cdecl *)();
+  ClientVertexArrays hasClientVertexArrays=nullptr;
 #define DRAW_FIELD(name,type) type draw_##name=nullptr;
   GL_DRAW_API(DRAW_FIELD)
 #undef DRAW_FIELD
@@ -263,6 +270,8 @@ struct GlHost::Impl {
   FrameDiagnostics diagnostic;
   FrameSnapshotStatus snapshot;
   uint64_t next_snapshot_request=0,snapshot_inflight=0;
+  bool wait_for_visible_scene=false;
+  ULONGLONG next_scene_readback=0;
   std::set<std::wstring> snapshot_paths;
   struct PendingPresent {
     uint64_t serial=0;DWORD thread=0;addr_t display=0,surface=0,context=0;
@@ -287,6 +296,7 @@ struct GlHost::Impl {
       getInteger=Symbol<PFNGLGETINTEGERVPROC>(module,"glGetIntegerv");getFloat=Symbol<PFNGLGETFLOATVPROC>(module,"glGetFloatv");
       getBoolean=Symbol<PFNGLGETBOOLEANVPROC>(module,"glGetBooleanv");getError=Symbol<PFNGLGETERRORPROC>(module,"glGetError");
       getVertexAttrib=Symbol<PFNGLGETVERTEXATTRIBIVPROC>(module,"glGetVertexAttribiv");
+      hasClientVertexArrays=OptionalSymbol<ClientVertexArrays>(module,"reincompHasClientVertexArrays");
 #define DRAW_LOAD(name,type) draw_##name=Symbol<type>(module,#name);
       GL_DRAW_API(DRAW_LOAD)
 #undef DRAW_LOAD
@@ -460,7 +470,8 @@ struct GlHost::Impl {
     for(auto at=pending_presents.begin();at!=pending_presents.end();)
       if(at->second.thread==thread){if(snapshot_inflight==at->first)snapshot_inflight=0;at=pending_presents.erase(at);}else ++at;
     const bool diagnostic_enabled=!diagnostic_png.empty()&&!diagnostic.frame_png;
-    const bool snapshot_capture=snapshot.pending&&!snapshot_inflight;
+    const bool snapshot_capture=snapshot.pending&&!snapshot_inflight&&
+        (!wait_for_visible_scene||GetTickCount64()>=next_scene_readback);
     if(!diagnostic_enabled&&!snapshot_capture)return 0;
     auto extent=egl.CurrentDrawWindowExtent();if(!extent||extent->surface!=surface)return 0;
     SelectContext();if(extent->context!=current_context)throw std::runtime_error("Capture context changed");
@@ -551,7 +562,20 @@ struct GlHost::Impl {
       if(snapshot_return)snapshot.failure=!matched?"Snapshot swap ticket/context mismatch":actual_result!=1?"Snapshot original swap failed":"Snapshot readback unavailable";
       return;
     }
-    if(snapshot_return){
+    bool visible=true;
+    if(snapshot_return&&wait_for_visible_scene){
+      // The field actor starts ticking during the fade. Check the presented
+      // RGB image before publishing evidence or starting the measurement.
+      unsigned low=255,high=0;
+      for(size_t i=0;i<pending.pixels.size();i+=4){
+        unsigned luma=(pending.pixels[i]+2u*pending.pixels[i+1]+pending.pixels[i+2])/4;
+        low=std::min(low,luma);high=std::max(high,luma);
+        if(high-low>=16)break;
+      }
+      visible=high-low>=16;
+      if(!visible)next_scene_readback=GetTickCount64()+500;
+    }
+    if(snapshot_return&&visible){
       try{
         if(ReservedFirstFramePath(std::filesystem::path(pending.snapshot_path)))throw std::runtime_error("Snapshot path is reserved for first-frame witness");
         WriteFramePng(std::filesystem::path(pending.snapshot_path),uint32_t(pending.width),uint32_t(pending.height),pending.pixels);
@@ -705,12 +729,28 @@ struct GlHost::Impl {
     native(target,count,attachments.data());
   }
   void VertexBuffers(){
-    const GLint count=Integer(GL_MAX_VERTEX_ATTRIBS);if(count<0||count>4096)throw std::runtime_error("GL vertex attribute count outside scope");
-    for(GLint i=0;i<count;++i){GLint enabled=0,buffer=0;
-      if(!Call([&]{getVertexAttrib(i,GL_VERTEX_ATTRIB_ARRAY_ENABLED,&enabled);}))throw std::runtime_error("Cannot inspect native vertex array");
-      if(enabled){if(!Call([&]{getVertexAttrib(i,GL_VERTEX_ATTRIB_ARRAY_BUFFER_BINDING,&buffer);}))throw std::runtime_error("Cannot inspect vertex buffer ownership");
-        if(!buffer)throw std::runtime_error("CPU client vertex arrays are outside typed GL scope");}
+    if(hasClientVertexArrays){
+      CollectErrors();
+      const int client_arrays=hasClientVertexArrays();
+      if(client_arrays==0)return;
+      if(client_arrays==1)throw std::runtime_error("CPU client vertex arrays are outside typed GL scope");
     }
+    const GLint count=Integer(GL_MAX_VERTEX_ATTRIBS);if(count<0||count>4096)throw std::runtime_error("GL vertex attribute count outside scope");
+    bool client_array=false;
+    // All queries read the current VAO under the provider lock. Drain their
+    // errors together before allowing any native draw to consume pointers.
+    const bool success=Call([&]{
+      for(GLint i=0;i<count;++i){
+        GLint enabled=0;
+        getVertexAttrib(i,GL_VERTEX_ATTRIB_ARRAY_ENABLED,&enabled);
+        if(!enabled)continue;
+        GLint buffer=0;
+        getVertexAttrib(i,GL_VERTEX_ATTRIB_ARRAY_BUFFER_BINDING,&buffer);
+        if(!buffer){client_array=true;break;}
+      }
+    });
+    if(!success)throw std::runtime_error("Cannot inspect native vertex array");
+    if(client_array)throw std::runtime_error("CPU client vertex arrays are outside typed GL scope");
   }
   void IndexedDrawBuffers(){
     VertexBuffers();
@@ -992,7 +1032,7 @@ void GlHost::EnableFrameDiagnostics(const std::wstring &path){std::lock_guard lo
   if(!impl_->snapshot_paths.empty()){const auto first=std::filesystem::path(path);for(const auto &key:impl_->snapshot_paths)if(Impl::SameSnapshotPath(key,Impl::SnapshotPathKey(first))||Impl::SameSnapshotPath(key,Impl::SnapshotPathKey(first.parent_path()/L"first-present.png")))throw std::invalid_argument("First-frame PNG path is already reserved by a snapshot");}
   impl_->diagnostic_png=path;}
 GlHost::FrameDiagnostics GlHost::DescribeFrameDiagnostics(){std::lock_guard lock(impl_->mutex);return impl_->diagnostic;}
-uint64_t GlHost::RequestFrameSnapshot(const std::wstring &path){GlNativeEnvironment environment;std::lock_guard lock(impl_->mutex);
+uint64_t GlHost::RequestFrameSnapshot(const std::wstring &path,bool wait_for_visible_scene){GlNativeEnvironment environment;std::lock_guard lock(impl_->mutex);
   const std::filesystem::path output(path);
   if(path.empty()||path.find(L'\0')!=std::wstring::npos||!output.is_absolute())throw std::invalid_argument("Absolute new snapshot PNG path required");
   if(impl_->snapshot.pending)throw std::logic_error("A frame snapshot request is already pending");
@@ -1000,6 +1040,7 @@ uint64_t GlHost::RequestFrameSnapshot(const std::wstring &path){GlNativeEnvironm
   if(std::filesystem::exists(output))throw std::invalid_argument("Preserve existing snapshot PNG");
   if(impl_->next_snapshot_request==UINT64_MAX)throw std::overflow_error("Snapshot request serial exhausted");
   auto key=Impl::SnapshotPathKey(output);FrameSnapshotStatus next;next.request_serial=++impl_->next_snapshot_request;next.pending=true;next.path=path;
+  impl_->wait_for_visible_scene=wait_for_visible_scene;impl_->next_scene_readback=0;
   impl_->snapshot=std::move(next);impl_->snapshot_paths.insert(std::move(key));return impl_->snapshot.request_serial;
 }
 GlHost::FrameSnapshotStatus GlHost::DescribeFrameSnapshot(){GlNativeEnvironment environment;std::lock_guard lock(impl_->mutex);return impl_->snapshot;}

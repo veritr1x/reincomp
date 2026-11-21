@@ -40,6 +40,7 @@ bool WithGuestMemoryMutation(addr_t address, size_t size,
 // includes suspended parents of nested Runtime::Run callbacks. It does not
 // enumerate roots kept solely in native provider temporaries.
 std::vector<State *> CurrentExecutionFrames(State &top);
+bool IsOnlyExecutionState(const State &state) noexcept;
 State *CurrentExecutionState() noexcept;
 
 // Replace a guest function entry with a host bridge, like an import: the bridge

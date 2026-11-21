@@ -13,6 +13,7 @@ class EglHost {
  public:
   EglHost(NativeWindows &, const std::wstring &absolute_dll_directory,
           addr_t marker_base=0x7ff420000000ULL);
+  void UseHostFramePacing();
   ~EglHost();
   EglHost(const EglHost&)=delete;
   EglHost &operator=(const EglHost&)=delete;
@@ -42,6 +43,7 @@ class EglHost {
   std::optional<ReadPbufferExtent> CurrentReadPbufferExtent();
   struct DrawWindowExtent {addr_t context,surface;int32_t width,height;};
   std::optional<DrawWindowExtent> CurrentDrawWindowExtent();
+  bool IsCurrentDrawWindow(addr_t display,addr_t surface);
   std::unique_ptr<WindowDpiScope> CurrentWindowDpiScope();
   // Native window for this thread's current draw surface, or null.
   void *CurrentDpiWindow();

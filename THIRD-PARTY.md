@@ -40,6 +40,22 @@ license text is copied into its `licenses/` folder.
 | Bunker's Pod Programs pages (`app/`) | MIT, with Bunker's own third-party notices |
 | fastapi, pydantic, starlette, uvicorn, h11, anyio, idna, click, jinja2, markupsafe, python-multipart, typing_extensions, msgpack, lz4, pycryptodome | MIT, BSD, Apache-2.0, PSF or public domain, each as its wheel states |
 
+## AMD FidelityFX Super Resolution
+
+The Windows FSR plugin uses the FidelityFX SDK v1.1.4 API headers and AMD's signed
+Vulkan runtime for FSR 3.1.4 (MIT). The Vulkan C headers come from Khronos
+Vulkan-Headers v1.2.198 (Apache-2.0). Their license texts ship in the Windows
+release's licenses directory.
+
+## The browser compiler
+
+The Windows web builder runs Remill and LLVM 18 in WebAssembly. Its compiler
+kit includes the GNU Binutils 2.46.0 source archive and the script used to
+build its Windows-targeting linker under `sources/`. It also includes
+Pyodide 0.28.3 and the Python wheels used by Bunker's master-data patcher.
+The browser reads the player's APK and master data locally when generating
+the Windows executable.
+
 ## Still to check
 
 - The 13 texts collected with ANGLE have not been checked one by one against

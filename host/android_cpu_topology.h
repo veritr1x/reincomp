@@ -6,6 +6,7 @@
 // core: one job worker and rendering on UnityMain. The files describe the
 // host's logical processors as equal (big) cores.
 #include <algorithm>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <string>
@@ -15,7 +16,14 @@ namespace bunker::windows::cpu_topology {
 
 inline unsigned Count() {
   const unsigned n = std::thread::hardware_concurrency();
-  return std::clamp(n ? n : 8u, 2u, 16u);  // guest affinity masks are 16 wide
+  const unsigned available = std::clamp(n ? n : 8u, 2u, 16u);
+  if (const char *setting = std::getenv("BUNKER_GUEST_CPU_COUNT")) {
+    char *end = nullptr;
+    const auto count = std::strtoul(setting, &end, 10);
+    if (end != setting && !*end && count >= 2 && count <= available)
+      return static_cast<unsigned>(count);
+  }
+  return available;  // guest affinity masks are 16 wide
 }
 
 inline void Write(const std::filesystem::path &file, const std::string &text) {
@@ -27,7 +35,7 @@ inline void Write(const std::filesystem::path &file, const std::string &text) {
 // Writes the files under `root`; returns {sysfs cpu dir, cpuinfo file}.
 inline std::pair<std::filesystem::path, std::filesystem::path> Build(const std::filesystem::path &root) {
   const unsigned n = Count();
-  const auto cpu = root / "sys-devices-system-cpu";
+  const auto cpu = root / ("sys-devices-system-cpu-" + std::to_string(n));
   const std::string range = "0-" + std::to_string(n - 1) + "\n";
   for (const char *name : {"possible", "present", "online"}) Write(cpu / name, range);
   std::string cpuinfo;

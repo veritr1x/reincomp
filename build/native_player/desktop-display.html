@@ -1,0 +1,60 @@
+{% extends "base.html" %}
+{% block title %}{{ t("pods.display.title") }}{% endblock %}
+{% macro choice(name, label, options) %}
+<div class="setting">
+  <label for="{{ name }}">{{ t(label) }}</label>
+  <select id="{{ name }}" name="{{ name }}">
+    {% for value, title in options %}<option value="{{ value }}"{% if settings[name] == value %} selected{% endif %}>{{ t(title) }}</option>{% endfor %}
+  </select>
+</div>
+{% endmacro %}
+{% block content %}
+<h1 data-side>{{ t("pods.display.title") }}</h1>
+<form action="/display" method="post">
+  <h2 class="bracket-header" data-toc>{{ t("pods.display.resolution") }}</h2>
+  <div class="panel">
+    {{ choice("resolution", "pods.display.resolution", resolutions) }}
+    {% if upscalers|length > 1 %}
+    {{ choice("upscale", "pods.display.upscaling", upscalers) }}
+    {% set modes = ["Native AA", "Quality", "Balanced", "Performance", "Ultra Performance"] %}
+    <div id="fsr-controls"{% if settings.upscale != "fsr31" %} hidden{% endif %}>
+      <div class="setting"><label for="fsr-quality">FSR quality</label>
+        <input type="range" name="fsr_quality" id="fsr-quality" min="0" max="4" step="1" value="{{ settings.fsr_quality }}">
+        <output for="fsr-quality">{{ modes[settings.fsr_quality] }}</output></div>
+      <div class="setting"><label for="fsr-sharpness">Sharpening</label>
+        <input type="range" name="fsr_sharpness" id="fsr-sharpness" min="0" max="100" value="{{ settings.fsr_sharpness }}">
+        <output for="fsr-sharpness">{{ settings.fsr_sharpness }}%</output></div>
+    </div>
+    <script>
+      (() => {
+        const mode = document.getElementById("upscale");
+        mode.addEventListener("change", () => document.getElementById("fsr-controls").hidden = mode.value !== "fsr31");
+        const labels = {{ modes|tojson }};
+        for (const id of ["fsr-quality", "fsr-sharpness"]) {
+          const slider = document.getElementById(id);
+          const sync = () => {
+            const text = id === "fsr-quality" ? labels[slider.value] : slider.value + "%";
+            document.querySelector('output[for="' + id + '"]').value = text;
+            slider.setAttribute("aria-valuetext", text);
+          };
+          slider.addEventListener("input", sync);
+          sync();
+        }
+      })();
+    </script>
+    {% endif %}
+    <p>Resolution changes when you save. Other settings apply on the next launch.</p>
+  </div>
+  <h2 class="bracket-header" data-toc>{{ t("pods.display.frame_rate") }}</h2>
+  <div class="panel">
+    {{ choice("fps", "pods.display.frame_rate", fps) }}
+    {{ choice("idle", "pods.display.idle", idle) }}
+  </div>
+  <h2 class="bracket-header" data-toc>{{ t("pods.display.effects") }}</h2>
+  <div class="panel">
+    {{ choice("textures", "pods.display.textures", textures) }}
+    {% for name in ("shadows", "reflections", "bloom") %}{{ choice(name, "pods.display." + name, effects) }}{% endfor %}
+  </div>
+  <div class="actions"><button type="submit">{{ t("common.save") }}</button></div>
+</form>
+{% endblock %}

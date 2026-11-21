@@ -1,0 +1,172 @@
+// First-run WebView and its replacement Unity child share this top-level HWND.
+#define WIN32_LEAN_AND_MEAN
+#define NOMINMAX
+#include <windows.h>
+#include <commdlg.h>
+#include <shellapi.h>
+#include <algorithm>
+#include <filesystem>
+#include <iostream>
+#include <string>
+#include <thread>
+#include "../../host/bunker_view.h"
+
+namespace {
+using bunker::windows::BunkerView;
+constexpr UINT choose = WM_APP+101, player = WM_APP+102, finish = WM_APP+103, toggle = WM_APP+104;
+constexpr UINT openProgram = WM_APP+105, resetProgram=WM_APP+106;
+std::unique_ptr<BunkerView> page, dashboard;
+std::filesystem::path install;
+HWND child{};
+DWORD playerPid{};
+WINDOWPLACEMENT previous{sizeof(WINDOWPLACEMENT)};
+bool fullscreen{};
+
+void fit(HWND window) {
+    RECT r{};
+    GetClientRect(window, &r);
+    if (child && IsWindow(child)) MoveWindow(child, 0, 0, r.right, r.bottom, TRUE);
+    else if (page) page->PageFrame(0, 0, r.right, r.bottom, r.right, r.bottom);
+}
+
+void switchMode(HWND window) {
+    if (fullscreen) {
+        SetWindowLongPtrW(window, GWL_STYLE, WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN | WS_VISIBLE);
+        SetWindowPlacement(window, &previous);
+        SetWindowPos(window, nullptr, 0, 0, 0, 0, SWP_NOMOVE|SWP_NOSIZE|SWP_NOZORDER|SWP_FRAMECHANGED);
+    } else {
+        MONITORINFO monitor{sizeof(monitor)};
+        GetWindowPlacement(window, &previous);
+        GetMonitorInfoW(MonitorFromWindow(window, MONITOR_DEFAULTTONEAREST), &monitor);
+        SetWindowLongPtrW(window, GWL_STYLE, WS_POPUP | WS_CLIPCHILDREN | WS_VISIBLE);
+        const RECT r = monitor.rcMonitor;
+        SetWindowPos(window, HWND_TOP, r.left, r.top, r.right-r.left, r.bottom-r.top, SWP_FRAMECHANGED);
+    }
+    fullscreen = !fullscreen;
+}
+
+void attach(HWND window) {
+    // Unity may briefly have a top-level window before it adopts its parent.
+    for (HWND parent : {window, static_cast<HWND>(nullptr)}) {
+        for (HWND w = nullptr; (w = FindWindowExW(parent,w,L"UnityWndClass",nullptr));) {
+            DWORD pid{};
+            GetWindowThreadProcessId(w,&pid);
+            if (pid != playerPid || !(GetWindowLongPtrW(w,GWLP_USERDATA) & 1)) continue;
+            if (GetParent(w) != window) {
+                auto style = GetWindowLongPtrW(w,GWL_STYLE);
+                SetWindowLongPtrW(w,GWL_STYLE,(style & ~WS_POPUP) | WS_CHILD);
+                SetLastError(0);
+                if (!SetParent(w,window) && GetLastError()) continue;
+            }
+            child = w;
+            dashboard.reset();
+            if (page) { page->Visible(false); page.reset(); }
+            fit(window);
+            ShowWindow(w,SW_SHOW);
+            SetFocus(w);
+            KillTimer(window,1);
+            return;
+        }
+    }
+}
+
+LRESULT CALLBACK events(HWND w,UINT message,WPARAM wp,LPARAM lp) {
+    if (dashboard && dashboard->Message(w,message,wp,lp)) return 0;
+    switch (message) {
+    case resetProgram: dashboard.reset(); if(page)page->Visible(true);return 0;
+    case openProgram: {
+        std::unique_ptr<std::wstring> path(reinterpret_cast<std::wstring *>(lp));
+        if (!page || child) return 0;
+        if (!dashboard) dashboard=std::make_unique<BunkerView>((install/L"pods/WebView2Loader.dll").wstring(),
+            (install/L"data/bunker-view.json").wstring(),(install/L"data/setup-webview").wstring());
+        dashboard->OpenDashboard(w,*path);
+        return 0;
+    }
+    case WM_APP+0x36d: if (page) page->Visible(!wp); return 0;
+    case choose: {
+        wchar_t file[32768]{};
+        OPENFILENAMEW dlg{sizeof(dlg)};
+        dlg.hwndOwner=w; dlg.lpstrFile=file; dlg.nMaxFile=32768;
+        dlg.lpstrFilter=wp==3?L"Master data (*.bin.e)\0*.bin.e\0\0":wp==2?L"Save backup (*.zip)\0*.zip\0\0":wp==1?L"Save backup (*.zip, *.db)\0*.zip;*.db\0\0":L"Resource archives (*.7z, *.zip)\0*.7z;*.zip\0\0";
+        dlg.lpstrTitle=wp==3?L"Import master data":wp==2?L"Export save backup":wp==1?L"Import save backup":L"Choose the Android resource dump";
+        dlg.lpstrDefExt=wp==2?L"zip":nullptr;
+        dlg.Flags=(wp==2?OFN_OVERWRITEPROMPT:OFN_FILEMUSTEXIST)|OFN_PATHMUSTEXIST|OFN_NOCHANGEDIR|OFN_EXPLORER;
+        if (wp==2?GetSaveFileNameW(&dlg):GetOpenFileNameW(&dlg))
+            std::cout << (wp==3?"import-master":wp==2?"export-save":wp==1?"import-save":"picked") << "\t" << std::filesystem::path(file).u8string() << std::endl;
+        else std::cout << "cancel" << std::endl;
+        return 0;
+    }
+    case player: playerPid=DWORD(wp); child=nullptr; SetTimer(w,1,50,nullptr); return 0;
+    case WM_TIMER: if (wp==1 && playerPid) attach(w); return 0;
+    case WM_SETFOCUS: if (child) SetFocus(child); return 0;
+    case WM_DPICHANGED: {
+        if (!fullscreen) {
+            const auto *target=reinterpret_cast<const RECT *>(lp);
+            SetWindowPos(w,nullptr,target->left,target->top,target->right-target->left,target->bottom-target->top,SWP_NOZORDER|SWP_NOACTIVATE);
+        }
+        return 0;
+    }
+    case WM_SIZE: fit(w); return 0;
+    case WM_SYSKEYDOWN: if (wp!=VK_RETURN) break; [[fallthrough]];
+    case toggle: switchMode(w); return 0;
+    case WM_CLOSE:
+        if (child && IsWindow(child)) { PostMessageW(child,WM_CLOSE,0,0); return 0; }
+        [[fallthrough]];
+    case finish: DestroyWindow(w); return 0;
+    case WM_DESTROY: dashboard.reset(); page.reset(); PostQuitMessage(0); return 0;
+    }
+    return DefWindowProcW(w,message,wp,lp);
+}
+}
+
+int WINAPI wWinMain(HINSTANCE instance,HINSTANCE,PWSTR,int) {
+    int argc=0;
+    auto args=CommandLineToArgvW(GetCommandLineW(),&argc);
+    if (!args || argc!=3) return 2;
+    std::filesystem::path root(args[1]);
+    install=root;
+    std::wstring url(args[2]); LocalFree(args);
+    auto setDpi=reinterpret_cast<BOOL(WINAPI *)(HANDLE)>(GetProcAddress(GetModuleHandleW(L"user32"),"SetProcessDpiAwarenessContext"));
+    if (setDpi) setDpi(reinterpret_cast<HANDLE>(-4));
+    WNDCLASSW wc{};
+    wc.lpszClassName=L"BunkerResourceWindow"; wc.lpfnWndProc=events; wc.hInstance=instance;
+    wc.hCursor=LoadCursorW(nullptr,IDC_ARROW); wc.hIcon=ExtractIconW(instance,(root/L"game/WindowsPlayer.exe").c_str(),0);
+    if (!RegisterClassW(&wc)) return 1;
+    const DWORD style=WS_OVERLAPPEDWINDOW|WS_CLIPCHILDREN;
+    const auto getDpi=reinterpret_cast<UINT(WINAPI *)()>(GetProcAddress(GetModuleHandleW(L"user32"),"GetDpiForSystem"));
+    const auto adjust=reinterpret_cast<BOOL(WINAPI *)(RECT *,DWORD,BOOL,DWORD,UINT)>(GetProcAddress(GetModuleHandleW(L"user32"),"AdjustWindowRectExForDpi"));
+    const UINT dpi=getDpi?getDpi():96;
+    RECT client{0,0,MulDiv(960,dpi,96),MulDiv(520,dpi,96)};
+    if (adjust) adjust(&client,style,FALSE,0,dpi);
+    else AdjustWindowRectEx(&client,style,FALSE,0);
+    RECT work{0,0,GetSystemMetrics(SM_CXSCREEN),GetSystemMetrics(SM_CYSCREEN)};
+    SystemParametersInfoW(SPI_GETWORKAREA,0,&work,0);
+    const LONG width=std::min(client.right-client.left,work.right-work.left);
+    const LONG height=std::min(client.bottom-client.top,work.bottom-work.top);
+    auto w=CreateWindowExW(0,wc.lpszClassName,L"Nier Reincarnation",style,
+        work.left+(work.right-work.left-width)/2,work.top+(work.bottom-work.top-height)/2,width,height,nullptr,nullptr,instance,nullptr);
+    if (!w) return 1;
+    page=std::make_unique<BunkerView>((root/L"pods/WebView2Loader.dll").wstring(),(root/L"data/setup-webview").wstring(),
+        w,[](const std::wstring &,const std::wstring &){});
+    fit(w); page->OpenExternalLinks(true); page->Navigate(url); page->Visible(true);
+    ShowWindow(w,SW_SHOW); std::cout << "window\t" << reinterpret_cast<uintptr_t>(w) << std::endl;
+    std::thread([w]{
+        std::string line;
+        while (std::getline(std::cin,line)) {
+            if (line=="choose") PostMessageW(w,choose,0,0);
+            else if (line=="reset-program") PostMessageW(w,resetProgram,0,0);
+            else if (line=="import-master") PostMessageW(w,choose,3,0);
+            else if (line=="import-save" || line=="export-save") PostMessageW(w,choose,line=="import-save"?1:2,0);
+            else if (line.compare(0,8,"program ")==0) {
+                auto path=std::make_unique<std::wstring>(line.begin()+8,line.end());
+                if (PostMessageW(w,openProgram,0,reinterpret_cast<LPARAM>(path.get()))) path.release();
+            }
+            else if (line=="fullscreen") PostMessageW(w,toggle,0,0);
+            else if (line.rfind("player ",0)==0) PostMessageW(w,player,strtoul(line.c_str()+7,nullptr,10),0);
+        }
+        PostMessageW(w,finish,0,0);
+    }).detach();
+    MSG msg{};
+    while (GetMessageW(&msg,nullptr,0,0)>0) { TranslateMessage(&msg); DispatchMessageW(&msg); }
+    return 0;
+}

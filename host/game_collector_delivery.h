@@ -19,11 +19,15 @@ class GameCollectorDelivery {
     std::function<void(const Pthreads::WorkerInfo&)> enter,before_tls;
     std::function<void(const Pthreads::WorkerInfo&,Pthreads::WorkerRetirement)> retire;
     std::function<bool(uint64_t)> owns;
+    std::function<bool(const Pthreads::WaitContext&)> select_mutex;
     std::function<void(const Pthreads::WaitContext&)> checkpoint;
     // Optional external UnityMain contended-mutex admission (not a worker).
     std::function<bool(uint64_t)> main_owns;
     std::function<bool(const Pthreads::WaitContext&)> main_select;
     std::function<void(const Pthreads::WaitContext&)> main_checkpoint;
+    // An embedding host can retain the parked parent invocation registers and
+    // stack for the full stop/scan/restart cycle. Ordinary workers have none.
+    std::function<bool(State *const *,size_t)> sender_parent_roots;
   };
  private:
   struct Channel {
@@ -32,6 +36,18 @@ class GameCollectorDelivery {
     void Notify(){std::lock_guard lock(mutex);Require(generation!=UINT64_MAX,"collector wake generation exhausted");++generation;condition.notify_all();}
     void Wait(uint64_t expected,uint64_t relative){std::unique_lock lock(mutex);if(relative)condition.wait_for(lock,std::chrono::nanoseconds(relative),[&]{return generation!=expected;});else condition.wait(lock,[&]{return generation!=expected;});}
   };
+  static std::shared_ptr<const Pthreads::WaitWake> MainWaitWake(){
+    // A mutex unlock may still be delivering a notification after the waiter
+    // returns. Only reuse the channel once the last enrollment releases it.
+    static thread_local std::shared_ptr<const Pthreads::WaitWake> cached;
+    if(cached && cached.use_count()==1)return cached;
+    auto channel=std::make_shared<Channel>();
+    auto wake=std::make_shared<const Pthreads::WaitWake>(Pthreads::WaitWake{
+      [channel]{return channel->Generation();},[channel]{channel->Notify();},
+      [channel](uint64_t generation,uint64_t){channel->Wait(generation,1000000);}});
+    if(!cached)cached=wake;
+    return wake;
+  }
   enum class Role {unknown,finalizer,managed_worker};
   enum class ManagedWait {unknown,event_timed,event_untimed,condition_timed,condition_untimed};
   // Select by the proven caller, then validate all phase/argument/root fields.
@@ -127,6 +143,7 @@ class GameCollectorDelivery {
     Check(!result.error,"unknown eligible signal outside a managed delivery phase");
   }
   bool SelectMutex(const Pthreads::WaitContext &context){
+    if(extension_.select_mutex&&extension_.select_mutex(context))return true;
     if(extension_.main_owns&&extension_.main_select&&extension_.main_owns(context.token))return extension_.main_select(context);
     auto *owner=Current();return owner&&owner->role==Role::managed_worker&&!owner->socket_wait.load()&&!owner->depth&&
       context.phase==Pthreads::WaitPhase::MutexLock&&context.active_state&&owner->wait_state==context.active_state&&
@@ -197,7 +214,7 @@ class GameCollectorDelivery {
     const auto stack=signals_.AlternateStack(info.token).configured;Check(stack.flags==2&&!stack.pointer&&!stack.size,"target alternate stack is not fresh disabled");
     uint64_t mask=0;Check(!signals_.Mask(info.token,0,nullptr,&mask),"wait signal mask query failed");
     Check(selected?GameCollectorWaitMask::SelectedStop(info.token,mask,*selected):GameCollectorWaitMask::Ordinary(mask),selected?"selected stop action/saved/current mask differs":"ordinary wait blocks original stop/restart signals");
-    if(selected)std::fprintf(stderr,"Game GC: selected outer mask verified target=%#llx saved=%#llx current=%#llx action=%#llx signal=%d; no host mask mutation\n",(unsigned long long)info.token,(unsigned long long)selected->saved_mask,(unsigned long long)mask,(unsigned long long)selected->action.mask,selected->signal);
+    if(selected && !GameQuietTrace())std::fprintf(stderr,"Game GC: selected outer mask verified target=%#llx saved=%#llx current=%#llx action=%#llx signal=%d; no host mask mutation\n",(unsigned long long)info.token,(unsigned long long)selected->saved_mask,(unsigned long long)mask,(unsigned long long)selected->action.mask,selected->signal);
   }
   // The original GC_lock slow path (libil2cpp 825a7180) spins, sched_yields,
   // then sleeps with a stack timespec and null remainder while the allocation
@@ -284,7 +301,7 @@ class GameCollectorDelivery {
   struct Opaque {bool active;explicit Opaque(bool enabled):active(enabled){if(active)++OpaqueDepth();}~Opaque(){if(active)--OpaqueDepth();}};
   static constexpr uint32_t kVirtualRealUid=10000; // Explicit sandbox, not Windows/device identity.
   GameCollectorDelivery(Pthreads &threads,SignalHost &signals,bunker::windows::Semaphores &sem,recomp::Runtime &runtime,WorkerExtension extension={}):threads_(threads),signals_(signals),semaphores_(sem),runtime_(runtime),lifecycle_(signals),extension_(std::move(extension)){
-    const bool any_extension=extension_.prepare||extension_.enter||extension_.before_tls||extension_.retire||extension_.owns||extension_.checkpoint;
+    const bool any_extension=extension_.prepare||extension_.enter||extension_.before_tls||extension_.retire||extension_.owns||extension_.checkpoint||extension_.select_mutex;
     Check(!any_extension||(extension_.prepare&&extension_.enter&&extension_.before_tls&&extension_.retire&&extension_.owns&&extension_.checkpoint),"worker extension hooks are incomplete");
     Check(Translated(kReturn)&&Executable(kReturn)&&Translated(0x825beb3c)&&Translated(0x825b2af4)&&Translated(0x825b2c70),"original normal-return/handler heads missing from final cohort");
     auto hooks=lifecycle_.TakeHooks();auto installed=hooks;
@@ -295,7 +312,17 @@ class GameCollectorDelivery {
       Check(owner&&!owner->depth&&!owner->wait_live&&!Pending(*owner),"worker reaches TLS with active/pending stop");hooks.before_tls(info,lease);GameWorkerObservation::Lifecycle("before_tls",info);};
     installed.retire=[this,hooks](const auto &i,const auto&l,auto r){Retire(i,l,r,hooks);};threads_.SetWorkerLifecycleHooks(std::move(installed));
     threads_.SetWaitHooks({[this](uint64_t token){
-      if(extension_.main_owns&&extension_.main_owns(token)){auto channel=std::make_shared<Channel>();return std::make_shared<const Pthreads::WaitWake>(Pthreads::WaitWake{[channel]{return channel->Generation();},[channel]{channel->Notify();},[channel](auto generation,auto){channel->Wait(generation,1000000);}});}
+      if(extension_.select_mutex&&extension_.owns(token)){
+        auto wake=signals_.Wake(token);
+        Check(bool(wake),"worker wait has no live signal channel");
+        return std::make_shared<const Pthreads::WaitWake>(Pthreads::WaitWake{
+          [wake]{return wake->Generation();},[wake]{wake->Notify();},
+          [wake](uint64_t generation,uint64_t relative){
+            if(relative)wake->WaitRelative(generation,std::chrono::nanoseconds(relative));
+            else wake->Wait(generation);
+          }});
+      }
+      if(extension_.main_owns&&extension_.main_owns(token))return MainWaitWake();
       auto owner=Lookup(token);auto channel=owner?owner->channel:std::make_shared<Channel>();return std::make_shared<const Pthreads::WaitWake>(Pthreads::WaitWake{[channel]{return channel->Generation();},[channel]{channel->Notify();},[channel](auto generation,auto relative){channel->Wait(generation,relative);}});},[this](const auto &context){Checkpoint(context);},[this](const auto &context){Finish(context);},[this](const auto &context){return SelectMutex(context);}});
     std::fprintf(stderr,"Game GC: creator-certified finalizer untimed and managed-worker timed/untimed condition profiles configured; virtual Android real UID=%u; no Windows/device UID claim\n",kVirtualRealUid);
   }
@@ -335,7 +362,9 @@ class GameCollectorDelivery {
   // Returns the slot to clear, or null when not recorded (nested or no slot).
   static ActiveWaitSlot *EnterActiveWait(const std::string &name,const State &state){
     auto *slot=CurrentActiveWaitSlot();if(!slot||slot->active.load(std::memory_order_relaxed))return nullptr;
-    std::snprintf(slot->name,sizeof slot->name,"%s",name.c_str());
+    const auto size=(std::min)(name.size(),sizeof(slot->name)-1);
+    std::memcpy(slot->name,name.data(),size);
+    slot->name[size]='\0';
     slot->lr.store(addr_t(state.gpr.x30.qword),std::memory_order_relaxed);slot->x0.store(addr_t(state.gpr.x0.qword),std::memory_order_relaxed);
     slot->active.store(true,std::memory_order_release);return slot;
   }
@@ -421,19 +450,27 @@ class GameCollectorDelivery {
   void Finish(const Pthreads::WaitContext &context){
     GameWorkerObservation::NativeEnvironment native;
     auto owner=Lookup(context.token);
-    if(!owner||owner->role!=Role::managed_worker||owner->socket_wait.load())return;
-    if(!context.active_state||(context.phase==Pthreads::WaitPhase::MutexLock?!ManagedMutexSite(*context.active_state):ManagedSite(*context.active_state)==ManagedWait::unknown)||!ManagedContext(*context.active_state)){
+    if(!owner||!ConditionRole(*owner)||owner->socket_wait.load())return;
+    const bool managed=owner->role==Role::managed_worker;
+    // A finalizer send holds the claim from its wait_live check through queue
+    // and notify. Withdraw a published wait under that same claim while the
+    // condition provider still has a valid State and can run the stop handler.
+    if(!managed&&(!owner->wait_live.load()||context.phase==Pthreads::WaitPhase::MutexLock))return;
+    if(managed&&(!context.active_state||(context.phase==Pthreads::WaitPhase::MutexLock?!ManagedMutexSite(*context.active_state):ManagedSite(*context.active_state)==ManagedWait::unknown)||!ManagedContext(*context.active_state))){
       std::lock_guard claim(owner->socket_sender_mutex);owner->wait_live=false;
       Check(!Pending(*owner),"unqualified managed retirement has pending collector delivery");return;
     }
     ValidateWait(*owner,context);Check(owner->wait_state==context.active_state,"retirement is outside actual observed import invocation");
     auto use=lifecycle_.AcquireUse(context.token);
     for(unsigned count=0;;++count){
-      Check(count<16,"managed retirement could not drain the qualified pending request");
+      Check(count<16,"wait retirement could not drain the qualified pending request");
       std::unique_lock claim(owner->socket_sender_mutex);
       if(!Pending(*owner)){owner->wait_live=false;return;}
       const auto epoch=Read<uint64_t>(kEpoch);
-      if(owner->certified_epoch!=epoch||!owner->certified_new_epoch||owner->begun_epoch==epoch||Read<uint64_t>(kStopped)!=1||Read<uint8_t>(0x879a62a8)!=1){RetainManagedKnown(*owner);owner->wait_live=false;return;}
+      if(owner->certified_epoch!=epoch||!owner->certified_new_epoch||owner->begun_epoch==epoch||Read<uint64_t>(kStopped)!=1||Read<uint8_t>(0x879a62a8)!=1){
+        Check(managed,"finalizer wait exit has an uncertified pending collector delivery");
+        RetainManagedKnown(*owner);owner->wait_live=false;return;
+      }
       // This actual retirement/claim callback is itself a fresh live context,
       // even when an earlier finish callback already withdrew its certificate.
       owner->wait_live=true;
@@ -442,10 +479,15 @@ class GameCollectorDelivery {
       claim.unlock();Checkpoint(context);
     }
   }
+  bool SenderRootsCovered(State &state) const {
+    const auto frames=recomp::CurrentExecutionFrames(state);
+    if(frames.empty()||frames.front()!=&state)return false;
+    return frames.size()==1 || (extension_.sender_parent_roots && extension_.sender_parent_roots(frames.data(),frames.size()));
+  }
   void BeforeKill(const State &state){
     if(auto owner=Lookup(state.gpr.x0.qword))if(auto*socket=owner->socket_wait.load()){
       const auto signal=state.gpr.x1.dword;Check((signal==30||signal==24)&&state.gpr.x30.qword==(signal==30?0x825b2d1cULL:0x825b2f74ULL),"socket signal sender is outside original coordinator");
-      Check(recomp::CurrentExecutionState()==&state&&!OpaqueDepth(),"socket sender is opaque or foreign State");const auto frames=recomp::CurrentExecutionFrames(*recomp::CurrentExecutionState());Check(frames.size()==1&&frames[0]==&state,"socket sender has parent Runtime roots");
+      Check(recomp::CurrentExecutionState()==&state&&!OpaqueDepth(),"socket sender is opaque or foreign State");Check(SenderRootsCovered(*recomp::CurrentExecutionState()),"socket sender has unqualified parent Runtime roots");
       const auto epoch=Read<uint64_t>(kEpoch);Check(epoch&&!(epoch&1)&&Read<uint8_t>(0x879a62a8)==1&&threads_.Self()!=socket->Token(),"socket original sender epoch/lock/self differs");
       Check(signal==30?Read<uint64_t>(kStopped)==1:owner->stop_live&&owner->stop_epoch==epoch&&!Read<uint64_t>(kStopped),"socket stop/restart phase differs");Dispositions();
       const auto record=Record(socket->Token());Check(record&&(signal==30?state.gpr.x26.qword:state.gpr.x27.qword)==record,"socket original sender traversal differs");socket->ValidateRecord(record);owner->record=record;
@@ -453,7 +495,7 @@ class GameCollectorDelivery {
     }
     const auto token=state.gpr.x0.qword;const auto signal=state.gpr.x1.dword;Check(signal==30||signal==24,"only original stop/restart nonzero sends are supported");auto owner=Lookup(token);Check(owner&&ConditionRole(*owner)&&owner->context->CurrentPhase()==Lifecycle::Phase::entered,"send target is not a captured live creator-certified condition owner");
     Check(state.gpr.x30.qword==(signal==30?0x825b2d1cULL:0x825b2f74ULL),"nonzero send is outside audited original caller");
-    auto *active=recomp::CurrentExecutionState();Check(active==&state&&!OpaqueDepth(),"collector sender is inside an opaque native continuation");const auto sender_frames=recomp::CurrentExecutionFrames(*active);Check(sender_frames.size()==1&&sender_frames[0]==active,"collector sender has unqualified parent Runtime roots");
+    auto *active=recomp::CurrentExecutionState();Check(active==&state&&!OpaqueDepth(),"collector sender is inside an opaque native continuation");Check(SenderRootsCovered(*active),"collector sender has unqualified parent Runtime roots");
     const auto epoch=Read<uint64_t>(kEpoch);Check(epoch&&!(epoch&1)&&Read<uint8_t>(0x879a62a8)==1&&token!=threads_.Self(),"original epoch/registry-lock consistency differs");
     if(owner->role==Role::managed_worker&&owner->queue_blocked.load()&&!owner->retiring.load()){
       // Short non-checkpointed provider waits (rwlock/once/unlisted locks):
@@ -475,7 +517,7 @@ class GameCollectorDelivery {
     else Check(state.gpr.x30.qword==0x825b2f74&&owner->stop_live&&owner->stop_epoch==epoch&&!Read<uint64_t>(kStopped),"original restart sender/owned stop differs");
     owner->record=record;
     if(signal==30){owner->certified_new_epoch=(Read<uint64_t>(record+0x10)&~uint64_t(1))!=epoch;owner->certified_epoch=epoch;}
-    std::fprintf(stderr,"Game GC: original request signal=%u target=%#llx record=%#llx epoch=%llu LR=%#llx; source validated before actual pthread_kill\n",signal,(unsigned long long)token,(unsigned long long)record,(unsigned long long)epoch,(unsigned long long)state.gpr.x30.qword);
+    if(!GameQuietTrace())std::fprintf(stderr,"Game GC: original request signal=%u target=%#llx record=%#llx epoch=%llu LR=%#llx; source validated before actual pthread_kill\n",signal,(unsigned long long)token,(unsigned long long)record,(unsigned long long)epoch,(unsigned long long)state.gpr.x30.qword);
   }
   void Send(State &state,const std::function<void()> &invoke){
     auto owner=Lookup(state.gpr.x0.qword);Check(bool(owner),"nonzero send has no real worker owner");
@@ -503,7 +545,8 @@ class GameCollectorDelivery {
         Check(delivery.signal==30&&owner->socket_boundary,"socket outer delivery is not controlled stop30");socket->Validate(threads_,signals_,&delivery);const auto epoch=Read<uint64_t>(kEpoch);const bool duplicate=(Read<uint64_t>(record+0x10)&~uint64_t(1))==epoch;Check(epoch&&!(epoch&1)&&(duplicate||Read<uint64_t>(kStopped)==1),"socket stopped epoch differs");
         owner->interrupted=*recomp::CurrentExecutionState();owner->frame_base=owner->interrupted.gpr.sp.qword-4704;owner->posts=0;owner->stop_epoch=epoch;owner->begun_epoch=epoch;owner->stop_live=!duplicate;owner->depth=1;
         auto result=owner->delivery->Deliver(delivery);Check(owner->posts==(duplicate?0u:2u),"socket original handler omitted genuine posts");if(!duplicate)Check(Read<uint64_t>(record+0x10)==(epoch|1),"socket original resume epoch store absent");owner->depth=0;owner->stop_live=false;
-        std::fprintf(stderr,"Game GC socket wait: genuine stop returned token=%#llx epoch=%llu actual_posts=%u; no collection/frame claim\n",(unsigned long long)token,(unsigned long long)epoch,owner->posts);return result;
+        if(!GameQuietTrace())std::fprintf(stderr,"Game GC socket wait: genuine stop returned token=%#llx epoch=%llu actual_posts=%u; no collection/frame claim\n",(unsigned long long)token,(unsigned long long)epoch,owner->posts);
+        return result;
       }
       Check(delivery.signal==24,"socket nested delivery is not restart24");NestedSuspend(*owner,*recomp::CurrentExecutionState());owner->depth=2;auto result=owner->delivery->Deliver(delivery);owner->depth=1;return result;
     }
@@ -518,10 +561,12 @@ class GameCollectorDelivery {
       auto result=owner->delivery->Deliver(delivery);
       Check(owner->posts==(duplicate?0u:2u),"original stop path returned without its own expected post calls");if(!duplicate)Check(Read<uint64_t>(record+0x10)==(epoch|1),"original resume epoch store was not observed");
       owner->depth=0;owner->stop_live=false;
-      std::fprintf(stderr,"Game GC: original stop handler returned target=%#llx epoch=%llu duplicate=%u actual_posts=%u observed_record_epoch=%llu; no collection/init/frame claim\n",(unsigned long long)token,(unsigned long long)epoch,unsigned(duplicate),owner->posts,(unsigned long long)Read<uint64_t>(record+0x10));return result;
+      if(!GameQuietTrace())std::fprintf(stderr,"Game GC: original stop handler returned target=%#llx epoch=%llu duplicate=%u actual_posts=%u observed_record_epoch=%llu; no collection/init/frame claim\n",(unsigned long long)token,(unsigned long long)epoch,unsigned(duplicate),owner->posts,(unsigned long long)Read<uint64_t>(record+0x10));
+      return result;
     }
     auto *state=recomp::CurrentExecutionState();Check(delivery.signal==24,"nested signal is not original restart24");NestedSuspend(*owner,*state);owner->depth=2;auto result=owner->delivery->Deliver(delivery);owner->depth=1;
-    std::fprintf(stderr,"Game GC: original nested restart handler returned target=%#llx epoch=%llu\n",(unsigned long long)token,(unsigned long long)owner->stop_epoch.load());return result;
+    if(!GameQuietTrace())std::fprintf(stderr,"Game GC: original nested restart handler returned target=%#llx epoch=%llu\n",(unsigned long long)token,(unsigned long long)owner->stop_epoch.load());
+    return result;
   }
   void BeforePost(const State &state){
     auto *owner=Current();if(!owner||!owner->depth)return;
@@ -531,9 +576,9 @@ class GameCollectorDelivery {
     const addr_t saved=owner->frame_base+recomp::signal_frame::kMachineOffset+8;
     for(unsigned i=0;i<31;++i){uint64_t value;std::memcpy(&value,reinterpret_cast<const uint8_t*>(&owner->interrupted.gpr)+i*16+8,8);Check(Read<uint64_t>(saved+i*8)==value,"interrupted GPR is not physically in original scan range");}
     std::array<uint8_t,512> vectors{};recomp::ReadGuestMemory(vectors.data(),owner->frame_base+recomp::signal_frame::kFpsimdOffset+16,vectors.size());Check(!std::memcmp(vectors.data(),&owner->interrupted.simd,vectors.size()),"interrupted SIMD is not physically in original scan range");
-    std::fprintf(stderr,"Game GC: physical interrupted roots verified target=%#llx frame=%#llx published_fp=%#llx original_sp=%#llx stack_high=%#llx GPR=31 Q=32; before original sem_post\n",(unsigned long long)owner->context->PreparedWorker().token,(unsigned long long)owner->frame_base,(unsigned long long)Read<addr_t>(record+0x18),(unsigned long long)owner->interrupted.gpr.sp.qword,(unsigned long long)owner->context->PreparedWorker().stack_high);
+    if(!GameQuietTrace())std::fprintf(stderr,"Game GC: physical interrupted roots verified target=%#llx frame=%#llx published_fp=%#llx original_sp=%#llx stack_high=%#llx GPR=31 Q=32; before original sem_post\n",(unsigned long long)owner->context->PreparedWorker().token,(unsigned long long)owner->frame_base,(unsigned long long)Read<addr_t>(record+0x18),(unsigned long long)owner->interrupted.gpr.sp.qword,(unsigned long long)owner->context->PreparedWorker().stack_high);
   }
-  void AfterPost(const State &state){auto *owner=Current();if(!owner||!owner->depth)return;Check(!state.gpr.x0.dword,"original acknowledgment sem_post failed");++owner->posts;std::fprintf(stderr,"Game GC: original sem_post returned target=%#llx ordinal=%u LR=%#llx; epoch store follows in original code\n",(unsigned long long)owner->context->PreparedWorker().token,owner->posts,(unsigned long long)state.gpr.x30.qword);}
+  void AfterPost(const State &state){auto *owner=Current();if(!owner||!owner->depth)return;Check(!state.gpr.x0.dword,"original acknowledgment sem_post failed");++owner->posts;if(!GameQuietTrace())std::fprintf(stderr,"Game GC: original sem_post returned target=%#llx ordinal=%u LR=%#llx; epoch store follows in original code\n",(unsigned long long)owner->context->PreparedWorker().token,owner->posts,(unsigned long long)state.gpr.x30.qword);}
   bool Owns(uint64_t token){auto owner=Lookup(token);return owner&&owner->context->CurrentPhase()==Lifecycle::Phase::entered;}
   // The exact GC_lock backoff, plus any other direct nanosleep from original
   // libil2cpp text (Thread::Sleep and friends): the stop is delivered inside

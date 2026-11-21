@@ -146,6 +146,7 @@ class GameUnityMainCollector {
   GameUnityMainCollector(Pthreads&threads,SignalHost&signals,bunker::windows::Semaphores&sem,recomp::Runtime&runtime):threads_(threads),signals_(signals),semaphores_(sem),runtime_(runtime){Check(Translated(kReturn)&&Executable(kReturn)&&Translated(0x825beb3c)&&Translated(0x825b2af4)&&Translated(0x825b2c70),"genuine original signal heads are unavailable");}
   ~GameUnityMainCollector(){if(!closed_||owner_)std::terminate();}
   bool Owns(uint64_t token){auto owner=Lookup(token);return owner&&owner->live;}
+  bool OwnsCurrentThread()const{const auto *owner=Current();return owner&&owner->live;}
   static bool NanoSleepSite(const State&state)noexcept{
     return state.gpr.pc.qword==kNanoSleep&&(state.gpr.x30.qword==0x70383878||state.gpr.x30.qword==0x825a7230);
   }
@@ -265,8 +266,7 @@ class GameUnityMainCollector {
   bool SelectMutex(const Pthreads::WaitContext&context){
     auto *owner=Current();
     if(!owner||!owner->live||owner->token!=context.token||owner->native_tid!=GetCurrentThreadId()||owner->phase||owner->depth||OpaqueDepth()||owner->socket_wait.load()||!context.active_state||context.phase!=Pthreads::WaitPhase::MutexLock)return false;
-    auto *state=context.active_state;if(recomp::CurrentExecutionState()!=state)return false;
-    const auto frames=recomp::CurrentExecutionFrames(*state);if(frames.size()!=1||frames[0]!=state)return false;
+    auto *state=context.active_state;if(!recomp::IsOnlyExecutionState(*state))return false;
     try{ActualBounds(*owner);}catch(const std::exception&){return false;}
     if(!owner->tls&&state->sr.tpidr_el0.qword)owner->tls=state->sr.tpidr_el0.qword;
     return MutexShape(*owner,*state);

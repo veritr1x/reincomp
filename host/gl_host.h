@@ -44,7 +44,7 @@ class GlHost {
   // Requester performs no GL calls. One pending request; a distinct new PNG
   // is published only by its next matched successful original window swap.
   // Existing first-frame witness paths/status are never replaced.
-  uint64_t RequestFrameSnapshot(const std::wstring &absolute_new_png_path);
+  uint64_t RequestFrameSnapshot(const std::wstring &absolute_new_png_path, bool wait_for_visible_scene = false);
   FrameSnapshotStatus DescribeFrameSnapshot();
   // Pair one original eglSwapBuffers ENTER/RETURN on its native thread.
   // A nonzero ticket owns one pre-swap readback; only its matching EGL_TRUE

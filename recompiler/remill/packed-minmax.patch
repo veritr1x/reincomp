@@ -1,0 +1,41 @@
+--- a/lib/Arch/AArch64/Semantics/FP_MINMAX.cpp
++++ b/lib/Arch/AArch64/Semantics/FP_MINMAX.cpp
+@@ -48,12 +48,38 @@
+   return maximum ? (lhs_greater ? lhs : rhs) : (lhs_greater ? rhs : lhs);
+ }
+ 
++// For non-NaNs an IEEE value's bits give a total ordering, including
++// -0 < +0, once positive values flip their sign bit and negative values
++// flip all bits. Compare whole vectors without touching the host FP flags.
++template <typename T, size_t lanes, bool maximum, typename V, typename R>
++ALWAYS_INLINE bool TryPackedMinMax(State &state, V lhs, V rhs, R &result) {
++  using U = T __attribute__((ext_vector_type(lanes)));
++  constexpr unsigned shift = sizeof(T) * 8 - 1;
++  constexpr T sign = T(1) << shift;
++  constexpr T infinity = sizeof(T) == 4 ? T(0x7f800000) : T(0x7ff0000000000000ULL);
++  const U a = __builtin_bit_cast(U, lhs);
++  const U b = __builtin_bit_cast(U, rhs);
++  if (state.fpcr.fz || __builtin_reduce_or(((a & ~sign) > infinity) |
++                                          ((b & ~sign) > infinity))) return false;
++  const U a_key = a ^ (-(a >> shift) | sign);
++  const U b_key = b ^ (-(b >> shift) | sign);
++  const U selected = maximum ? (a_key > b_key ? a : b) : (a_key > b_key ? b : a);
++  __builtin_memcpy(result.elems, &selected, sizeof(selected));
++  return true;
++}
++
+ #define FP_MINMAX_SEMANTICS(size) \
+   template <size_t lanes, bool maximum, typename S> \
+   DEF_SEM(MinMaxFP##size, V128W dst, S src1, S src2) { \
+     auto lhs = UReadV##size(src1); \
+     auto rhs = UReadV##size(src2); \
+     auto result = UClearV##size(UReadV##size(dst)); \
++    if constexpr (lanes > 1) { \
++      if (TryPackedMinMax<uint##size##_t, lanes, maximum>(state, lhs, rhs, result)) { \
++        UWriteV##size(dst, result); \
++        return memory; \
++      } \
++    } \
+     _Pragma("unroll") for (size_t i = 0; i < lanes; ++i) { \
+       result.elems[i] = MinMaxFPBits<uint##size##_t, maximum>(state, lhs.elems[i], rhs.elems[i]); \
+     } \

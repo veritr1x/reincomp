@@ -29,6 +29,11 @@ static_assert(sizeof(AndroidSignalStack)==24&&alignof(AndroidSignalStack)==8);
 static_assert(offsetof(AndroidSignalStack,flags)==8&&offsetof(AndroidSignalStack,size)==16);
 class SignalHost {
  public:
+  // The collector still dispatches signals to Android workers while external
+  // Unity threads are parked. Keep a thread from being suspended mid-dispatch.
+  std::unique_lock<std::mutex> LockForThreadSuspension() {
+    return std::unique_lock<std::mutex>(mutex_);
+  }
   using Info=std::array<uint8_t,128>;
   struct StackRegion {addr_t low=0,high=0;uint64_t generation=0;};
   struct StackLease {StackRegion region;std::shared_ptr<void> lifetime;};

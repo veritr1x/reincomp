@@ -1,0 +1,76 @@
+--- a/lib/Arch/AArch64/Arch.cpp
++++ b/lib/Arch/AArch64/Arch.cpp
+@@ -4573,6 +4573,14 @@
+   return TryDecodeFP_ASIMDSAME(data, inst);
+ }
+ 
++bool TryDecodeFMINP_ASIMDSAME_ONLY(const InstData &data, Instruction &inst) {
++  return TryDecodeFP_ASIMDSAME(data, inst);
++}
++
++bool TryDecodeFMAXP_ASIMDSAME_ONLY(const InstData &data, Instruction &inst) {
++  return TryDecodeFP_ASIMDSAME(data, inst);
++}
++
+ // FADDP scalar pair: source is a full vector snapshot; result clears upper bits.
+ bool TryDecodeFADDP_ASISDPAIR_ONLY_SD(const InstData &data, Instruction &inst) {
+   inst.function += data.sz ? "_D" : "_S";
+--- a/lib/Arch/AArch64/Decode.cpp
++++ b/lib/Arch/AArch64/Decode.cpp
+@@ -2545,10 +2545,6 @@
+ //  30 x Q        0
+ //  31 0
+ // FMINP  <Vd>.<T>, <Vn>.<T>, <Vm>.<T>
+-bool TryDecodeFMINP_ASIMDSAME_ONLY(const InstData &, Instruction &) {
+-  return false;
+-}
+-
+ // SQRDMLSH SQRDMLSH_asisdelem_R:
+ //   0 x Rd       0
+ //   1 x Rd       1
+@@ -29482,10 +29478,6 @@
+ //  30 x Q        0
+ //  31 0
+ // FMAXP  <Vd>.<T>, <Vn>.<T>, <Vm>.<T>
+-bool TryDecodeFMAXP_ASIMDSAME_ONLY(const InstData &, Instruction &) {
+-  return false;
+-}
+-
+ // MADD MUL_MADD_32A_dp_3src:
+ //   0 x Rd       0
+ //   1 x Rd       1
+--- a/lib/Arch/AArch64/Semantics/FP_MINMAX.cpp
++++ b/lib/Arch/AArch64/Semantics/FP_MINMAX.cpp
+@@ -69,10 +69,19 @@
+ }
+ 
+ #define FP_MINMAX_SEMANTICS(size) \
+-  template <size_t lanes, bool maximum, typename S> \
++  template <size_t lanes, bool maximum, typename S, bool pairwise = false> \
+   DEF_SEM(MinMaxFP##size, V128W dst, S src1, S src2) { \
+     auto lhs = UReadV##size(src1); \
+     auto rhs = UReadV##size(src2); \
++    if constexpr (pairwise) { \
++      const auto first = lhs, second = rhs; \
++      _Pragma("unroll") for (size_t i = 0; i < lanes / 2; ++i) { \
++        lhs.elems[i] = first.elems[2 * i]; \
++        rhs.elems[i] = first.elems[2 * i + 1]; \
++        lhs.elems[i + lanes / 2] = second.elems[2 * i]; \
++        rhs.elems[i + lanes / 2] = second.elems[2 * i + 1]; \
++      } \
++    } \
+     auto result = UClearV##size(UReadV##size(dst)); \
+     if constexpr (lanes > 1) { \
+       if (TryPackedMinMax<uint##size##_t, lanes, maximum>(state, lhs, rhs, result)) { \
+@@ -100,3 +109,11 @@
+ FP_MINMAX_ISEL(FMIN, false)
+ FP_MINMAX_ISEL(FMAX, true)
+ #undef FP_MINMAX_ISEL
++
++#define FP_PAIR_MINMAX_ISEL(op, maximum) \
++  DEF_ISEL(op##_ASIMDSAME_ONLY_2S) = MinMaxFP32<2, maximum, V64, true>; \
++  DEF_ISEL(op##_ASIMDSAME_ONLY_4S) = MinMaxFP32<4, maximum, V128, true>; \
++  DEF_ISEL(op##_ASIMDSAME_ONLY_2D) = MinMaxFP64<2, maximum, V128, true>;
++FP_PAIR_MINMAX_ISEL(FMINP, false)
++FP_PAIR_MINMAX_ISEL(FMAXP, true)
++#undef FP_PAIR_MINMAX_ISEL

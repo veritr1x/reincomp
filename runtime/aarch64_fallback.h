@@ -73,8 +73,22 @@ template <class T> T RoundInt(T x, int mode) {
   }
   return r == 0 ? std::copysign(T(0), x) : r;  // keeps the sign of zero
 }
+// FCVTZ converts towards zero, with an optional binary fixed-point scale.
+// Compare in the source domain so even the largest finite double saturates
+// before scaling. Inside the bounds, scaling by this power of two is exact.
+inline uint64_t TruncateToInt(double x, unsigned bits, bool is_unsigned, unsigned scale = 0) {
+  if (std::isnan(x) || (is_unsigned && x <= 0)) return 0;
+  const unsigned magnitude_bits = bits - (is_unsigned ? 0 : 1);
+  const double limit = F64(uint64_t(1023 + magnitude_bits - scale) << 52);
+  if (x >= limit) return Mask(magnitude_bits);
+  if (!is_unsigned && x <= -limit) return uint64_t(1) << magnitude_bits;
+  const double scaled = x * F64(uint64_t(1023 + scale) << 52);
+  return is_unsigned ? uint64_t(scaled) : uint64_t(int64_t(scaled)) & Mask(bits);
+}
+
 // FP -> integer with saturation; NaN -> 0.
 template <class T> uint64_t FpToInt(T x, int mode, unsigned bits, bool is_unsigned) {
+  if (mode == 3) return TruncateToInt(x, bits, is_unsigned);
   if (std::isnan(x)) return 0;
   const long double r = RoundInt<long double>(static_cast<long double>(x), mode);
   if (is_unsigned) {
@@ -359,6 +373,14 @@ inline bool TwoRegMisc(State &s, uint32_t w) {
       WriteVQ(s, rd, r, q); return true;
     case 0x0b: {  // ABS / NEG
       if (esize == 64 && !q) return false;
+      if (u && esize == 32) {
+        uint32_t lanes[4];
+        std::memcpy(lanes, n.b, sizeof(lanes));
+        for (auto &lane : lanes) lane = 0u - lane;
+        std::memcpy(r.b, lanes, sizeof(lanes));
+        WriteVQ(s, rd, r, q);
+        return true;
+      }
       for (unsigned i = 0; i < (q ? 128 : 64) / esize; ++i) {
         const int64_t x = SExt(El(n, i, esize), esize);
         SetEl(r, i, esize, uint64_t(u ? -uint64_t(x) : (x < 0 ? -uint64_t(x) : uint64_t(x))) & Mask(esize));
@@ -398,10 +420,11 @@ inline bool AcrossLanes(State &s, uint32_t w) {
   SetV(s, rd, r); return true;
 }
 
-inline bool ShiftImmediate(State &s, uint32_t w) {
-  const bool q = Bits(w, 30, 30), u = Bits(w, 29, 29); const unsigned immh = Bits(w, 22, 19), immhb = Bits(w, 22, 16);
+// Specialize the lane width so El/SetEl use fixed-width loads and stores.
+template<unsigned esize>
+inline bool ShiftImmediateLanes(State &s, uint32_t w) {
+  const bool q = Bits(w, 30, 30), u = Bits(w, 29, 29); const unsigned immhb = Bits(w, 22, 16);
   const unsigned opc = Bits(w, 15, 11), rn = Bits(w, 9, 5), rd = Bits(w, 4, 0);
-  const unsigned esize = 8u << (31 - __builtin_clz(immh));
   const Vec n = GetV(s, rn), d = GetV(s, rd); Vec r = Zero();
   if (opc == 0x10 || opc == 0x14) {  // SHRN/RSHRN-free narrow, SSHLL/USHLL widen (esize = narrow size)
     if (esize == 64) return false;
@@ -444,6 +467,14 @@ inline bool ShiftImmediate(State &s, uint32_t w) {
   WriteVQ(s, rd, r, q); return true;
 }
 
+inline bool ShiftImmediate(State &s, uint32_t w) {
+  const unsigned immh = Bits(w, 22, 19);
+  if (immh >= 8) return ShiftImmediateLanes<64>(s, w);
+  if (immh >= 4) return ShiftImmediateLanes<32>(s, w);
+  if (immh >= 2) return ShiftImmediateLanes<16>(s, w);
+  return immh == 1 && ShiftImmediateLanes<8>(s, w);
+}
+
 // FP <-> integer, integer and fixed-point forms (only FP -> integer).
 inline bool FpToIntGroup(State &s, uint32_t w) {
   const bool sf = Bits(w, 31, 31); const unsigned type = Bits(w, 23, 22), rmode = Bits(w, 20, 19), opc = Bits(w, 18, 16);
@@ -455,11 +486,8 @@ inline bool FpToIntGroup(State &s, uint32_t w) {
     if (rmode != 3 || opc > 1) return false;
     const unsigned scale = 64 - unsigned(Bits(w, 15, 10));
     if (!sf && scale > 32) return false;
-    is_unsigned = opc; mode = 3;
-    const long double x = type ? (long double)F64(b) : (long double)F32(b);
-    uint64_t out;
-    if (std::isnan(x)) out = 0;
-    else out = FpToInt<long double>(std::ldexp(x, int(scale)), mode, bits, is_unsigned);
+    const double x = type ? F64(b) : F32(b);
+    const uint64_t out = TruncateToInt(x, bits, opc != 0, scale);
     WriteX(s, rd, out, sf); return true;
   }
   if (Bits(w, 15, 10)) return false;

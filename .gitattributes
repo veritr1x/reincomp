@@ -4,3 +4,19 @@
 *.patch -whitespace
 # Shell scripts run in Linux containers and WSL: keep LF on Windows checkouts.
 *.sh text eol=lf
+# Go embeds source hashes. The portable player also ships these templates
+# and scripts verbatim, including the line endings recorded by Bunker's kit.
+launcher/*.go text eol=lf
+launcher/go.mod text eol=lf
+build/native_player/*.go text eol=lf
+build/native_player/*.py text eol=lf
+build/native_player/*.css text eol=lf
+build/native_player/*.html text eol=lf
+build/native_player/desktop_shader.py text eol=crlf
+build/native_player/resource-setup.html -text
+*.cpp text eol=lf
+*.h text eol=lf
+*.c text eol=lf
+*.def text eol=lf
+recompiler/web/*.mjs text eol=lf
+recompiler/web/*.js text eol=lf

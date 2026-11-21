@@ -2,3 +2,8 @@
 /work/
 __pycache__/
 *.pyc
+# Older development builds kept generated Unity and APK adapter tables here.
+/build/native_player/abi-2019.4.29f1/
+/recompiler/tools/spring_group.entries
+/build/native_player/notice-portraits.csv
+/build-output/

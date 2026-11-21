@@ -96,11 +96,20 @@ class Service {
   }
 
   void Install(recomp::Runtime &runtime) {
+#ifdef REINCOMP_EMBEDDED_PLAYER
+    render_service_.store(this);
+#endif
     for (size_t i = 0; i < std::size(kNatives); ++i)
       runtime.AddImport(kMarkerBase + 8 * i, [this, i](State &s) { Native(i, s); });
   }
 
  private:
+#ifdef REINCOMP_EMBEDDED_PLAYER
+  inline static std::atomic<Service *> render_service_{nullptr};
+  static void NativeRenderEvent(int id) {
+    if (auto *service = render_service_.load()) service->RenderEvent(uint32_t(id));
+  }
+#endif
   static constexpr const char *kMobile = "com/RenderHeads/AVProVideo/AVProMobileVideo";
   static constexpr const char *kPlayer = "com/RenderHeads/AVProVideo/AVProVideoPlayer";
   static constexpr const char *kMediaPlayer = "com/RenderHeads/AVProVideo/AVProVideoMediaPlayer";
@@ -383,7 +392,13 @@ class Service {
         break;
       }
       case 7: s.gpr.x0.qword = p && p->opened ? 1 : 0; break;
-      case 8: s.gpr.x0.qword = kMarkerBase + 8 * kRenderEvent; break;
+      case 8:
+#ifdef REINCOMP_EMBEDDED_PLAYER
+        s.gpr.x0.qword = reinterpret_cast<addr_t>(&NativeRenderEvent);
+#else
+        s.gpr.x0.qword = kMarkerBase + 8 * kRenderEvent;
+#endif
+        break;
       case kRenderEvent: RenderEvent(uint32_t(s.gpr.x0.dword)); break;
       default: break;  // audio fill, device events, nativeInit
     }
@@ -404,7 +419,19 @@ class Service {
     static void Load(F &fn, const char *name) {
 #ifdef _WIN32
       HMODULE gles = GetModuleHandleA("libGLESv2.dll");
+#ifdef REINCOMP_EMBEDDED_PLAYER
+      auto desktop = GetModuleHandleW(L"opengl32.dll");
+      auto address = desktop ? GetProcAddress(desktop, name) : nullptr;
+      if (!address && desktop) {
+        using Lookup = PROC(WINAPI *)(LPCSTR);
+        auto lookup = reinterpret_cast<Lookup>(GetProcAddress(desktop, "wglGetProcAddress"));
+        if (lookup) address = lookup(name);
+      }
+      auto value = reinterpret_cast<uintptr_t>(address);
+      fn = value > 65535 && value != UINTPTR_MAX ? reinterpret_cast<F>(address) : nullptr;
+#else
       fn = gles ? reinterpret_cast<F>(reinterpret_cast<void *>(GetProcAddress(gles, name))) : nullptr;
+#endif
 #else
       fn = reinterpret_cast<F>(dlsym(RTLD_DEFAULT, name));
 #endif

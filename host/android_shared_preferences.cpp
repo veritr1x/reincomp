@@ -1,4 +1,5 @@
 #include "android_shared_preferences.h"
+#include "jni_string_codec_detail.h"
 #include <atomic>
 #include <condition_variable>
 #include <cstdio>
@@ -40,6 +41,40 @@ std::u16string UriEncode(const std::u16string&s){
   }return out;
 }
 }
+namespace {
+int HexDigit(char16_t c) {
+  if (c >= u'0' && c <= u'9') return c - u'0';
+  if (c >= u'a' && c <= u'f') return c - u'a' + 10;
+  if (c >= u'A' && c <= u'F') return c - u'A' + 10;
+  return -1;
+}
+std::u16string UriDecode(const std::u16string &text) {
+  using namespace jni::string_codec_detail;
+  std::u16string result;
+  std::vector<uint8_t> bytes;
+  for (size_t i = 0; i < text.size();) {
+    if (text[i] != u'%') {
+      result.push_back(text[i++]);
+      continue;
+    }
+    bytes.clear();
+    while (i < text.size() && text[i] == u'%') {
+      ++i;
+      int high = i < text.size() ? HexDigit(text[i++]) : -1;
+      int low = high >= 0 && i < text.size() ? HexDigit(text[i++]) : -1;
+      if (low < 0) {
+        result += Decode(bytes, Charset::Utf8);
+        bytes.clear();
+        result.push_back(u'\ufffd');
+        break;
+      }
+      bytes.push_back(static_cast<uint8_t>((high << 4) | low));
+    }
+    result += Decode(bytes, Charset::Utf8);
+  }
+  return result;
+}
+}
 struct AndroidSharedPreferences::State {
   struct Slot {std::mutex mutex;std::condition_variable cv;bool loading=false,ready=false;std::string failed;std::shared_ptr<Store>store;jni::Host::ObjectValue object;};
   jni::Host&host;addr_t context;std::u16string package;SharedPreferencesBackend backend;std::mutex mutex;bool active=true;std::map<std::u16string,std::shared_ptr<Slot>>slots;
@@ -65,7 +100,28 @@ struct AndroidSharedPreferences::State {
     if(!name)throw std::runtime_error("SharedPreferences unsupported stored type");return host.NewHostInstance(name,std::make_shared<Number>(Number{v}));
   }
   addr_t Edit(addr_t receiver){auto e=std::make_shared<Editor>();e->store=Payload<Store>(host,receiver);return host.NewHostInstance(kEditor,e);}
-  int32_t Int(addr_t receiver,const jni::Host::MethodArguments&a){auto store=Payload<Store>(host,receiver);auto key=Text(host,a[0]);std::optional<SharedPreferenceValue>v;{std::lock_guard lock(store->mutex);auto i=store->values.find(key);if(i!=store->values.end())v=i->second;}if(!v)return static_cast<int32_t>(a[1]);if(v->kind!=SharedPreferenceValue::Integer){host.ThrowException("java/lang/ClassCastException");return 0;}return static_cast<int32_t>(static_cast<uint32_t>(v->bits));}
+  std::optional<SharedPreferenceValue> Lookup(addr_t receiver, addr_t name) {
+    auto store = Payload<Store>(host, receiver);
+    auto key = Text(host, name);
+    std::lock_guard lock(store->mutex);
+    auto it = store->values.find(key);
+    if (it == store->values.end()) return {};
+    return it->second;
+  }
+  uint32_t Numeric(addr_t receiver, const jni::Host::MethodArguments &args, SharedPreferenceValue::Kind kind) {
+    auto value = Lookup(receiver, args[0]);
+    if (!value) return static_cast<uint32_t>(args[1]);
+    if (value->kind == kind) return static_cast<uint32_t>(value->bits);
+    host.ThrowException("java/lang/ClassCastException");
+    return 0;
+  }
+  addr_t String(addr_t receiver, const jni::Host::MethodArguments &args) {
+    auto value = Lookup(receiver, args[0]);
+    if (!value) return args[1] ? host.NewLocalReference(args[1]) : 0;
+    if (value->kind == SharedPreferenceValue::String) return host.NewString(value->text);
+    host.ThrowException("java/lang/ClassCastException");
+    return 0;
+  }
   addr_t All(addr_t receiver){auto store=Payload<Store>(host,receiver);auto copy=std::make_shared<SharedPreferencesSnapshot>();{std::lock_guard lock(store->mutex);*copy=store->values;}return host.NewHostInstance(kMap,std::make_shared<Map>(Map{copy}));}
   addr_t Put(addr_t receiver,const jni::Host::MethodArguments&a,SharedPreferenceValue::Kind kind){auto editor=Payload<Editor>(host,receiver);auto key=Text(host,a[0]);std::optional<SharedPreferenceValue>value;
     if(kind==SharedPreferenceValue::String){if(a[1]){SharedPreferenceValue v;v.kind=kind;v.text=Text(host,a[1]);value=std::move(v);}}
@@ -87,7 +143,10 @@ AndroidSharedPreferences::AndroidSharedPreferences(jni::Host&host,addr_t context
   host.DefineClass("java/lang/Number",{},"java/lang/Object",true,{"java/io/Serializable"});for(auto n:{"java/lang/Integer","java/lang/Float","java/lang/Long"})host.DefineClass(n,{},"java/lang/Number",true);host.DefineClass("java/lang/Boolean",{},"java/lang/Object",true,{"java/io/Serializable"});
   host.DefineObjectMethod("android/content/Context","getSharedPreferences","(Ljava/lang/String;I)Landroid/content/SharedPreferences;",[get](addr_t r,const jni::Host::MethodArguments&a){return get()->Open(r,a);});
   host.DefineObjectMethod("android/content/SharedPreferences","edit","()Landroid/content/SharedPreferences$Editor;",[get](addr_t r){return get()->Edit(r);});
-  host.DefineIntMethod("android/content/SharedPreferences","getInt","(Ljava/lang/String;I)I",[get](addr_t r,const jni::Host::MethodArguments&a){return get()->Int(r,a);});
+  host.DefineIntMethod("android/content/SharedPreferences","getInt","(Ljava/lang/String;I)I",[get](addr_t r,const jni::Host::MethodArguments&a){return int32_t(get()->Numeric(r,a,SharedPreferenceValue::Integer));});
+  host.DefineFloatBitsMethod("android/content/SharedPreferences","getFloat","(Ljava/lang/String;F)F",[get](addr_t r,const jni::Host::MethodArguments&a){return get()->Numeric(r,a,SharedPreferenceValue::Float);});
+  host.DefineObjectMethod("android/content/SharedPreferences","getString","(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;",[get](addr_t r,const jni::Host::MethodArguments&a){return get()->String(r,a);});
+  host.DefineBooleanMethod("android/content/SharedPreferences","contains","(Ljava/lang/String;)Z",[get](addr_t r,const jni::Host::MethodArguments&a){return get()->Lookup(r,a[0]).has_value();});
   host.DefineObjectMethod("android/content/SharedPreferences","getAll","()Ljava/util/Map;",[get](addr_t r){return get()->All(r);});
   host.DefineObjectMethod("android/content/SharedPreferences$Editor","putString","(Ljava/lang/String;Ljava/lang/String;)Landroid/content/SharedPreferences$Editor;",[get](addr_t r,const jni::Host::MethodArguments&a){return get()->Put(r,a,SharedPreferenceValue::String);});
   host.DefineObjectMethod("android/content/SharedPreferences$Editor","putInt","(Ljava/lang/String;I)Landroid/content/SharedPreferences$Editor;",[get](addr_t r,const jni::Host::MethodArguments&a){return get()->Put(r,a,SharedPreferenceValue::Integer);});
@@ -102,6 +161,13 @@ AndroidSharedPreferences::AndroidSharedPreferences(jni::Host&host,addr_t context
   host.DefineIntMethod("java/lang/Number","intValue","()I",[get](addr_t r,const jni::Host::MethodArguments&){auto s=get();auto n=Payload<Number>(s->host,r);if(n->value.kind!=SharedPreferenceValue::Integer)throw std::runtime_error("SharedPreferences unported Number.intValue conversion");return static_cast<int32_t>(static_cast<uint32_t>(n->value.bits));});
   host.DefineFloatBitsMethod("java/lang/Number","floatValue","()F",[get](addr_t r,const jni::Host::MethodArguments&){auto s=get();auto n=Payload<Number>(s->host,r);if(n->value.kind!=SharedPreferenceValue::Float)throw std::runtime_error("SharedPreferences unported Number.floatValue conversion");return static_cast<uint32_t>(n->value.bits);});
   host.DefineStaticObjectMethod("android/net/Uri","encode","(Ljava/lang/String;)Ljava/lang/String;",[get](addr_t,const jni::Host::MethodArguments&a){auto s=get();if(!a[0])return addr_t(0);auto text=Text(s->host,a[0]),encoded=UriEncode(text);return encoded==text?s->host.NewLocalReference(a[0]):s->host.NewString(encoded);});
+  host.DefineStaticObjectMethod("android/net/Uri","decode","(Ljava/lang/String;)Ljava/lang/String;",[get](addr_t,const jni::Host::MethodArguments &a) {
+    auto state = get();
+    if (!a[0]) return addr_t(0);
+    auto text = Text(state->host, a[0]);
+    if (text.find(u'%') == text.npos) return state->host.NewLocalReference(a[0]);
+    return state->host.NewString(UriDecode(text));
+  });
 }
 AndroidSharedPreferences::~AndroidSharedPreferences(){if(state_){{std::lock_guard lock(state_->mutex);state_->active=false;}state_.reset();}}
 void AndroidSharedPreferences::CheckPersistence()const{if(!state_)throw std::runtime_error("SharedPreferences adapter expired");std::vector<std::shared_ptr<State::Slot>>slots;{std::lock_guard lock(state_->mutex);for(auto&[name,slot]:state_->slots)slots.push_back(slot);}for(auto&slot:slots){std::shared_ptr<Store>store;{std::lock_guard lock(slot->mutex);if(!slot->failed.empty())throw std::runtime_error(slot->failed);store=slot->store;}if(store&&store->failure.load())throw std::runtime_error("SharedPreferences persistence verification failed status="+std::to_string(store->failure.load()));}}

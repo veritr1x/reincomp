@@ -1,4 +1,5 @@
 #include "windows_android_id.h"
+#include "windows_app_registry.h"
 #include <algorithm>
 #include <stdexcept>
 #include <system_error>
@@ -14,7 +15,7 @@ std::function<std::optional<std::u16string>()> MakeWindowsAndroidIdReader(std::u
   if(package.size()>255)throw std::invalid_argument("Android ID package namespace is too long");
 #ifdef _WIN32
   static_assert(sizeof(wchar_t)==sizeof(char16_t));
-  std::wstring path=L"Software\\Bunker\\Apps\\";path.append(package.begin(),package.end());path+=L"\\SecureSettings";
+  auto path=WindowsAppRegistryPath(package)+L"\\SecureSettings";
   return [path=std::move(path)]()->std::optional<std::u16string>{
     struct Key {HKEY value=nullptr;~Key(){if(value)RegCloseKey(value);}} key;
     auto status=RegOpenKeyExW(HKEY_CURRENT_USER,path.c_str(),0,KEY_QUERY_VALUE|KEY_WOW64_64KEY,&key.value);

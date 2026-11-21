@@ -11,6 +11,10 @@
     "url": "https://github.com/veritr1x/reincomp/releases/download/v0.1.1/reincomp-0.1.1.exe",
     "sha256": "6091e1ba8f4e1fdbfb0b160fcbd613361f6f206274f599463cb2766fc8df0cda"
   },
+  "fsr_runtime": {
+    "url": "https://raw.githubusercontent.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK/c6efa6bf7f2027b3ec94f28578bb5965eabb9e55/PrebuiltSignedDLL/amd_fidelityfx_vk.dll",
+    "sha256": "a1624cc4238fef046f30c4d80ce3f47be63fc5f5373f49e3ee9edb9960f54c78"
+  },
   "pods": {
     "url": "https://github.com/veritr1x/reincomp/releases/download/v0.1.1/reincomp-pods-0.1.1-windows-x86_64.zip",
     "sha256": "fc86a71135fd4d5ba8e89e4f13fcd914c93bbc84a15b1e477d83e19c2b4e54bb"

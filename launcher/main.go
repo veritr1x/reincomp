@@ -16,6 +16,7 @@ package main
 import (
 	"archive/zip"
 	"bufio"
+	"context"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
@@ -28,6 +29,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -61,19 +63,28 @@ const portOffset = "30000"
 
 func main() {
 	assets := flag.String("assets", "", "folder with the imported game files the server serves (default: data/assets)")
-	fps := flag.String("fps", "game", "frame rate target: a number, or \"game\" for the game's own")
+	fps := flag.String("fps", "", "frame rate target: a number or game (default: Bunker Display, otherwise 144 on the Windows player)")
 	render := flag.String("render", "", "render size, such as 3840x2160 (default: the window's)")
 	silent := flag.Bool("nosound", false, "turn the game's sound off")
 	exportSave := flag.String("export-save", "", "write a backup of the save to this .zip, then stop")
 	importSave := flag.String("import-save", "", "replace the save with this backup (.zip, or a game.db), then stop")
 	prepareOnly := flag.Bool("prepare", false, "prepare the game files, then stop")
+	fullscreen := flag.Bool("fullscreen", false, "start the native player in borderless fullscreen")
+	launcher := flag.Bool("launcher", false, "open Bunker before starting the game")
 	flag.Parse()
 	sound = !*silent
-	e := error(nil)
-	if *exportSave != "" || *importSave != "" {
-		e = saves(*exportSave, *importSave)
-	} else {
-		e = run(*assets, *fps, *render, *prepareOnly)
+	self, e := os.Executable()
+	if e == nil {
+		var installed installation
+		installed, e = playerInstallation(self)
+		if e == nil {
+			defer installed.close()
+			if *exportSave != "" || *importSave != "" {
+				e = saves(installed.root, *exportSave, *importSave)
+			} else {
+				e = run(installed.root, filepath.Dir(self), *assets, *fps, *render, *prepareOnly, *fullscreen, *launcher)
+			}
+		}
 	}
 	if e != nil {
 		fmt.Fprintln(os.Stderr, "\n"+e.Error())
@@ -89,46 +100,112 @@ func main() {
 // switched off and the game is muted.
 var sound bool
 
-func run(assets, fps, render string, prepareOnly bool) error {
-	self, e := os.Executable()
-	if e != nil {
-		return e
+func renderDimensions(value string) (string, string, error) {
+	width, height, ok := strings.Cut(value, "x")
+	w, ew := strconv.ParseUint(width, 10, 16)
+	h, eh := strconv.ParseUint(height, 10, 16)
+	if !ok || ew != nil || eh != nil || w == 0 || h == 0 {
+		return "", "", fmt.Errorf("invalid render size %q, expected WIDTHxHEIGHT", value)
 	}
-	root := filepath.Dir(self)
+	return width, height, nil
+}
+
+func run(root, resourceDir, assets, fps, render string, prepareOnly, fullscreen, showLauncher bool) error {
+	var e error
 	data := filepath.Join(root, "data")
 	fmt.Printf("re[in]comp %s\n", version)
 	game := filepath.Join(root, "game", "bunker-game-bootstrap.exe")
+	player := filepath.Join(root, "game", "WindowsPlayer.exe")
+	_, nativeErr := os.Stat(player)
+	desktop := nativeErr == nil
+	if desktop {
+		game = player
+	}
 	server := filepath.Join(root, "server", "bunker-server.exe")
 	for _, f := range []string{game, server} {
 		if _, e := os.Stat(f); e != nil {
 			return fmt.Errorf("%s is missing. Unzip the whole release into one folder.", f)
 		}
 	}
-	apk, native, e := prepare(root, data)
-	if e != nil {
-		return e
+	var apk, native string
+	if !desktop {
+		apk, native, e = prepare(root, data)
+		if e != nil {
+			return e
+		}
 	}
 	if prepareOnly {
 		fmt.Println("Game files are ready.")
 		return nil
 	}
+	if !desktop && fps == "" {
+		fps = "165"
+	}
 	if assets == "" {
-		assets = filepath.Join(data, "assets")
+		assets = locateResources(root, resourceDir)
 	}
-	if e := importFiles(root, server, assets); e != nil {
-		return e
-	}
-
-	// The Bunker's pages (Pod Programs) are served when the pods folder is there.
-	pods := filepath.Join(root, "pods")
-	if _, e := os.Stat(filepath.Join(pods, "app", "desktop_runtime.py")); e != nil {
-		pods = ""
-	}
+	var setup *resourceWindow
 	view := filepath.Join(data, "bunker-view.json")
 	os.Remove(view)
+	readyFiles := resourcesReady(assets)
+	if !readyFiles || desktop && (showLauncher || regularFile(filepath.Join(data, "manual-deploy"))) {
+		dump, master := resourceInputs(resourceDir, root)
+		if desktop && regularFile(filepath.Join(root, "game", "resource-window.exe")) {
+			setup, e = firstRunWindow(root, server, assets, master, dump, readyFiles)
+			if errors.Is(e, context.Canceled) {
+				return nil
+			}
+			if e != nil {
+				return e
+			}
+			defer setup.close()
+		} else if e = importArchive(context.Background(), server, assets, master, dump, func(s string) { fmt.Println(s) }); e != nil {
+			return e
+		}
+	}
+
+	for {
+		if setup != nil {
+			select {
+			case <-setup.done:
+				return nil
+			case <-setup.startServices:
+			}
+		}
+		err := serveAndPlay(root, data, assets, game, server, view, native, apk, fps, render, desktop, fullscreen, setup)
+		if !errors.Is(err, errStoppedFromLauncher) {
+			return err
+		}
+		setup.mu.Lock()
+		setup.services = false
+		setup.running = false
+		setup.busy = false
+		setup.checkURL = ""
+		setup.checkToken = ""
+		setup.send("reset-program")
+		setup.status = "Lunar Tear is stopped."
+		setup.mu.Unlock()
+	}
+}
+
+var errStoppedFromLauncher = errors.New("Lunar Tear stopped from the launcher")
+
+func serveAndPlay(root, data, assets, game, server, view, native, apk, fps, render string, desktop, fullscreen bool, setup *resourceWindow) error {
+	// The Bunker's pages (Pod Programs) are served when the pods folder is there.
+	if err := installBundledNotices(root, assets); err != nil {
+		return err
+	}
+	pods := filepath.Join(root, "pods")
+	if _, e := os.Stat(filepath.Join(pods, "app", "desktop_runtime.py")); e != nil {
+		if desktop {
+			return errors.New("The packaged Bunker pages are missing.")
+		}
+		pods = ""
+	}
 
 	fmt.Println("Starting the server...")
 	serve := exec.Command(server, "-data", filepath.Join(data, "server"), "-assets", assets, "-port-offset", portOffset, "-stdin")
+	hideHelperWindow(serve)
 	token := ""
 	if pods != "" {
 		secret := make([]byte, 24)
@@ -179,9 +256,46 @@ func run(assets, fps, render string, prepareOnly bool) error {
 		return fmt.Errorf("The server took too long to start. See %s.", log.Name())
 	}
 
+	var session *playerSession
+	if desktop && pods != "" {
+		session, e = openPlayerSession(token)
+		if e != nil {
+			return e
+		}
+		defer session.close()
+	}
 	if pods != "" {
-		stop := servePods(root, pods, data, assets, token, control, view)
+		var address string
+		select {
+		case address = <-control:
+		case <-time.After(30 * time.Second):
+		}
+		stop := servePods(root, pods, data, assets, token, address, view, session)
 		defer stop()
+		if setup != nil {
+			setup.mu.Lock()
+			setup.checkURL, setup.checkToken = address, token
+			setup.mu.Unlock()
+		}
+	}
+	if setup != nil {
+		// Pre-game editor requests may pause/resume Lunar Tear or change display
+		// settings. The player starts only through the launcher's Deploy action.
+		setup.mu.Lock()
+		setup.running = true
+		setup.mu.Unlock()
+		for waiting := true; waiting; {
+			select {
+			case <-setup.done:
+				return nil
+			case <-setup.stopServices:
+				return errStoppedFromLauncher
+			case <-setup.deploy:
+				waiting = false
+			case request := <-session.requests:
+				request.result <- nil
+			}
+		}
 	}
 
 	fmt.Println("Starting the game...")
@@ -190,7 +304,7 @@ func run(assets, fps, render string, prepareOnly bool) error {
 		"--frame-gate", "1280", "720", filepath.Join(dir, "angle"),
 		"--mute-audio", "--collector-delivery", "--first-frame",
 		"--firebase-app-dll", filepath.Join(dir, "FirebaseCppApp-9_6_0.dll"),
-		"--run-frames", "2000000000", "--quiet-trace",
+		"--run-until-close", "--quiet-trace",
 		"--target-fps", fps, "--server-profile",
 		"--grpc-native", filepath.Join(dir, "grpc_csharp_ext.x64.dll")}
 	if sound {
@@ -202,25 +316,90 @@ func run(assets, fps, render string, prepareOnly bool) error {
 	if pods != "" {
 		args = append(args, "--bunker-view", filepath.Join(pods, "WebView2Loader.dll"), view, filepath.Join(data, "webview"))
 	}
-	play := exec.Command(game, args...)
-	play.Dir = dir
 	gameLog, e := os.Create(filepath.Join(data, "game.log"))
 	if e != nil {
 		return e
 	}
 	defer gameLog.Close()
-	play.Stdout, play.Stderr = gameLog, gameLog
-	if e := play.Run(); e != nil {
+	makePlayer := func() (*exec.Cmd, error) {
+		cmd := exec.Command(game, args...)
+		if desktop {
+			display, err := savedDisplay(data, fps, render)
+			if err != nil {
+				return nil, err
+			}
+			cmd, err = desktopCommand(game, root, data, display, fullscreen && setup == nil)
+			if err != nil {
+				return nil, err
+			}
+			if setup != nil {
+				cmd.Args = append(cmd.Args, "-parentHWND", setup.handle, "delayed")
+				cmd.Env = append(cmd.Env, "REINCOMP_WINDOW_PARENT="+setup.handle)
+			}
+		}
+		cmd.Dir, cmd.Stdout, cmd.Stderr = dir, gameLog, gameLog
+		return cmd, nil
+	}
+	if session != nil {
+		if setup != nil {
+			if fullscreen {
+				setup.send("fullscreen")
+			}
+			session.started = func(pid int) { setup.send("player " + strconv.Itoa(pid)) }
+			session.windowClosed = setup.done
+		}
+		session.applyDisplay = func(pid int) error {
+			display, err := savedDisplay(data, fps, render)
+			if err != nil {
+				return err
+			}
+			return resizePlayerWindow(pid, display.size)
+		}
+		e = session.play(makePlayer)
+	} else {
+		cmd, err := makePlayer()
+		if err != nil {
+			return err
+		}
+		e = cmd.Run()
+	}
+	if e != nil {
 		return fmt.Errorf("The game stopped: %v. See %s.", e, gameLog.Name())
 	}
 	return nil
+}
+
+func installBundledNotices(root, assets string) error {
+	source := filepath.Join(root, "game", "notices.zip")
+	dest := filepath.Join(assets, "notices", "notices.zip")
+	if !regularFile(source) || regularFile(dest) {
+		return nil
+	}
+	if err := os.MkdirAll(filepath.Dir(dest), 0755); err != nil {
+		return err
+	}
+	in, err := os.Open(source)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+	temp, err := os.CreateTemp(filepath.Dir(dest), ".notices-")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(temp.Name())
+	_, err = io.Copy(temp, in)
+	if err = errors.Join(err, temp.Close()); err != nil {
+		return err
+	}
+	return os.Rename(temp.Name(), dest)
 }
 
 // servePods starts the Bunker's pages (Pod Programs) beside the server and
 // writes where they are to STATE, which the game reads when Ctrl+B is pressed:
 // {"url","token"}, or {"error"} when they did not start. The game does not
 // wait for it. The returned function stops the pages.
-func servePods(root, pods, data, assets, token string, control <-chan string, state string) func() {
+func servePods(root, pods, data, assets, token, url, state string, session *playerSession) func() {
 	report := func(answer any) {
 		b, _ := json.Marshal(answer)
 		if os.WriteFile(state+".part", b, 0o600) == nil {
@@ -231,24 +410,30 @@ func servePods(root, pods, data, assets, token string, control <-chan string, st
 		report(map[string]string{"error": text + " See pods.log in the data folder."})
 	}
 	// The master data as the player supplied it, which Pod Programs keeps to start changes from.
-	master := filepath.Join(root, masterName)
+	master := filepath.Join(data, "original-master.bin.e")
+	if _, e := os.Stat(master); e != nil {
+		master = filepath.Join(root, masterName)
+	}
 	if _, e := os.Stat(master); e != nil {
 		master = filepath.Join(assets, "assets", "release", masterName)
-	}
-	url := ""
-	select {
-	case url = <-control:
-	case <-time.After(30 * time.Second):
 	}
 	if url == "" {
 		fail("The Bunker did not start: the server has no control endpoint.")
 		return func() {}
 	}
-	run := exec.Command(filepath.Join(pods, "python", "python.exe"), "-I", "-X", "utf8", filepath.Join(pods, "app", "desktop_runtime.py"),
+	services := filepath.Join(root, "game", "desktop_services.py")
+	if _, e := os.Stat(services); e != nil {
+		services = filepath.Join(pods, "app", "desktop_runtime.py")
+	}
+	run := exec.Command(filepath.Join(pods, "python", "python.exe"), "-I", "-X", "utf8", services,
 		"--data", filepath.Join(data, "server"), "--assets", assets, "--tools", filepath.Join(data, "pods"),
 		"--control", url, "--original-master", master)
+	hideHelperWindow(run)
 	run.Dir = filepath.Join(pods, "app")
 	run.Env = append(os.Environ(), "BUNKER_CONTROL_TOKEN="+token)
+	if session != nil {
+		run.Env = append(run.Env, "REINCOMP_PLAYER_CONTROL="+session.url)
+	}
 	hold, e1 := run.StdinPipe() // closing it stops the pages, also when this program dies
 	out, e2 := run.StdoutPipe()
 	log, e3 := os.Create(filepath.Join(data, "pods.log"))
@@ -264,11 +449,14 @@ func servePods(root, pods, data, assets, token string, control <-chan string, st
 	}
 	go func() {
 		var answer struct{ URL, Token string }
+		if session != nil {
+			defer close(session.editorGone)
+		}
 		line, _ := bufio.NewReader(out).ReadString('\n')
 		if json.Unmarshal([]byte(line), &answer) != nil || answer.URL == "" {
 			fail("The Bunker did not start.")
 		} else {
-			report(map[string]string{"url": answer.URL, "token": answer.Token})
+			report(map[string]string{"url": answer.URL, "token": answer.Token, "theme": readLauncherPreferences(data).Theme})
 		}
 		io.Copy(io.Discard, out)
 	}()
@@ -290,12 +478,7 @@ func servePods(root, pods, data, assets, token string, control <-chan string, st
 // saves keeps or restores the player's save with the server's own commands
 // (bunker-server saves). The backup is the phone app's format, so a save
 // moves between a phone and this computer either way.
-func saves(exportTo, importFrom string) error {
-	self, e := os.Executable()
-	if e != nil {
-		return e
-	}
-	root := filepath.Dir(self)
+func saves(root, exportTo, importFrom string) error {
 	server := filepath.Join(root, "server", "bunker-server.exe")
 	data := filepath.Join(root, "data", "server")
 	arguments := []string{"saves", "export", "-data", data, "-out", exportTo}
@@ -314,29 +497,79 @@ func saves(exportTo, importFrom string) error {
 	return nil
 }
 
-// importFiles puts the player's resource dump and master data where the server
-// reads them, the first time: both are looked for next to this program. The
-// server's own import does the work (bunker-server import).
-func importFiles(root, server, assets string) error {
-	if _, e := os.Stat(filepath.Join(assets, "assets", "revisions", "0")); e == nil {
-		if _, e := os.Stat(filepath.Join(assets, "assets", "release", masterName)); e == nil {
-			return nil
+func regularFile(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && info.Mode().IsRegular()
+}
+
+func resourcesReady(assets string) bool {
+	if !regularFile(filepath.Join(assets, "assets", "release", masterName)) {
+		return false
+	}
+	base := filepath.Join(assets, "assets", "revisions", "0")
+	for _, leaf := range []string{"", "android"} {
+		revision := filepath.Join(base, leaf)
+		bundles, e1 := os.Stat(filepath.Join(revision, "assetbundle"))
+		resources, e2 := os.Stat(filepath.Join(revision, "resources"))
+		if e1 == nil && e2 == nil && bundles.IsDir() && resources.IsDir() && regularFile(filepath.Join(revision, "list.bin")) &&
+			(regularFile(filepath.Join(revision, "info.json")) || regularFile(filepath.Join(base, "info.json"))) {
+			return true
 		}
 	}
+	return false
+}
+
+func locateResources(root, resourceDir string) string {
+	local := filepath.Join(root, "data", "assets")
+	for _, dir := range []string{local, filepath.Join(resourceDir, "data", "assets"), filepath.Join(resourceDir, "assets"), resourceDir} {
+		if resourcesReady(dir) {
+			return dir
+		}
+	}
+	return local
+}
+
+func resourceInputs(resourceDir, root string) (string, string) {
 	first := func(patterns ...string) string {
 		for _, pattern := range patterns {
-			if found, _ := filepath.Glob(filepath.Join(root, pattern)); len(found) > 0 {
+			if found, _ := filepath.Glob(filepath.Join(resourceDir, pattern)); len(found) > 0 {
 				return found[0]
 			}
 		}
 		return ""
 	}
 	dump, master := first("resource_dump*.7z", "resource_dump*.zip"), first(masterName)
-	if dump == "" || master == "" {
+	if dump == "" {
+		// An unambiguously named archive can also sit beside the downloaded EXE.
+		var found []string
+		files, _ := os.ReadDir(resourceDir)
+		for _, file := range files {
+			ext := strings.ToLower(filepath.Ext(file.Name()))
+			if !file.IsDir() && (ext == ".7z" || ext == ".zip") {
+				found = append(found, file.Name())
+			}
+		}
+		if len(found) == 1 {
+			dump = filepath.Join(resourceDir, found[0])
+		}
+	}
+	if packaged := filepath.Join(root, "data", "import-master.bin.e"); regularFile(packaged) {
+		master = packaged
+	}
+	return dump, master
+}
+
+func importArchive(ctx context.Context, server, assets, master, dump string, progress func(string)) error {
+	if !regularFile(dump) || !regularFile(master) {
 		return fmt.Errorf("Put these two files next to this program, then start it again:\n  %s (the master data)\n  resource_dump_android.7z (the resource dump)\nOr pass a folder that already holds the imported game files with -assets.", masterName)
 	}
-	fmt.Println("Importing the game files (once; about 20 GB, several minutes)...")
-	run := exec.Command(server, "import", "-assets", assets, "-master", master, "-dump", dump)
+	progress("Importing " + filepath.Base(dump))
+	args := []string{"import", "-assets", assets, "-dump", dump}
+	if filepath.Clean(master) != filepath.Join(assets, "assets", "release", masterName) {
+		args = append(args, "-master", master)
+	}
+	run := exec.CommandContext(ctx, server, args...)
+	hideHelperWindow(run)
 	out, e := run.StdoutPipe()
 	if e != nil {
 		return e
@@ -353,12 +586,17 @@ func importFiles(root, server, assets string) error {
 			Done, Total int64
 		}
 		if json.Unmarshal(lines.Bytes(), &state) == nil && state.Total > 0 {
-			fmt.Printf("\r  %3d%%", state.Done*100/state.Total)
+			progress(fmt.Sprintf("Importing %s · %d%%", filepath.Base(dump), state.Done*100/state.Total))
 		}
 	}
-	fmt.Println()
 	if e := run.Wait(); e != nil {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
 		return fmt.Errorf("The game files were not imported: %s", strings.TrimSpace(problem.String()))
+	}
+	if !resourcesReady(assets) {
+		return errors.New("The imported resources are missing the Global revision catalog or master data.")
 	}
 	return nil
 }

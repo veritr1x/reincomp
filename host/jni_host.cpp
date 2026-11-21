@@ -345,6 +345,10 @@ void Host::DefineLongMethod(const std::string &owner,const std::string &name,con
   if(!handler)throw std::invalid_argument("missing long handler");
   DefineHandler(owner,name,signature,'J',[handler=std::move(handler)](addr_t object,const MethodArguments &args){return static_cast<addr_t>(handler(object,args));});
 }
+void Host::DefineStaticBooleanMethod(const std::string &owner,const std::string &name,const std::string &signature,std::function<bool(addr_t,const MethodArguments&)> handler){
+  if(!handler)throw std::invalid_argument("missing static boolean handler");
+  DefineHandler(owner,name,signature,'Z',[handler=std::move(handler)](addr_t object,const MethodArguments &args){return handler(object,args)?1:0;},true);
+}
 void Host::DefineStaticIntMethod(const std::string &owner,const std::string &name,const std::string &signature,std::function<int32_t(addr_t,const MethodArguments&)> handler){
   if(!handler)throw std::invalid_argument("missing static int handler");DefineHandler(owner,name,signature,'I',[handler=std::move(handler)](addr_t object,const MethodArguments &args){return static_cast<uint32_t>(handler(object,args));},true);
 }
@@ -1108,8 +1112,8 @@ void Host::InvokeEnv(size_t slot, State &s) {
       FloatResult(s,bits);return;
     }
     case 61: case 62: case 63: {s.gpr.x0.qword=CallObject(lock,a,b,false,{},'V',&s,slot-27);return;}
-    case 114: case 115: case 116: {
-      s.gpr.x0.qword=CallObject(lock,a,b,true,{},'L',&s,slot);return;
+    case 114: case 115: case 116: case 117: case 118: case 119: {
+      s.gpr.x0.qword=CallObject(lock,a,b,true,{},slot>=117?'Z':'L',&s,slot>=117?slot-3:slot);return;
     }
     case 141: case 142: case 143: {s.gpr.x0.qword=CallObject(lock,a,b,true,{},'V',&s,slot-27);return;}
     case 94: case 144: s.gpr.x0.qword = FieldId(a, reinterpret_cast<const char *>(b), reinterpret_cast<const char *>(c), slot == 144); return;

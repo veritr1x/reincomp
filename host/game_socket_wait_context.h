@@ -102,7 +102,7 @@ class GameSocketWaitContext {
     const auto saved=frame+recomp::signal_frame::kMachineOffset+8;Check(saved>=fp&&saved+31*8<=high_,"GPR roots outside original scan range");
     for(unsigned i=0;i<31;++i){uint64_t value;std::memcpy(&value,reinterpret_cast<const uint8_t*>(&interrupted.gpr)+i*16+8,8);Check(Read<uint64_t>(saved+i*8)==value,"physical GPR root differs");}
     const auto vectors_at=frame+recomp::signal_frame::kFpsimdOffset+16;std::array<uint8_t,512>vectors{};Check(vectors_at>=fp&&vectors_at+vectors.size()<=high_,"Q roots outside original scan range");recomp::ReadGuestMemory(vectors.data(),vectors_at,vectors.size());Check(!std::memcmp(vectors.data(),&interrupted.simd,vectors.size()),"physical SIMD roots differ");
-    std::fprintf(stderr,"Game GC socket wait: physical roots token=%#llx flags=%u FP=%#llx actual_high=%#llx GPR=31 Q=32; before original sem_post\n",(unsigned long long)token_,unsigned(main_?6:2),(unsigned long long)fp,(unsigned long long)high_);
+    if(!GameQuietTrace())std::fprintf(stderr,"Game GC socket wait: physical roots token=%#llx flags=%u FP=%#llx actual_high=%#llx GPR=31 Q=32; before original sem_post\n",(unsigned long long)token_,unsigned(main_?6:2),(unsigned long long)fp,(unsigned long long)high_);
   }
   template<class Dispatch>Decision Observe(const Observation&o,Dispatch&&dispatch){
     NativeEnvironment preserve;Check(o.state==&state_&&GetCurrentThreadId()==native_tid_&&recomp::CurrentExecutionState()==&state_,"provider observation has foreign State/thread");

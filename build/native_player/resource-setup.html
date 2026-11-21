@@ -1,0 +1,155 @@
+<!doctype html>
+<html lang="{{ text_language() }}">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Bunker</title>
+<style>{% include "resource-setup.css" %}</style>
+</head>
+{% macro info(label, key) -%}
+<button type="button" class="info" aria-label="{{ t('common.more_information') }} — {{ t(label) }}" data-title="{{ t(label) }}" data-info="{{ t(key) }}"></button>
+{%- endmacro %}
+{% macro heading(key,tip=None) -%}
+<h2 class="section-title">{{ t(key) }}{% if tip %}{{ info(key,tip) }}{% endif %}<i aria-hidden="true"></i></h2>
+{%- endmacro %}
+{% macro option(id,key) -%}
+<button class="option" id="{{ id }}">{{ t(key) }}</button>
+{%- endmacro %}
+<body>
+<main class="terminal">
+<header class="masthead"><div><small>LUNAR TEAR // 127.0.0.1</small><h1>BUNKER</h1></div>
+<button class="outline" id="more" aria-label="{{ t('launcher.main.options') }}" aria-haspopup="dialog">⋮</button></header>
+<section class="update" id="release" aria-label="{{ t('launcher.main.update') }}" hidden><div class="panel">
+<div class="update-line"><span id="release-message"></span><a id="release-notes" target="_blank" rel="noopener">{{ t('launcher.main.whats_new') }} ›</a></div>
+<div class="update-actions"><a class="solid" href="https://veritr1x.github.io/bunker/" target="_blank" rel="noopener">{{ t('launcher.main.web_builder') }}</a>
+<button class="outline" id="later">{{ t('launcher.main.later') }}</button><button class="outline" id="skip">{{ t('launcher.main.skip') }}</button></div></div></section>
+<div class="columns">
+<section class="section system">{{ heading('launcher.main.system') }}<div class="panel">
+<div class="kv"><span class="label">{{ t('launcher.main.game_files') }}</span><span class="chip" id="files"></span>{{ info('launcher.main.game_files','launcher.main.game_files_info') }}<button id="choose" class="outline" aria-label="{{ t('launcher.main.choose_files_hint') }}" disabled>{{ t('launcher.main.choose') }}</button></div>
+<div class="kv"><span class="label">{{ t('launcher.main.lunar_tear') }}</span><span class="chip" id="server"></span></div>
+<div class="kv"><span class="label">{{ t('launcher.main.save') }}</span><span id="save"></span>{{ info('launcher.main.save','launcher.main.save_info') }}</div>
+<div class="kv"><span class="label">{{ t('launcher.main.archive') }}</span><span id="archive-index"></span></div>
+<div id="meter" role="progressbar" aria-label="{{ t('launcher.main.game_files') }}" aria-valuemin="0" aria-valuemax="100" hidden></div><span id="progress-label" hidden></span>
+</div></section>
+<div class="column">
+<section class="section">{{ heading('launcher.main.play') }}<div class="panel"><p id="message" role="status" hidden></p><button class="solid" id="deploy" aria-label="{{ t('launcher.main.deploy_hint') }}" disabled>{{ t('launcher.main.deploy') }} &nbsp;▶</button></div></section>
+<section class="section wide-programs">{{ heading('launcher.main.programs') }}<div class="panel">
+{% for key,route in [('pod_programs','/'),('archive','/bunker/archive')] %}
+<div class="program-row"><a class="program-title" data-program href="{{ route }}" aria-disabled="true">{{ t('launcher.main.'+key) }}</a>{% if loop.first %}{{ info('launcher.main.pod_programs','launcher.main.pod_programs_info') }}{% endif %}<span class="chevron" aria-hidden="true">›</span></div>
+{% endfor %}</div></section>
+{% for key,route in [('pod_programs','/'),('archive','/bunker/archive')] %}
+<section class="section narrow-programs">{{ heading('launcher.main.'+key,'launcher.main.pod_programs_info' if loop.first else None) }}<div class="panel">
+<a class="outline" data-program href="{{ route }}" aria-label="{{ t('launcher.main.open_pods_hint' if loop.first else 'launcher.main.open_archive_hint') }}" aria-disabled="true">{{ t('launcher.main.open') }} &nbsp;›</a></div></section>
+{% endfor %}
+</div></div>
+<footer>END OF TRANSMISSION // GLORY TO MANKIND</footer>
+</main>
+<dialog id="options" aria-label="{{ t('launcher.main.options') }}"><div class="panel"><div class="scroll">
+<section id="service-options" hidden>{{ heading('launcher.main.lunar_tear') }}{{ option('stop','launcher.menu.stop') }}{{ option('check','launcher.menu.check') }}</section>
+{{ heading('launcher.menu.data') }}<p class="note" id="stop-first" hidden>&gt; {{ t('launcher.menu.stop_first') }}</p>
+{{ option('import-master','launcher.menu.import_master') }}{{ option('export-save','launcher.menu.export_save') }}{{ option('import-save','launcher.menu.import_save') }}
+{{ heading('launcher.menu.support') }}{{ option('show-log','launcher.menu.log') }}<a id="export-log" class="option" href="log" download="Lunar Tear.log">{{ t('launcher.menu.export_log') }}</a>
+{{ option('auto-deploy','launcher.menu.auto_deploy_on') }}{{ option('display-theme','launcher.display.title') }}{{ option('updates','launcher.menu.updates_on') }}{{ option('check-updates','launcher.menu.check_updates') }}
+<a class="option" href="/display" data-program aria-disabled="true">{{ t('launcher.menu.app_settings') }}</a>
+<button class="option" data-dialog="help-dialog">{{ t('launcher.menu.help') }}</button><button class="option" data-dialog="about-dialog">{{ t('launcher.menu.about') }}</button>
+</div></div></dialog>
+{% macro close_button() -%}<button class="outline" data-close>{{ t('common.close') }}</button>{%- endmacro %}
+<dialog id="theme-dialog" aria-labelledby="theme-heading"><div class="panel"><div class="scroll"><h2 id="theme-heading">{{ t('launcher.display.title') }}</h2>
+{% for mode in ['system','light','dark'] %}<button class="option" data-theme-choice="{{ mode }}">{{ t('launcher.display.'+mode) }}</button>{% endfor %}{{ close_button() }}</div></div></dialog>
+<dialog id="info-dialog" aria-labelledby="info-title"><div class="panel"><div class="scroll"><h2 id="info-title"></h2><p id="info-text"></p>{{ close_button() }}</div></div></dialog>
+<dialog id="log-dialog"><div class="panel"><div class="scroll"><h2>{{ t('launcher.menu.log') }}</h2><pre></pre>{{ close_button() }}</div></div></dialog>
+<dialog id="help-dialog"><div class="panel"><div class="scroll"><h2>{{ t("launcher.menu.help") }}</h2><p>{{ t("launcher.help.server") }}</p><p>Press Ctrl+B during play to open Pod Programs. Start the EXE with <code>-launcher</code> to return here.</p><a href="https://github.com/veritr1x/bunker#readme" target="_blank" rel="noopener">{{ t("launcher.menu.help") }}</a> {{ close_button() }}</div></div></dialog>
+<dialog id="about-dialog"><div class="panel"><div class="scroll"><h2>Bunker</h2><p>{{ t("launcher.about.version",version=version) }} · Windows</p><p>{{ t("launcher.about.created",author="veritr1x",site="github.com/veritr1x/bunker") }}</p>
+<h3>{{ t("launcher.about.credits") }}</h3>{% for name in ["credit_lunar_tear","credit_lunar_scripts","credit_lunar_base","credit_patcher","credit_threejs"] %}<p>{{ t("launcher.about."+name) }}</p>{% endfor %}<p>{{ t("launcher.about.disclaimer") }}</p>{{ close_button() }}</div></div></dialog>
+<script>
+const el=id=>document.getElementById(id);
+const programLinks=document.querySelectorAll('[data-program]');
+const systemDark=matchMedia('(prefers-color-scheme: dark)');
+let settings, latest='', postponed=false;
+const words={
+{% for key in ['chip.ready','chip.no_files','chip.importing','chip.running','chip.starting','chip.standing_by','chip.waiting_for_files','main.no_save','main.change','main.choose','index.not_built','index.ready','main.choose_files_hint','main.keep_open','menu.auto_deploy_on','menu.auto_deploy_off','menu.updates_on','menu.updates_off','display.light','display.dark','display.system','menu.check_updates'] %}
+  '{{ key }}':{{ t('launcher.'+key)|tojson }},
+{% endfor %}
+  'size.kb':{{ t('launcher.size.kb',n='__N__')|tojson }},
+  'size.mb':{{ t('launcher.size.mb',n='__N__')|tojson }},
+  'menu.display':{{ t('launcher.menu.display',mode='__MODE__')|tojson }},
+  'main.update_available':{{ t('launcher.main.update_available',version='__VERSION__')|tojson }}
+};
+const number=new Intl.NumberFormat(document.documentElement.lang||'en',{maximumFractionDigits:1});
+function detail(text){el('message').textContent=text;el('message').hidden=!text}
+function notice(title,text){el('info-title').textContent=title;el('info-text').textContent=text;el('info-dialog').showModal()}
+function closeOptions(){if(el('options').open)el('options').close()}
+async function update(){
+  const response=await fetch('state',{cache:'no-store'});if(!response.ok)throw Error('Unable to read the launcher state.');
+  const s=await response.json();
+  el('files').textContent=words[s.ready?'chip.ready':s.busy?'chip.importing':'chip.no_files'];
+  el('files').classList.toggle('good',s.ready);
+  el('server').textContent=words[s.running?'chip.running':s.services?'chip.starting':s.ready?'chip.standing_by':'chip.waiting_for_files'];
+  el('server').classList.toggle('good',s.running);
+  const mb=s.saveBytes>=1048576;
+  el('save').textContent=s.saveBytes?'game.db · '+words[mb?'size.mb':'size.kb'].replace('__N__',number.format(mb?s.saveBytes/1048576:Math.round(s.saveBytes/1024))):words['main.no_save'];
+  el('archive-index').textContent=words[s.archiveBytes?'index.ready':'index.not_built'];
+  el('choose').textContent=words[s.ready?'main.change':'main.choose'];el('choose').hidden=s.running;
+  el('choose').disabled=s.busy||s.services;
+  for(const id of ['import-save','import-master'])el(id).disabled=el('choose').disabled;
+  el('export-save').disabled=el('choose').disabled||!s.saveBytes;
+  el('service-options').hidden=!s.running;el('stop-first').hidden=!s.services&&!s.busy;
+  for(const id of ['check','stop'])el(id).disabled=s.busy||s.deployed;
+  el('auto-deploy').textContent=words[s.autoDeploy?'menu.auto_deploy_on':'menu.auto_deploy_off'];
+  el('auto-deploy').disabled=s.busy||s.deployed;
+  el('deploy').disabled=!s.ready||s.busy||s.deployed;
+  for(const link of programLinks)link.setAttribute('aria-disabled',String(el('deploy').disabled));
+  const progress=s.busy&&!s.ready&&s.message.match(/(\d+)%/);
+  el('meter').hidden=el('progress-label').hidden=!progress;
+  if(progress){el('meter').style.setProperty('--progress',progress[0]);el('meter').setAttribute('aria-valuenow',progress[1]);el('progress-label').textContent=s.message}
+  detail(progress?words['main.keep_open']:s.message||(s.ready?'':words['main.choose_files_hint']));
+}
+async function act(id,action=id){
+  if(el(id))el(id).disabled=true;
+  try{const r=await fetch(action,{method:'POST'});if(!r.ok)throw Error(await r.text());await update()}catch(error){detail(error.message)}
+}
+el('more').onclick=()=>el('options').showModal();
+for(const d of document.querySelectorAll('dialog')){
+  d.onclick=e=>{if(e.target===d)d.close()};
+  for(const b of d.querySelectorAll('[data-close]'))b.onclick=()=>d.close();
+}
+for(const b of document.querySelectorAll('[data-info]'))b.onclick=()=>notice(b.dataset.title,b.dataset.info);
+for(const b of document.querySelectorAll('[data-dialog]'))b.onclick=()=>{closeOptions();el(b.dataset.dialog).showModal()};
+for(const id of ['choose','deploy','auto-deploy','export-save','import-master','check','stop'])el(id).onclick=()=>{closeOptions();act(id)};
+el('import-save').onclick=()=>{closeOptions();if(confirm({{ t('launcher.save_import.message')|tojson }}))act('import-save')};
+el('export-log').onclick=closeOptions;
+for(const a of programLinks)a.onclick=e=>{e.preventDefault();if(a.getAttribute('aria-disabled')==='false'){closeOptions();act(null,'program?path='+encodeURIComponent(a.pathname))}};
+el('show-log').onclick=async()=>{closeOptions();try{el('log-dialog').querySelector('pre').textContent=await(await fetch('log')).text();el('log-dialog').showModal()}catch(e){detail(e.message)}};
+function setTheme(){const mode=settings?.theme||'system';document.documentElement.dataset.theme=mode==='system'?(systemDark.matches?'dark':'light'):mode}
+setTheme();systemDark.addEventListener('change',setTheme);
+async function prefs(changes){
+  const init=changes?{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(changes)}:{};
+  const r=await fetch('preferences',init);if(!r.ok)throw Error(await r.text());
+  settings=await r.json();setTheme();
+  el('display-theme').textContent=words['menu.display'].replace('__MODE__',words['display.'+settings.theme]);
+  for(const b of document.querySelectorAll('[data-theme-choice]'))b.setAttribute('aria-pressed',String(b.dataset.themeChoice===settings.theme));
+  el('updates').textContent=words[settings.updates?'menu.updates_on':'menu.updates_off'];
+}
+el('display-theme').onclick=()=>{closeOptions();el('theme-dialog').showModal()};
+for(const b of document.querySelectorAll('[data-theme-choice]'))b.onclick=()=>{el('theme-dialog').close();prefs({theme:b.dataset.themeChoice}).catch(e=>detail(e.message))};
+el('updates').onclick=async()=>{closeOptions();try{await prefs({updates:!settings.updates});if(settings.updates)await checkUpdate(false);else el('release').hidden=true}catch(e){detail(e.message)}};
+async function checkUpdate(manual){
+  try{
+    const r=await fetch('update');if(!r.ok)throw Error(await r.text());
+    const {version}=await r.json(),current={{ version|tojson }};
+    if(version.localeCompare(current,undefined,{numeric:true})<=0){
+      el('release').hidden=true;if(manual)notice(words['menu.check_updates'],'Bunker '+current+' is up to date.');return;
+    }
+    latest=version;
+    if(manual){postponed=false;if(settings.skipped)await prefs({skipped:''})}
+    el('release-message').textContent=words['main.update_available'].replace('__VERSION__',version);
+    el('release-notes').href='https://github.com/veritr1x/bunker/releases/tag/v'+encodeURIComponent(version);
+    el('release').hidden=postponed||settings.skipped===latest;
+  }catch(e){if(manual)notice(words['menu.check_updates'],e.message)}
+}
+el('check-updates').onclick=()=>{closeOptions();checkUpdate(true)};
+el('later').onclick=()=>{postponed=true;el('release').hidden=true};
+el('skip').onclick=async()=>{try{await prefs({skipped:latest});el('release').hidden=true}catch(e){detail(e.message)}};
+prefs().then(()=>{if(settings.updates)checkUpdate(false)}).catch(e=>detail(e.message));
+(async function poll(){try{await update()}catch(e){detail(e.message)}finally{setTimeout(poll,650)}})();
+</script>
+</body></html>

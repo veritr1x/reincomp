@@ -18,6 +18,7 @@
 #include "../runtime/fast_tls.h"
 #include <mutex>
 #include <stdexcept>
+#include <system_error>
 #include <vector>
 #include <windows.h>
 #include <process.h>
@@ -28,7 +29,7 @@ namespace {
 // NDK public layouts/initializers are independently checked by prepare_pthreads.
 // Private attr flag encodings match Bionic android-13.0.0_r1 pthread_internal.h
 // (DETACHED=1), pthread_mutex.cpp (type low nibble), pthread_cond.cpp (clock bit1).
-constexpr int kPerm=1, kNoThread=3, kAgain=11, kNoMemory=12, kBusy=16, kInvalid=22,
+constexpr int kPerm=1, kNoThread=3, kAgain=11, kBusy=16, kInvalid=22,
               kRange=34, kDeadlock=35, kNoSys=38, kNotSupported=95, kTimedOut=110;
 constexpr uint64_t kStackSize=1<<20, kStackMin=16384;
 constexpr uint32_t kDead=0xffffffff;
@@ -118,6 +119,10 @@ class ObjectLock {
   void unlock() noexcept { ReleaseSRWLockExclusive(&lock_); }
   void lock_shared() noexcept { AcquireSRWLockShared(&lock_); }
   void unlock_shared() noexcept { ReleaseSRWLockShared(&lock_); }
+  void wait(CONDITION_VARIABLE &condition) {
+    if(!SleepConditionVariableSRW(&condition,&lock_,INFINITE,0))
+      throw std::system_error(GetLastError(),std::system_category(),"waiting on a guest mutex");
+  }
  private:
   SRWLOCK lock_ = SRWLOCK_INIT;
 };
@@ -132,11 +137,24 @@ constexpr recomp::ThreadLocalRef<void *, CurrentThreadTag> current_thread{};
 }  // namespace
 struct Pthreads::Impl {
   struct Waiter { std::shared_ptr<const WaitWake> wake; bool signaled=false; };
-  struct Mutex { std::mutex lock; std::condition_variable cv; uint64_t owner=0; uint32_t depth=0; unsigned waiters=0; int type=0; bool dead=false; std::vector<std::shared_ptr<Waiter>> channels; };
+  struct Mutex {
+    ObjectLock lock;
+    CONDITION_VARIABLE condition=CONDITION_VARIABLE_INIT;
+    uint64_t owner=0;
+    uint32_t depth=0;
+    unsigned waiters=0;
+    int type=0;
+    bool dead=false;
+    std::vector<std::shared_ptr<Waiter>> channels;
+    void WaitUntilAvailable(){while(owner&&!dead)lock.wait(condition);}
+    void WakeOne(){if(waiters)WakeConditionVariable(&condition);}
+  };
   struct Cond { std::mutex lock; std::condition_variable cv; unsigned waiters=0; uint64_t sequence=0; int clock=0; bool dead=false; std::vector<std::shared_ptr<Waiter>> channels; };
   struct OnceState { std::mutex lock; std::condition_variable cv; uint64_t owner=0; bool done=false; };
   struct Rw { std::mutex lock; std::condition_variable cv; uint64_t writer=0; std::map<uint64_t,unsigned> readers; unsigned waiters=0; bool dead=false; std::vector<std::shared_ptr<Waiter>> channels; };
-  struct Key { bool live=false; uint64_t generation=0; addr_t destructor=0; };
+  static constexpr int32_t kKeyCount = 128;
+  // Odd generations are live. Reusing an index invalidates old thread values.
+  struct Key { std::atomic<uint64_t> generation{0}; addr_t destructor=0; };
   struct Value { uint64_t generation=0, value=0; };
   struct Thread {
     Impl *host=nullptr; uint64_t id=0; HANDLE handle=nullptr; unsigned native_id=0;
@@ -147,7 +165,7 @@ struct Pthreads::Impl {
     WorkerLease lease;
     void *stack_allocation=nullptr; alignas(16) uint8_t tls[256]{};
     addr_t stack_base=0; uint64_t stack_size=0,guard_size=0;
-    std::map<int32_t,Value> values;
+    std::array<Value,kKeyCount> values{};  // Only accessed by this thread.
     std::vector<std::pair<int32_t*,OnceState*>> active_once;
     recomp::ThreadExitDomain terminal_exit;
     ~Thread(){if(stack_allocation){recomp::InvalidateGuestMemory(stack_base,stack_size);VirtualFree(stack_allocation,0,MEM_RELEASE);}recomp::InvalidateGuestMemory(reinterpret_cast<addr_t>(tls),sizeof(tls));if(handle)CloseHandle(handle);}
@@ -169,7 +187,7 @@ struct Pthreads::Impl {
   std::unordered_map<void*,std::shared_ptr<Cond>> conditions;
   std::map<void*,std::shared_ptr<OnceState>> once;
   std::unordered_map<void*,std::shared_ptr<Rw>> rwlocks;
-  std::array<Key,128> keys{};
+  std::array<Key,kKeyCount> keys{};
   Impl(recomp::Runtime &r,std::function<bool(addr_t)> t,addr_t m,std::function<bool(addr_t)> d)
       :runtime(r),translated(std::move(t)),tls_callable(d?std::move(d):translated),markers(m){}
   static void Notify(const std::vector<std::shared_ptr<Waiter>> &waiters){
@@ -249,14 +267,18 @@ struct Pthreads::Impl {
     if(count>8) throw std::invalid_argument("too many pthread callback arguments");
     for(size_t i=0;i<count;++i)(s.gpr.*regs[i]).qword=args[i];
     if(s0_in)std::memcpy(&s.simd.v[0],s0_in,4);
-    s.gpr.pc.qword=entry;s.gpr.x30.qword=0xfeedffff;
+    // The Android unwinder reads instructions at an unrecognized return PC to
+    // detect signal frames. Give the host boundary a readable, aligned address.
+    alignas(16) static constexpr uint32_t boundary_words[]={0xd503201f,0xd503201f,0xd503201f,0xd503201f};
+    const addr_t host_return=reinterpret_cast<addr_t>(&boundary_words[1]);
+    s.gpr.pc.qword=entry;s.gpr.x30.qword=host_return;
     auto *previous=t.active;t.active=&s;
     try {if(terminal_frame)runtime.RunWithThreadExit(s,entry,t.terminal_exit);else runtime.Run(s,entry);} catch(...) {t.active=previous;throw;}
     t.active=previous;
     // A terminal outcome has no guest return PC/SP. The worker shell consumes
     // its real exit value only after every owned Runtime scope has retired.
     if(terminal_frame&&t.terminal_exit.Pending())return 0;
-    if(s.gpr.pc.qword!=0xfeedffff||s.gpr.sp.qword!=saved_sp) throw std::runtime_error("pthread guest callback corrupted PC/SP");
+    if(s.gpr.pc.qword!=host_return||s.gpr.sp.qword!=saved_sp) throw std::runtime_error("pthread guest callback corrupted PC/SP");
     if(s0_out)std::memcpy(s0_out,&s.simd.v[0],4);
     return s.gpr.x0.qword;
   }
@@ -272,18 +294,20 @@ struct Pthreads::Impl {
     // POSIX clears the value before a destructor; it may install another value.
     for(unsigned round=0;round<4;++round) {
       bool ran=false;
-      for(int32_t i=0;i<128;++i) {
+      for(int32_t i=0;i<kKeyCount;++i) {
         addr_t callback=0,value=0;
-        { std::lock_guard guard(registry);auto v=t.values.find(i);
-          if(v!=t.values.end()&&keys[i].live&&v->second.generation==keys[i].generation&&v->second.value&&keys[i].destructor) {
-            callback=keys[i].destructor;value=v->second.value;v->second.value=0;
+        auto &slot=t.values[i];
+        if(!slot.value)continue;
+        { std::lock_guard guard(registry);
+          if(slot.generation==keys[i].generation.load(std::memory_order_relaxed)&&keys[i].destructor) {
+            callback=keys[i].destructor;value=slot.value;slot.value=0;
           }
         }
         if(callback) {ran=true;Run(t,callback,&value,1,true);}
       }
       if(!ran) break;
     }
-    t.values.clear();
+    t.values.fill({});
     if(t.hooks)Retire(t,WorkerRetirement::normal);
     {std::lock_guard guard(registry);t.result=result;t.complete=true;t.active=nullptr;}
   }
@@ -385,6 +409,7 @@ int Pthreads::Prctl(int32_t option,const char *name){
 }
 uint64_t Pthreads::Run(addr_t e,std::initializer_list<addr_t> a){return impl_->Run(impl_->Current(),e,a.begin(),a.size());}
 uint64_t Pthreads::Run(addr_t e,const std::vector<addr_t> &a){return impl_->Run(impl_->Current(),e,a.data(),a.size());}
+uint64_t Pthreads::Run(addr_t e,const addr_t *a,size_t count){return impl_->Run(impl_->Current(),e,a,count);}
 uint64_t Pthreads::RunFloat(addr_t e,const std::vector<addr_t> &a,const float *s0_in,float *s0_out){
   uint32_t in=0,out=0;if(s0_in)std::memcpy(&in,s0_in,4);
   const auto r=impl_->Run(impl_->Current(),e,a.data(),a.size(),false,false,s0_in?&in:nullptr,&out);
@@ -498,13 +523,29 @@ int Pthreads::MutexLock(void *p,bool attempt){
       }
     }
   }
-auto m=impl_->GetMutex(p);if(!m)return kInvalid;auto id=Self();std::unique_lock lock(m->lock);if(m->dead)return kInvalid;if(m->owner==id&&m->type==1){if(m->depth==UINT32_MAX)return kAgain;++m->depth;return 0;}if(m->owner&&attempt)return kBusy;if(m->owner==id&&m->type==2)return kDeadlock;++m->waiters;m->cv.wait(lock,[&]{return !m->owner||m->dead;});--m->waiters;if(m->dead)return kInvalid;m->owner=id;m->depth=1;return 0;}
+  auto m=impl_->GetMutex(p);
+  if(!m)return kInvalid;
+  const auto id=Self();
+  std::lock_guard lock(m->lock);
+  if(m->dead)return kInvalid;
+  if(m->owner==id&&m->type==1){if(m->depth==UINT32_MAX)return kAgain;++m->depth;return 0;}
+  if(m->owner&&attempt)return kBusy;
+  if(m->owner==id&&m->type==2)return kDeadlock;
+  if(m->owner){
+    ++m->waiters;
+    m->WaitUntilAvailable();
+    --m->waiters;
+    if(m->dead)return kInvalid;
+  }
+  m->owner=id;m->depth=1;
+  return 0;
+}
 int Pthreads::MutexUnlock(void *p){
   auto m=impl_->GetMutex(p);if(!m)return kInvalid;auto id=Self();
   std::vector<std::shared_ptr<Impl::Waiter>> notify;
   {std::lock_guard lock(m->lock);if(m->dead)return kInvalid;if(m->owner!=id)return kPerm;
     if(m->depth==1)notify=m->channels; // Allocate before changing ownership.
-    if(--m->depth==0){m->owner=0;m->cv.notify_one();}}
+    if(--m->depth==0){m->owner=0;m->WakeOne();}}
   Impl::Notify(notify);return 0;
 }
 int Pthreads::CondAttrInit(int64_t *a){if(!a)return kInvalid;WriteWire(a,int64_t(0));return 0;}
@@ -543,7 +584,7 @@ int Pthreads::CondWait(void *p,void *mp,const AndroidTimespec *deadline){
       notify=m->channels;c->channels.push_back(ticket);++c->waiters;
       // Count the released condition waiter against destruction of its pinned
       // mutex, including the entire callback and reacquisition interval.
-      ++m->waiters;m->owner=0;m->depth=0;m->cv.notify_one();}
+      ++m->waiters;m->owner=0;m->depth=0;m->WakeOne();}
     auto context=WaitContext{id,thread.active,p,mp,original_deadline,WaitPhase::ConditionReleased};
     std::exception_ptr failure;int result=0;
     try{
@@ -584,12 +625,12 @@ int Pthreads::CondWait(void *p,void *mp,const AndroidTimespec *deadline){
           }
           m->owner=id;m->depth=1;break;
         }
-        if(failure){m->cv.wait(lock,[&]{return !m->owner;});continue;}
+        if(failure){m->WaitUntilAvailable();continue;}
         lock.unlock();hooks->checkpoint(context);ticket->wake->wait(generation,1000000000);
       }
     }catch(...){
       if(!failure)failure=std::current_exception();
-      std::unique_lock lock(m->lock);m->cv.wait(lock,[&]{return !m->owner;});m->owner=id;m->depth=1;
+      std::unique_lock lock(m->lock);m->WaitUntilAvailable();m->owner=id;m->depth=1;
     }
     {std::lock_guard lock(m->lock);if(enrolled){auto it=std::find(m->channels.begin(),m->channels.end(),ticket);m->channels.erase(it);}--m->waiters;}
     if(failure)std::rethrow_exception(failure);
@@ -626,10 +667,44 @@ int Pthreads::Once(int32_t *p,addr_t callback){
   if(t.terminal_exit.Pending())return 0;
   lock.lock();t.active_once.pop_back();o->owner=0;o->done=true;SetWord(p,2);o->cv.notify_all();return 0;
 }
-int Pthreads::KeyCreate(int32_t *out,addr_t callback){if(!out||(callback&&!impl_->tls_callable(callback)))return kInvalid;std::lock_guard lock(impl_->registry);for(int32_t i=0;i<128;++i)if(!impl_->keys[i].live){auto &k=impl_->keys[i];k.live=true;++k.generation;k.destructor=callback;WriteWire(out,i);return 0;}return kAgain;}
-int Pthreads::KeyDelete(int32_t key){if(key<0||key>=128)return kInvalid;std::lock_guard lock(impl_->registry);auto &k=impl_->keys[key];if(!k.live)return kInvalid;k.live=false;k.destructor=0;return 0;}
-int Pthreads::SetSpecific(int32_t key,uint64_t value){if(key<0||key>=128)return kInvalid;auto &t=impl_->Current();std::lock_guard lock(impl_->registry);auto &k=impl_->keys[key];if(!k.live)return kInvalid;try{t.values[key]={k.generation,value};}catch(const std::bad_alloc&){return kNoMemory;}return 0;}
-uint64_t Pthreads::GetSpecific(int32_t key){if(key<0||key>=128)return 0;auto &t=impl_->Current();std::lock_guard lock(impl_->registry);auto &k=impl_->keys[key];auto it=t.values.find(key);return k.live&&it!=t.values.end()&&it->second.generation==k.generation?it->second.value:0;}
+int Pthreads::KeyCreate(int32_t *out,addr_t callback) {
+  if(!out||(callback&&!impl_->tls_callable(callback)))return kInvalid;
+  std::lock_guard lock(impl_->registry);
+  for(int32_t i=0;i<Impl::kKeyCount;++i) {
+    auto &key=impl_->keys[i];
+    const auto generation=key.generation.load(std::memory_order_relaxed);
+    if(generation&1)continue;
+    WriteWire(out,i);
+    key.destructor=callback;
+    key.generation.store(generation+1,std::memory_order_release);
+    return 0;
+  }
+  return kAgain;
+}
+int Pthreads::KeyDelete(int32_t key) {
+  if(key<0||key>=Impl::kKeyCount)return kInvalid;
+  std::lock_guard lock(impl_->registry);
+  auto &entry=impl_->keys[key];
+  const auto generation=entry.generation.load(std::memory_order_relaxed);
+  if(!(generation&1))return kInvalid;
+  entry.destructor=0;
+  entry.generation.store(generation+1,std::memory_order_release);
+  return 0;
+}
+int Pthreads::SetSpecific(int32_t key,uint64_t value) {
+  if(key<0||key>=Impl::kKeyCount)return kInvalid;
+  auto &thread=impl_->Current();
+  const auto generation=impl_->keys[key].generation.load(std::memory_order_acquire);
+  if(!(generation&1))return kInvalid;
+  thread.values[key]={generation,value};
+  return 0;
+}
+uint64_t Pthreads::GetSpecific(int32_t key) {
+  if(key<0||key>=Impl::kKeyCount)return 0;
+  const auto &slot=impl_->Current().values[key];
+  const auto generation=impl_->keys[key].generation.load(std::memory_order_acquire);
+  return slot.generation==generation?slot.value:0;
+}
 int Pthreads::RwInit(void *p,const int64_t *a){if(!p)return kInvalid;if(a&&ReadWire(a))return kNotSupported;std::lock_guard lock(impl_->objects);if(impl_->rwlocks.count(p))return kBusy;InitializeOpaque(p,56);impl_->rwlocks.emplace(p,std::make_shared<Impl::Rw>());return 0;}
 int Pthreads::RwDestroy(void *p){auto r=impl_->GetRw(p);if(!r)return kInvalid;std::lock_guard lock(r->lock);if(r->dead)return kInvalid;if(r->writer||!r->readers.empty()||r->waiters)return kBusy;r->dead=true;{std::lock_guard guard(impl_->objects);impl_->rwlocks.erase(p);SetWord(p,kDead);}return 0;}
 int Pthreads::RwLock(void *p,bool write){
