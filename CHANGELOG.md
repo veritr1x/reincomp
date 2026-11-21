@@ -3,7 +3,9 @@
 What changed, newest first, by date and area. A release's heading comes
 above the dated sections it holds.
 
-## 0.2.0
+## 0.2.0 (2026-11-21)
+
+- Fixed a Windows summon freeze between the second and third rewards of a ten-pull.
 
 - Build the portable Windows player from the original Global APK and April
   2024 master data with `python build/portable.py`. The build regenerates the

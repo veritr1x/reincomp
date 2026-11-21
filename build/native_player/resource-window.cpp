@@ -26,7 +26,7 @@ bool fullscreen{};
 void fit(HWND window) {
     RECT r{};
     GetClientRect(window, &r);
-    if (child && IsWindow(child)) MoveWindow(child, 0, 0, r.right, r.bottom, TRUE);
+    if (child && IsWindow(child)) PostMessageW(child,WM_APP+0x370,0,0);
     else if (page) page->PageFrame(0, 0, r.right, r.bottom, r.right, r.bottom);
 }
 
@@ -63,8 +63,8 @@ void attach(HWND window) {
             dashboard.reset();
             if (page) { page->Visible(false); page.reset(); }
             fit(window);
-            ShowWindow(w,SW_SHOW);
-            SetFocus(w);
+            ShowWindowAsync(w,SW_SHOW);
+            PostMessageW(w,WM_APP+0x36f,0,0);
             KillTimer(window,1);
             return;
         }
@@ -120,7 +120,7 @@ LRESULT CALLBACK events(HWND w,UINT message,WPARAM wp,LPARAM lp) {
     }
     case player: playerPid=DWORD(wp); child=nullptr; SetTimer(w,1,50,nullptr); return 0;
     case WM_TIMER: if (wp==1 && playerPid) attach(w); return 0;
-    case WM_SETFOCUS: if (child) SetFocus(child); return 0;
+    case WM_SETFOCUS: if (child) PostMessageW(child,WM_APP+0x36f,0,0); return 0;
     case WM_DPICHANGED: {
         if (!fullscreen) {
             const auto *target=reinterpret_cast<const RECT *>(lp);

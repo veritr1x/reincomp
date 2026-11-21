@@ -7,6 +7,7 @@ import time
 import zlib
 
 sys.dont_write_bytecode = True
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 if extra_packages := os.environ.get('REINCOMP_ASSET_PYTHON'):
     sys.path.append(extra_packages)
 import UnityPy
@@ -138,31 +139,39 @@ def request_batches(folder, stop):
 
 def serve(folder, stop):
     folder.mkdir(exist_ok=True)
-    for pending in request_batches(folder, stop):
+    # The cache can hold thousands of converted files. Watch only the small
+    # queue, including requests that arrived before the converter started.
+    inbox = folder / 'pending'
+    inbox.mkdir(exist_ok=True)
+    for pending in request_batches(inbox, stop):
         for request in pending:
-            destination = request.with_suffix('.winbundle')
-            failure = request.with_suffix('.error')
+            destination = folder / (request.stem + '.winbundle')
+            failure = destination.with_suffix('.error')
             try:
                 if failure.exists():
                     # Earlier players cached brief Windows sharing violations as permanent failures.
                     if not retry_shared_file(failure.read_bytes).startswith(b'PermissionError:'):
+                        retry_shared_file(request.unlink)
                         continue
                     retry_shared_file(failure.unlink)
                 if destination.exists():
-                    retry_shared_file(request.replace, request.with_suffix('.source'))
+                    retry_shared_file(request.unlink)
                     continue
                 digest, crc = request.stem.split('-')
                 raw = retry_shared_file(request.read_bytes)
                 if hashlib.sha256(raw).hexdigest() != digest:
                     raise ValueError('Input stream digest differs')
                 out = convert_bundle(raw, int(crc, 16))
-                temporary = request.with_suffix('.writing')
+                temporary = destination.with_suffix('.writing')
                 retry_shared_file(temporary.write_bytes, out)
                 retry_shared_file(temporary.replace, destination)
-                retry_shared_file(request.replace, request.with_suffix('.source'))
+                retry_shared_file(request.unlink)
             except Exception as error:
                 if request.exists():
                     retry_shared_file(failure.write_text, f'{type(error).__name__}: {error}')
+                    # Keeping a failed request in the watch queue makes every
+                    # later load revisit it. The error remains in the cache.
+                    retry_shared_file(request.unlink)
 
 
 def retry_shared_file(operation, *args):
@@ -175,3 +184,21 @@ def retry_shared_file(operation, *args):
             if time.monotonic() >= deadline:
                 raise
             time.sleep(0.05)
+
+
+if __name__ == '__main__':
+    import threading
+    import lz4.block
+    from UnityPy.enums.BundleFile import CompressionFlags
+    from UnityPy.helpers import CompressionHelper
+
+    # UnityPy defaults to high-compression search even for ordinary LZ4.
+    # The private runtime cache is decoded by Unity's same LZ4 reader.
+    CompressionHelper.COMPRESSION_MAP[CompressionFlags.LZ4] = (
+        lambda data: lz4.block.compress(data, mode='fast', store_size=False))
+    stop = threading.Event()
+    def stop_on_parent_exit():
+        sys.stdin.buffer.read()
+        stop.set()
+    threading.Thread(target=stop_on_parent_exit, daemon=True).start()
+    serve(Path(sys.argv[1]) / CACHE_DIRECTORY, stop)

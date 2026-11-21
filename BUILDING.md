@@ -337,12 +337,17 @@ The native build also skips construction of an unused diagnostic string in
 its corners and updates the actor through the original navigation code.
 The story timing trace includes the elapsed time of each path start.
 
-To rebuild the native DLLs, close the game and run
-`.\build\native_player\rebuild.ps1`. It reuses the local Unity 2019.4.29f1
-Windows player, callback inventory and lifted game objects from the prepared
-build. Rebuilding the path method uses the prepared Remill lifter, poll
-instrumenter and LLVM 18 toolchain. The game data and saves stay in the local
-installation.
+To rebuild the native DLLs for the portable player, use the
+`build/portable.py` command above with a new output directory. To replay a
+checkpoint in that build, pass its EXE and a Bunker save from the desired
+scene. For example, this command loads a saved 3D field in fullscreen.
+
+```powershell
+.\build\replay_checkpoint.ps1 3d -Install 'D:\reincomp-build\Nier Reincarnation.exe' -SaveArchive 'D:\saves\bridge.zip' -Fullscreen -Play
+```
+
+Use `2d` and a storybook save for a 2D scene. Importing a checkpoint replaces
+the test installation's active save through Bunker's save importer.
 
 For an existing converted Octo cache, run the prepared
 `warm_desktop_bundles.py --index-only` with its recorded Python interpreter.

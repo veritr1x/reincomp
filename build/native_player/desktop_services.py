@@ -19,7 +19,6 @@ from fastapi.responses import JSONResponse, RedirectResponse, PlainTextResponse
 from starlette.concurrency import run_in_threadpool
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from desktop_bundles import CACHE_DIRECTORY, serve
 import desktop_display
 
 
@@ -111,13 +110,21 @@ def main():
             return response
         return app
     android_runtime.create_app = app_with_archive
-    stop = threading.Event()
-    worker = threading.Thread(target=serve, args=(data/CACHE_DIRECTORY, stop), daemon=True)
-    worker.start()
+    # Unity can need conversions while the editor is building its name tables.
+    # Give the converter its own interpreter so those jobs do not share the GIL.
+    worker = subprocess.Popen([sys.executable, '-I', '-B', '-X', 'utf8',
+                               str(Path(__file__).with_name('desktop_bundles.py')), str(data)],
+                              stdin=subprocess.PIPE, stdout=subprocess.DEVNULL,
+                              creationflags=subprocess.CREATE_NO_WINDOW)
     try:
         desktop_runtime.main()
     finally:
-        stop.set()
+        worker.stdin.close()
+        try:
+            worker.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            worker.terminate()
+            worker.wait()
         android_archive.stop()
 
 if __name__ == '__main__':

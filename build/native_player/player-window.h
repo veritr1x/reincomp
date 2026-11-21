@@ -13,6 +13,21 @@ static std::atomic<HHOOK> setupHook;
 static std::atomic<uint32_t> pendingResolution;
 
 static LRESULT CALLBACK events(HWND window,UINT message,WPARAM w,LPARAM l,UINT_PTR id,DWORD_PTR){
+    if(message==WM_APP+0x370){
+        RECT client{};
+        if(auto parent=GetParent(window); parent && GetClientRect(parent,&client))
+            SetWindowPos(window,nullptr,0,0,client.right,client.bottom,SWP_NOZORDER|SWP_NOACTIVATE);
+        return 0;
+    }
+    if(message==WM_APP+0x36f){
+        // Activation can reach the launcher while Unity is loading. Transfer
+        // focus on Unity's thread only if the launcher still owns focus.
+        auto parent=GetParent(window);
+        auto focused=GetFocus();
+        if(parent && GetForegroundWindow()==GetAncestor(window,GA_ROOT) && (!focused || focused==parent))
+            SetFocus(window);
+        return 0;
+    }
     if(message==WM_SYSKEYDOWN && w==VK_RETURN && (GetWindowLongPtrW(window,GWL_STYLE)&WS_CHILD)){
         if(!(l&(LPARAM(1)<<30)))PostMessageW(GetParent(window),WM_APP+104,0,0);
         return 0;

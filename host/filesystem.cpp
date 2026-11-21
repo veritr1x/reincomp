@@ -12,6 +12,7 @@
 #include <io.h>
 #include <map>
 #include <mutex>
+#include <shared_mutex>
 #include <stdexcept>
 #include <thread>
 #include <utility>
@@ -209,6 +210,9 @@ struct FileSystem::Impl {
   std::shared_ptr<GuestDescriptors> descriptor_table=std::make_shared<GuestDescriptors>();
   std::recursive_mutex &mutex=descriptor_table->mutex;
   std::vector<Mount> mounts;
+  // Opening and statting assets can block in the filesystem. Keep the guest
+  // namespace stable without holding the descriptor table during those calls.
+  std::shared_mutex namespace_mutex;
   std::map<int,std::shared_ptr<GuestDescriptor>> &descriptors=descriptor_table->entries;
   std::map<addr_t, std::shared_ptr<Stream>> streams;
   std::map<addr_t, std::shared_ptr<Directory>> directories;
@@ -218,6 +222,7 @@ struct FileSystem::Impl {
   std::map<uint64_t, int32_t> errors;
   // Host directory -> canonical form, for existing directories (see Resolve).
   std::map<std::wstring, fs::path> canonical_directories;
+  std::mutex canonical_mutex;
   std::string cwd = "/";
   int64_t next_descriptor = 1000;
   addr_t next_stream = 0x7ff700000000ULL, marker_base;
@@ -317,19 +322,26 @@ struct FileSystem::Impl {
       // loading screen stats thousands of files. The parent's canonical form
       // is cached: guests cannot create links, and rename/rmdir clear it.
       auto parent = result.parent_path();
-      auto cached = canonical_directories.find(parent.native());
-      if (cached == canonical_directories.end()) {
+      fs::path parent_canonical;
+      {
+        std::lock_guard cache(canonical_mutex);
+        auto cached = canonical_directories.find(parent.native());
+        if (cached != canonical_directories.end()) parent_canonical = cached->second;
+      }
+      if (parent_canonical.empty()) {
         auto value = fs::weakly_canonical(parent, error);
         if (error) { Error(GuestWinError(error.value())); return false; }
         const auto parent_attributes = GetFileAttributesW(parent.c_str());
         if (parent_attributes == INVALID_FILE_ATTRIBUTES || !(parent_attributes & FILE_ATTRIBUTE_DIRECTORY)) {
           canonical = fs::weakly_canonical(result, error);  // absent or non-directory parent: uncached
         } else {
+          parent_canonical = std::move(value);
+          std::lock_guard cache(canonical_mutex);
           if (canonical_directories.size() > 65536) canonical_directories.clear();
-          cached = canonical_directories.emplace(parent.native(), std::move(value)).first;
+          canonical_directories.emplace(parent.native(), parent_canonical);
         }
       }
-      if (cached != canonical_directories.end()) canonical = cached->second / result.filename();
+      if (!parent_canonical.empty()) canonical = parent_canonical / result.filename();
     } else {
       canonical = fs::weakly_canonical(result, error);
     }
@@ -352,6 +364,7 @@ struct FileSystem::Impl {
     recomp::WriteGuestMemory(reinterpret_cast<addr_t>(output),&value,sizeof(value));return true;
   }
   int Remove(const char *path,bool directory) {
+    std::unique_lock names(namespace_mutex);
     std::lock_guard lock(mutex);
     if(!path){Error(14);return -1;}
     std::string snapshot;
@@ -420,6 +433,7 @@ struct FileSystem::Impl {
 FileSystem::FileSystem(addr_t base) : impl_(std::make_unique<Impl>(base)) { if (base % 8) throw std::invalid_argument("file marker base must be aligned"); }
 FileSystem::~FileSystem() = default;
 void FileSystem::MountFile(const std::string &guest, const fs::path &host, bool writable) {
+  std::unique_lock names(impl_->namespace_mutex);
   std::lock_guard lock(impl_->mutex);
   auto normalized = impl_->Normalize(guest);
   if (normalized.empty() || guest.front() != '/' || !fs::is_regular_file(host)) throw std::invalid_argument("invalid file mount");
@@ -427,6 +441,7 @@ void FileSystem::MountFile(const std::string &guest, const fs::path &host, bool 
   impl_->mounts.push_back({normalized, fs::canonical(host), false, writable, impl_->mounts.size() + 1});
 }
 void FileSystem::MountDirectory(const std::string &guest, const fs::path &host, bool writable) {
+  std::unique_lock names(impl_->namespace_mutex);
   std::lock_guard lock(impl_->mutex);
   auto normalized = impl_->Normalize(guest);
   if (normalized.empty() || guest.front() != '/' || !fs::is_directory(host)) throw std::invalid_argument("invalid directory mount");
@@ -434,6 +449,7 @@ void FileSystem::MountDirectory(const std::string &guest, const fs::path &host, 
   impl_->mounts.push_back({normalized, fs::canonical(host), true, writable, impl_->mounts.size() + 1});
 }
 void FileSystem::SetWorkingDirectory(const std::string &guest) {
+  std::unique_lock names(impl_->namespace_mutex);
   std::lock_guard lock(impl_->mutex); fs::path path; const Impl::Mount *mount;
   if (!impl_->Resolve(guest.c_str(), false, path, mount) || !fs::is_directory(path)) throw std::invalid_argument("invalid virtual working directory");
   impl_->cwd = impl_->Normalize(guest);
@@ -473,13 +489,14 @@ int FileSystem::Open(const char *path, int flags, uint32_t mode) {
     if (observer) observer(path, flags);
   }
   RandomEnvironment environment;
-  std::lock_guard lock(impl_->mutex);
+  std::shared_lock names(impl_->namespace_mutex);
   int native_flags = impl_->NativeFlags(flags); if (native_flags < 0) return -1;
   if(impl_->RandomPath(path)){
     environment.Activate();
     if(flags&3){impl_->Error(13);return -1;}
     constexpr int hints=linux_flags::large_file|linux_flags::close_on_exec|linux_flags::no_follow|0x100|0x800;
     if(flags&~hints){impl_->Error(95);return -1;}
+    std::lock_guard lock(impl_->mutex);
     auto candidate=impl_->next_descriptor;
     while(candidate<=INT32_MAX&&impl_->descriptors.count(static_cast<int>(candidate)))++candidate;
     if(candidate>INT32_MAX){impl_->Error(24);return -1;}
@@ -498,12 +515,21 @@ int FileSystem::Open(const char *path, int flags, uint32_t mode) {
     if(log_opens){std::string guest;SnapshotString(path,guest,512);std::fprintf(stderr,"FileSystem: open %s unresolved\n",guest.c_str());}
     return -1;
   }
-  auto candidate=impl_->next_descriptor;
-  while(candidate<=INT32_MAX&&impl_->descriptors.count(static_cast<int>(candidate)))++candidate;
-  if(candidate>INT32_MAX){impl_->Error(24);return -1;}
+  // Decide descriptor availability before a create/truncate can change disk.
+  // Read-only opens can publish their independent handles afterwards.
+  std::unique_lock registry(impl_->mutex,std::defer_lock);
+  auto next=[&]{
+    auto id=impl_->next_descriptor;
+    while(id<=INT32_MAX&&impl_->descriptors.count(static_cast<int>(id)))++id;
+    return id;
+  };
+  if(writing){registry.lock();if(next()>INT32_MAX){impl_->Error(24);return -1;}}
   int native = _wopen(host.c_str(), native_flags, mode & 0200 ? _S_IREAD | _S_IWRITE : _S_IREAD);
   if (native < 0) { impl_->CrtError(); return -1; }
   ScopedDescriptor unpublished(native);
+  if(!registry.owns_lock())registry.lock();
+  auto candidate=next();
+  if(candidate>INT32_MAX){impl_->Error(24);return -1;}
   try{
     auto file=std::make_shared<Impl::Descriptor>(native,flags,mount->writable,mount->device);unpublished.Release();
     const int guest=static_cast<int>(candidate);
@@ -629,7 +655,7 @@ int64_t FileSystem::Seek(int descriptor, int64_t offset, int whence) {
 }
 int FileSystem::Stat(const char *path, AndroidStat *result, bool no_follow) {
   RandomEnvironment environment;
-  std::lock_guard lock(impl_->mutex); fs::path host; const Impl::Mount *mount;
+  std::shared_lock names(impl_->namespace_mutex); fs::path host; const Impl::Mount *mount;
   if(impl_->RandomPath(path)){environment.Activate();return impl_->RandomStat(result)?0:-1;}
   if (!impl_->Resolve(path, false, host, mount, no_follow)) return -1;
   HANDLE file = CreateFileW(host.c_str(), FILE_READ_ATTRIBUTES, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, nullptr);
@@ -657,6 +683,7 @@ int FileSystem::Access(const char *path, int mode) {
   return 0;
 }
 int FileSystem::Mkdir(const char *path,uint32_t mode) {
+  std::unique_lock namespace_lock(impl_->namespace_mutex);
   std::lock_guard lock(impl_->mutex);
   if(!path){impl_->Error(14);return -1;}
   std::string snapshot;
@@ -684,6 +711,7 @@ int FileSystem::Mkdir(const char *path,uint32_t mode) {
 int FileSystem::Unlink(const char *path){return impl_->Remove(path,false);}
 int FileSystem::Rmdir(const char *path){return impl_->Remove(path,true);}
 int FileSystem::Rename(const char *source,const char *destination){
+  std::unique_lock namespace_lock(impl_->namespace_mutex);
   std::lock_guard lock(impl_->mutex);
   std::string names[2];const char *inputs[]={source,destination};
   fs::path paths[2];const Impl::Mount *mounts[2]{};

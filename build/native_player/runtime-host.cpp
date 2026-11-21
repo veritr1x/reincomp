@@ -6,6 +6,7 @@
 #include "../../host/jni_host.h"
 #include <windows.h>
 #include <atomic>
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -214,12 +215,30 @@ static Memory *scrollContentChanged(State &s,addr_t pc,Memory *memory) {
     }
     return sub_830de5a0(s,pc,memory);
 }
+extern "C" Memory *sub_84d7fd7c(State &,addr_t,Memory *);
+static Memory *summonCameraEulerAngles(State &s,addr_t pc,Memory *memory) {
+    // GachaCameraProperty.RotateCamera waits for exact equality after converting
+    // a quaternion back to Euler angles. Windows can return the adjacent float.
+    constexpr addr_t compareYaw = 0x83703d9c;
+    const bool comparing = s.gpr.x30.qword == compareYaw;
+    const auto camera = s.gpr.x20.qword;
+    memory = sub_84d7fd7c(s,pc,memory);
+    if (comparing && camera && s.gpr.pc.qword == compareYaw) {
+        const float target = field_metadata::read<float>(camera + 0x64);
+        float yaw;
+        std::memcpy(&yaw,&s.simd.v[1],sizeof(yaw));
+        if (std::fabs(std::remainder(yaw-target,360.f)) <= 0.0001f)
+            std::memcpy(&s.simd.v[1],&target,sizeof(target));
+    }
+    return memory;
+}
 extern "C" Memory *StartFollowPathRelease(State &,addr_t,Memory *);
 extern "C" Memory *UpdateSnapPositionBunker(State &,addr_t,Memory *);
 extern "C" void __real__ZN6recomp21PublishGuestOverridesEv();
 extern "C" void __wrap__ZN6recomp21PublishGuestOverridesEv(){
     liveness_walk::installTestVisitors();
     battle_cleanup::install();
+    recomp::AddGuestDirectEntry(0x84d7fd7c,summonCameraEulerAngles);
     if(std::getenv("REINCOMP_TRACE_GAME_PAGES")){
         struct Entry{addr_t address;const char *name;};
         for(auto e:{Entry{0x82f11bf0,"Title.Notices"},Entry{0x82eb7740,"PreTitleMenu.Notices"},
@@ -274,6 +293,21 @@ extern "C" void __wrap__ZN6recomp21PublishGuestOverridesEv(){
     }
     if(std::getenv("REINCOMP_NATIVE_CHECKPOINT")){
         if(auto f=std::fopen("route-trace.log","w"))std::fclose(f);
+        if(std::getenv("REINCOMP_TRACE_LOAD_PROGRESS")){
+            recomp::AddGuestProbe(0x8306ea38,[previous=-1](State &s) mutable {
+                if(GetCurrentThreadId()!=owner)return;
+                float fraction;
+                std::memcpy(&fraction,&s.simd.v[0],sizeof(fraction));
+                if(!(fraction>=0.f && fraction<=1.f))return;
+                int percent=static_cast<int>(100*fraction);
+                if(percent/5==previous)return;
+                previous=percent/5;
+                if(auto f=std::fopen("route-trace.log","a")){
+                    std::fprintf(f,"%llu Loading.Progress percent=%d\n",GetTickCount64(),percent);
+                    std::fclose(f);
+                }
+            });
+        }
         struct Probe {addr_t pc;const char *label;};
         const Probe points[]={{0x82f10440,"Splash.Start"},{0x82f0e818,"Splash.NoteIn"},
             {0x82f0e968,"Splash.NoteOut"},{0x82f0ea10,"Splash.LogoIn"},{0x82f0eab8,"Splash.LogoOut"},
@@ -288,11 +322,17 @@ extern "C" void __wrap__ZN6recomp21PublishGuestOverridesEv(){
             if(p.pc==0x82f102e4)waitingAtTitle=GetTickCount64();
             if(p.pc==0x8306e628){
                 loadingOut=0;
-                if(GetCurrentThreadId()==owner)field_metadata::begin();
+                if(GetCurrentThreadId()==owner){
+                    field_load_queue::loading=true;
+                    field_metadata::begin();
+                }
             }
             if(p.pc==0x8306e6d4){
                 loadingOut=GetTickCount64();
-                if(GetCurrentThreadId()==owner)field_metadata::loading=false;
+                if(GetCurrentThreadId()==owner){
+                    field_load_queue::loading=false;
+                    field_metadata::loading=false;
+                }
             }
             if(p.pc==0x82f1038c || p.pc==0x82f11d58)waitingAtTitle=0;
             if(count++>8)return;

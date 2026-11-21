@@ -134,12 +134,20 @@ def prepare_site(a, work, windows, bunker, release):
     shutil.copyfile(bunker/'android/app/src/main/python/patcher/patch_masterdata.py',windows/'patch_masterdata.py')
     link = windows/'link'
     recipe = json.loads((link/'runtime-link.json').read_bytes())
+    overrides = PORTABLE.get('hostObjects', {})
+    if any(name not in recipe['files'] or
+           not name.startswith(('host-','runtime-host.','elfload.','embedded-bootstrap.')) for name in overrides):
+        raise ValueError('Unknown project-owned object in the portable release lock')
     for name, expected in recipe['files'].items():
         if name.startswith(('host-','runtime-host.','elfload.','embedded-bootstrap.')):
             source = work/'host-build/host'/name
+            expected = overrides.get(name, expected)
             if digest(source) != expected:
                 raise ValueError('Rebuilt linker input differs from the reference: '+name)
             shutil.copyfile(source,link/name)
+            recipe['files'][name] = expected
+    if overrides:
+        (link/'runtime-link.json').write_bytes(json.dumps(recipe,separators=(',',':')).encode())
     game = release/'game'
     new = work/'player-kit'
     run(release/'pods/python/python.exe','-I',WEB/'prepare_player.py','--apk',a.apk,'--bunker',bunker,
