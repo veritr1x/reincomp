@@ -1,5 +1,6 @@
 # Local build state: toolchains, lifted objects, linked builds, run logs.
 /work/
+/.fps-bench/
 __pycache__/
 *.pyc
 # Older development builds kept generated Unity and APK adapter tables here.
@@ -7,3 +8,11 @@ __pycache__/
 /recompiler/tools/spring_group.entries
 /build/native_player/notice-portraits.csv
 /build-output/
+
+# Original player inputs and locally packaged installations.
+*.apk
+*.bin.e
+resource_dump*.7z
+resource_dump*.zip
+Nier Reincarnation.exe
+.bunker-player/
