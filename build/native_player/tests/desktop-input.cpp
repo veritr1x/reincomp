@@ -26,6 +26,18 @@ template<class R,class... A> void invoke(State &s,void *fn){
     else s.gpr.x0.qword=reinterpret_cast<R(*)(int)>(fn)(s.gpr.x0.dword);
 }
 static bool focus=true,connected=false;
+static HWND keyboardFocus=HWND(1);
+static int windowsKey=0;
+static BOOL keyboardInfo(DWORD,GUITHREADINFO *info){info->hwndFocus=keyboardFocus;return TRUE;}
+static SHORT heldWindowsKey(int key){return key==windowsKey?SHORT(0x8000):0;}
+static RECT clientBounds{0,0,640,360};
+static POINT cursor{260,145};
+static int warps=0;
+static BOOL readBounds(HWND,RECT *r){*r=clientBounds;return TRUE;}
+static BOOL readCursor(POINT *p){*p=cursor;return TRUE;}
+static BOOL toClient(HWND,POINT *p){p->x-=100;p->y-=55;return TRUE;}
+static BOOL toScreen(HWND,POINT *p){p->x+=100;p->y+=55;return TRUE;}
+static BOOL moveCursor(int x,int y){cursor={x,y};++warps;return TRUE;}
 static DWORD mockState(DWORD user,XINPUT_STATE *out);
 static XINPUT_GAMEPAD pad{};
 static DWORD mockState(DWORD user,XINPUT_STATE *out){
@@ -35,6 +47,12 @@ static DWORD mockState(DWORD user,XINPUT_STATE *out){
 static DWORD owner(HWND,DWORD *pid){*pid=focus?GetCurrentProcessId():0;return 1;}
 static HWND childWindow(HWND parent,HWND,LPCWSTR,LPCWSTR){return parent==HWND(2)?HWND(1):nullptr;}
 static ULONGLONG clockMs=100;
+static int launcherToggles=0;
+static BOOL postInputMessage(HWND window,UINT message,WPARAM w,LPARAM l){
+    assert(window==HWND(1) && message==bunker::web_controller::ToggleLauncher && !w && !l);
+    ++launcherToggles;
+    return TRUE;
+}
 namespace desktop_gamepad {
 static bool sonyConnected=false;
 static DIJOYSTATE sony{};
@@ -44,18 +62,34 @@ static bool readRecordedPad(HWND,XINPUT_GAMEPAD &state){
 }
 }
 #define GetForegroundWindow() HWND(1)
+#define GetGUIThreadInfo keyboardInfo
+#define GetAsyncKeyState heldWindowsKey
+#define GetClientRect readBounds
+#define GetCursorPos readCursor
+#define ScreenToClient toClient
+#define ClientToScreen toScreen
+#define SetCursorPos moveCursor
 #define GetWindowThreadProcessId owner
 #define FindWindowExW childWindow
 #define GetTickCount64() clockMs
 #define XInputGetState mockState
+#define PostMessageW postInputMessage
 #define readPlayStation readRecordedPad
 #include "../desktop-input.h"
 #undef readPlayStation
 #undef GetForegroundWindow
+#undef GetGUIThreadInfo
+#undef GetAsyncKeyState
+#undef GetClientRect
+#undef GetCursorPos
+#undef ScreenToClient
+#undef ClientToScreen
+#undef SetCursorPos
 #undef GetWindowThreadProcessId
 #undef FindWindowExW
 #undef GetTickCount64
 #undef XInputGetState
+#undef PostMessageW
 
 static int tick,h=720,w=1280,physical=0;
 static float x=51,y=84;
@@ -99,6 +133,7 @@ static void checkBrowserController(){
     assert(sample(XINPUT_GAMEPAD_B)==XINPUT_GAMEPAD_B);
 }
 int main(){
+    _wputenv_s(L"REINCOMP_WINDOW_PARENT",L"2");
     checkBrowserController();
     using namespace desktop_input;
     using namespace bunker::desktop_touch;
@@ -125,6 +160,20 @@ int main(){
     }
     w=1280;h=720;
     assert(next()==0);
+    for(HWND owner:{HWND(1),HWND(2)}){
+        keyboardFocus=owner;windowsKey='A';
+        assert(next()==1 && read(0).phase==Began);
+        assert(next()==1 && read(0).delta.x<0);
+        windowsKey=0;assert(next()==1 && read(0).phase==Ended);assert(next()==0);
+    }
+    keyboardFocus=HWND(3);windowsKey='W';assert(next()==0);
+    keyboardFocus=HWND(1);windowsKey=0;
+    next();windowsKey=VK_SPACE;next();assert(skipRequested);
+    skipRequested=false;next();assert(!skipRequested);
+    keyboardFocus=HWND(3);next();keyboardFocus=HWND(1);next();assert(!skipRequested);
+    windowsKey=0;next();pressed[VK_SPACE]=true;next();assert(!skipRequested);
+    pressed[VK_SPACE]=false;windowsKey=VK_SPACE;next();assert(skipRequested);
+    skipRequested=false;windowsKey=0;next();
     down=held=true;assert(next()==1);auto start=read(0);assert(start.phase==Began && start.id==0);
     down=false;x+=24;y-=7;assert(next()==1);
     auto drag=read(0);assert(drag.id==start.id && drag.phase==Moved && drag.delta.x==24 && drag.delta.y==-7);
@@ -178,10 +227,25 @@ int main(){
     keys.fill(false);physical=0;focus=true;assert(next()==0);
     connected=true;clockMs+=1100;pad.sThumbLX=32000;pad.wButtons=XINPUT_GAMEPAD_A|XINPUT_GAMEPAD_B;
     assert(next()==2 && read(0).phase==Began && read(1).phase==Began && read(0).id!=read(1).id && read(0).id==0);
+    assert(warps==0 && read(0).position.x==320 && read(0).position.y==538);
     assert(number(0x83d27da0)==1 && read(0).id==0);
     assert(next()==2 && read(1).delta.x>0 && read(0).phase==Stationary && padBack);
     pad.wButtons=0;pad.sThumbLX=1000;assert(next()==2 && read(0).phase==Ended && read(1).phase==Ended);
     assert(!padBack && lastBack);assert(next()==0);
+    pad.wButtons=XINPUT_GAMEPAD_START;next();assert(!skipRequested && launcherToggles==0);
+    pad.wButtons=XINPUT_GAMEPAD_BACK;next();next();assert(launcherToggles==1 && !skipRequested);
+    focus=false;next();focus=true;next();assert(launcherToggles==1);
+    pad.wButtons=0;next();
+    keyboardFocus=HWND(3); // The game is foreground with keyboard focus in its WebView.
+    pad.wButtons=XINPUT_GAMEPAD_BACK;next();assert(launcherToggles==2);
+    keyboardFocus=HWND(1);pad.wButtons=0;next();
+    pad.sThumbRX=32767;next();assert(warps==1 && cursor.x>260);
+    pad.sThumbRX=0;pad.wButtons=XINPUT_GAMEPAD_A|XINPUT_GAMEPAD_Y;
+    assert(next()==1 && skipRequested && read(0).position.x==(cursor.x-100)*2 && warps==1);
+    skipRequested=false;next();assert(!skipRequested && read(0).phase==Stationary);
+    pad.wButtons=0;next();assert(read(0).phase==Ended && warps==1);next();
+    POINT inside=cursor;cursor.x=42;pad.wButtons=XINPUT_GAMEPAD_A;assert(next()==0);
+    cursor=inside;assert(next()==0);pad.wButtons=0;next();
     w=800;h=600;keys['a']=true;assert(next()==1 && read(0).position.x==400 && read(0).position.y==300);
     assert(number(0x83d27da0)==0);
     keys.fill(false);next();next();
@@ -203,6 +267,12 @@ int main(){
     sony.lX=0;sony.lY=65535;sony.lZ=65535;sony.lRz=0;
     const auto axes=playStationState(sony);
     assert(axes.sThumbLX==-32768 && axes.sThumbLY==-32768 && axes.sThumbRX==32767 && axes.sThumbRY==32767);
+    sony.rgbButtons[3]=0x80;next();assert(skipRequested && (playStationState(sony).wButtons&XINPUT_GAMEPAD_Y));
+    skipRequested=false;next();assert(!skipRequested);
+    sony.rgbButtons[3]=0;sony.rgbButtons[8]=0x80;next();assert(launcherToggles==2);
+    sony.rgbButtons[9]=0x80;next();next();assert(launcherToggles==3 && !skipRequested);
+    sonyConnected=false;next();sonyConnected=true;next();assert(launcherToggles==3);
+    sony.rgbButtons[9]=0;next();sony.rgbButtons[9]=0x80;next();assert(launcherToggles==4);
     sonyConnected=false;next();next();
     w=1600;h=900;next();
     keys['d']=true;

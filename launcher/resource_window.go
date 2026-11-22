@@ -46,6 +46,7 @@ func readLauncherPreferences(data string) launcherPreferences {
 
 type resourceWindow struct {
 	handle                                      string
+	homeURL                                     string
 	input                                       io.WriteCloser
 	server                                      *http.Server
 	done                                        chan struct{}
@@ -62,27 +63,34 @@ type resourceWindow struct {
 
 func (w *resourceWindow) send(line string) { fmt.Fprintln(w.input, line) }
 func (w *resourceWindow) close() {
-	playerParent.Store(0)
 	w.cancel()
 	w.server.Close()
-	w.input.Close()
-	<-w.done
+	if w.input != nil {
+		playerParent.Store(0)
+		w.input.Close()
+		<-w.done
+	}
 }
 
 // Only the local WebView receives this random URL. The file picker returns
 // the original path, so even a 20 GB resource dump stays on disk.
-func firstRunWindow(root, server, assets, master, dump string, ready bool) (*resourceWindow, error) {
+func startLauncher(root, server, assets, master, dump string, ready, inGameOnly bool) (*resourceWindow, error) {
 	if ready && !regularFile(master) {
 		master = filepath.Join(assets, "assets", "release", masterName)
 	}
 	if !regularFile(master) {
 		return nil, fmt.Errorf("The Windows player is missing its packaged Global master data.")
 	}
-	render := exec.Command(filepath.Join(root, "pods", "python", "python.exe"), "-I", "-X", "utf8", filepath.Join(root, "game", "resource_setup.py"), root, assets)
-	hideHelperWindow(render)
-	resourcePage, err := render.Output()
-	if err != nil {
-		return nil, fmt.Errorf("could not open Bunker's launcher template: %w", err)
+	// A direct game launch needs the template only if the player opens Ctrl+B.
+	resourcePage := sync.OnceValues(func() ([]byte, error) {
+		render := exec.Command(filepath.Join(root, "pods", "python", "python.exe"), "-I", "-X", "utf8", filepath.Join(root, "game", "resource_setup.py"), root, assets)
+		hideHelperWindow(render)
+		return render.Output()
+	})
+	if !inGameOnly {
+		if _, err := resourcePage(); err != nil {
+			return nil, fmt.Errorf("could not open Bunker's launcher template: %w", err)
+		}
 	}
 	listener, err := net.Listen("tcp4", "127.0.0.1:0")
 	if err != nil {
@@ -101,7 +109,8 @@ func firstRunWindow(root, server, assets, master, dump string, ready bool) (*res
 	prefix := "/" + hex.EncodeToString(token) + "/"
 	addr := listener.Addr().String()
 	ctx, cancel := context.WithCancel(context.Background())
-	w := &resourceWindow{done: make(chan struct{}), deploy: make(chan struct{}), cancel: cancel, verified: ready, assetRoot: assets}
+	w := &resourceWindow{homeURL: "http://" + addr + prefix, done: make(chan struct{}), deploy: make(chan struct{}), cancel: cancel, verified: ready, assetRoot: assets,
+		deployed: inGameOnly, services: inGameOnly, running: inGameOnly}
 	w.restart = make(chan struct{})
 	exe, _ := os.Executable()
 	portableUpdate := canUpdatePortable(root, exe)
@@ -118,23 +127,6 @@ func firstRunWindow(root, server, assets, master, dump string, ready bool) (*res
 	manual := filepath.Join(root, "data", "manual-deploy")
 	save := filepath.Join(root, "data", "server", "game.db")
 	opened := make(chan string, 1)
-	cmd := exec.Command(filepath.Join(root, "game", "resource-window.exe"), root, "http://"+addr+prefix)
-	stdout, err := cmd.StdoutPipe()
-	if err != nil {
-		cancel()
-		return nil, err
-	}
-	w.input, err = cmd.StdinPipe()
-	if err != nil {
-		cancel()
-		return nil, err
-	}
-	cmd.Stderr = os.Stderr
-	if err = cmd.Start(); err != nil {
-		cancel()
-		w.input.Close()
-		return nil, err
-	}
 	managed := filepath.Join(root, "data", "assets")
 	lastLink := filepath.Join(root, "data", "resource-link.txt")
 	importFile := func(mode, path string) {
@@ -281,8 +273,13 @@ func firstRunWindow(root, server, assets, master, dump string, ready bool) (*res
 				http.Error(out, "Method", 405)
 				return
 			}
+			page, err := resourcePage()
+			if err != nil {
+				http.Error(out, "Could not render the Bunker launcher.", http.StatusInternalServerError)
+				return
+			}
 			out.Header().Set("Content-Type", "text/html; charset=utf-8")
-			out.Write(resourcePage)
+			out.Write(page)
 		case "state":
 			if r.Method != http.MethodGet {
 				http.Error(out, "Method", 405)
@@ -452,6 +449,28 @@ func firstRunWindow(root, server, assets, master, dump string, ready bool) (*res
 			http.NotFound(out, r)
 		}
 	})}
+	if inGameOnly {
+		transferred = true
+		go w.server.Serve(listener)
+		return w, nil
+	}
+	cmd := exec.Command(filepath.Join(root, "game", "resource-window.exe"), root, w.homeURL)
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		cancel()
+		return nil, err
+	}
+	w.input, err = cmd.StdinPipe()
+	if err != nil {
+		cancel()
+		return nil, err
+	}
+	cmd.Stderr = os.Stderr
+	if err = cmd.Start(); err != nil {
+		cancel()
+		w.input.Close()
+		return nil, err
+	}
 	go w.server.Serve(listener)
 	go func() {
 		lines := bufio.NewScanner(stdout)

@@ -166,7 +166,7 @@ func run(root, resourceDir, assets, fps, render string, prepareOnly, fullscreen,
 	if !readyFiles || desktop && (showLauncher || regularFile(filepath.Join(data, "manual-deploy"))) {
 		dump, master := resourceInputs(resourceDir, root)
 		if desktop && regularFile(filepath.Join(root, "game", "resource-window.exe")) {
-			setup, e = firstRunWindow(root, server, assets, master, dump, readyFiles)
+			setup, e = startLauncher(root, server, assets, master, dump, readyFiles, false)
 			if errors.Is(e, context.Canceled) {
 				return nil
 			}
@@ -318,6 +318,14 @@ func serveAndPlay(root, data, assets, game, server, view, native, apk, fps, rend
 		}
 	}
 
+	menu := setup
+	if desktop && menu == nil {
+		menu, e = startLauncher(root, server, assets, "", "", true, true)
+		if e != nil {
+			return e
+		}
+		defer menu.close()
+	}
 	fmt.Println("Starting the game...")
 	dir := filepath.Dir(game)
 	args := []string{native, apk, filepath.Join(data, "storage"),
@@ -348,13 +356,22 @@ func serveAndPlay(root, data, assets, game, server, view, native, apk, fps, rend
 			if err != nil {
 				return nil, err
 			}
+			maximized := false
+			if setup == nil && render == "" && !fullscreen {
+				if size, max := previousWindowSize(data); size != "" {
+					display.size, maximized = size, max
+				}
+			}
 			cmd, err = desktopCommand(game, root, data, display, fullscreen && setup == nil)
 			if err != nil {
 				return nil, err
 			}
+			cmd.Env = append(cmd.Env, "REINCOMP_LAUNCHER_URL="+menu.homeURL)
 			if setup != nil {
 				cmd.Args = append(cmd.Args, "-parentHWND", setup.handle, "delayed")
 				cmd.Env = append(cmd.Env, "REINCOMP_WINDOW_PARENT="+setup.handle)
+			} else if maximized {
+				cmd.Env = append(cmd.Env, "REINCOMP_WINDOW_MAXIMIZED=1")
 			}
 		}
 		cmd.Dir, cmd.Stdout, cmd.Stderr = dir, gameLog, gameLog

@@ -5,18 +5,32 @@
 #include "../../host/bunker_view.h"
 #include "../../host/web_controller.h"
 #include "game-pages.h"
+#include "window-size.h"
 
 namespace player_window {
 static std::unique_ptr<bunker::windows::BunkerView> bunker;
 static std::atomic<HWND> attached;
 static std::atomic<HHOOK> setupHook;
 static std::atomic<uint32_t> pendingResolution;
+static HWND launcherWindow(){
+    static HWND window=[]{
+        const auto *handle=_wgetenv(L"REINCOMP_WINDOW_PARENT");
+        return handle?reinterpret_cast<HWND>(_wcstoui64(handle,nullptr,10)):nullptr;
+    }();
+    return window;
+}
 
 static LRESULT CALLBACK events(HWND window,UINT message,WPARAM w,LPARAM l,UINT_PTR id,DWORD_PTR){
+    if ((message==WM_EXITSIZEMOVE || message==WM_CLOSE) && !launcherWindow()){
+        if (const auto *data=_wgetenv(L"REINCOMP_PLAYER_DATA")) window_size::save(window,data);
+    }
     if(message==WM_APP+0x370){
         RECT client{};
-        if(auto parent=GetParent(window); parent && GetClientRect(parent,&client))
+        if(auto parent=launcherWindow(); parent && GetParent(window)==parent &&
+           GetClientRect(parent,&client) && client.right>0 && client.bottom>0){
             SetWindowPos(window,nullptr,0,0,client.right,client.bottom,SWP_NOZORDER|SWP_NOACTIVATE);
+            pendingResolution.store((uint32_t(client.right)<<16)|uint32_t(client.bottom),std::memory_order_release);
+        }
         return 0;
     }
     if(message==WM_APP+0x36f){
@@ -32,7 +46,7 @@ static LRESULT CALLBACK events(HWND window,UINT message,WPARAM w,LPARAM l,UINT_P
         if(!(l&(LPARAM(1)<<30)))PostMessageW(GetParent(window),WM_APP+104,0,0);
         return 0;
     }
-    if(message==WM_APP+0x36e){
+    if(message==WM_APP+0x36e && w){
         if(w==0 || w>65535 || l<=0 || l>65535)return 0;
         pendingResolution.store((uint32_t(w)<<16)|uint32_t(l),std::memory_order_release);
         return 1;
@@ -69,6 +83,10 @@ static LRESULT CALLBACK events(HWND window,UINT message,WPARAM w,LPARAM l,UINT_P
 }
 static void attach(HWND window){
     if(!SetWindowSubclass(window,events,1,0))return;
+    if (launcherWindow())
+        PostMessageW(window,WM_APP+0x370,0,0);
+    else if (_wgetenv(L"REINCOMP_WINDOW_MAXIMIZED"))
+        PostMessageW(window,WM_SYSCOMMAND,SC_MAXIMIZE,0);
     attached=window;
     SetWindowTextW(window,L"Nier Reincarnation");
     for(int small:{0,1}){

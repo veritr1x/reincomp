@@ -11,6 +11,7 @@
 #include <string>
 #include <thread>
 #include "../../host/bunker_view.h"
+#include "window-size.h"
 
 namespace {
 using bunker::windows::BunkerView;
@@ -36,6 +37,7 @@ void switchMode(HWND window) {
         SetWindowPlacement(window, &previous);
         SetWindowPos(window, nullptr, 0, 0, 0, 0, SWP_NOMOVE|SWP_NOSIZE|SWP_NOZORDER|SWP_FRAMECHANGED);
     } else {
+        window_size::save(window,install/"data");
         MONITORINFO monitor{sizeof(monitor)};
         GetWindowPlacement(window, &previous);
         GetMonitorInfoW(MonitorFromWindow(window, MONITOR_DEFAULTTONEAREST), &monitor);
@@ -72,6 +74,8 @@ void attach(HWND window) {
 }
 
 LRESULT CALLBACK events(HWND w,UINT message,WPARAM wp,LPARAM lp) {
+    if (!fullscreen && (message==WM_EXITSIZEMOVE || message==WM_CLOSE || message==finish))
+        window_size::save(w,install/"data");
     if (dashboard && dashboard->Message(w,message,wp,lp)) return 0;
     switch (message) {
     case resetProgram: dashboard.reset(); if(page)page->Visible(true);return 0;
@@ -157,11 +161,10 @@ int WINAPI wWinMain(HINSTANCE instance,HINSTANCE,PWSTR,int) {
     if (!RegisterClassW(&wc)) return 1;
     const DWORD style=WS_OVERLAPPEDWINDOW|WS_CLIPCHILDREN;
     const auto getDpi=reinterpret_cast<UINT(WINAPI *)()>(GetProcAddress(GetModuleHandleW(L"user32"),"GetDpiForSystem"));
-    const auto adjust=reinterpret_cast<BOOL(WINAPI *)(RECT *,DWORD,BOOL,DWORD,UINT)>(GetProcAddress(GetModuleHandleW(L"user32"),"AdjustWindowRectExForDpi"));
     const UINT dpi=getDpi?getDpi():96;
-    RECT client{0,0,MulDiv(960,dpi,96),MulDiv(520,dpi,96)};
-    if (adjust) adjust(&client,style,FALSE,0,dpi);
-    else AdjustWindowRectEx(&client,style,FALSE,0);
+    const auto saved=window_size::read(root/"data");
+    RECT client{0,0,saved.width?saved.width:MulDiv(960,dpi,96),saved.height?saved.height:MulDiv(520,dpi,96)};
+    window_size::adjust(client,style,0,dpi);
     RECT work{0,0,GetSystemMetrics(SM_CXSCREEN),GetSystemMetrics(SM_CYSCREEN)};
     SystemParametersInfoW(SPI_GETWORKAREA,0,&work,0);
     const LONG width=std::min(client.right-client.left,work.right-work.left);
@@ -172,7 +175,7 @@ int WINAPI wWinMain(HINSTANCE instance,HINSTANCE,PWSTR,int) {
     page=std::make_unique<BunkerView>((root/L"pods/WebView2Loader.dll").wstring(),(root/L"data/setup-webview").wstring(),
         w,[](const std::wstring &,const std::wstring &){});
     fit(w); page->OpenExternalLinks(true); page->Navigate(url); page->Visible(true);
-    ShowWindow(w,SW_SHOW); std::cout << "window\t" << reinterpret_cast<uintptr_t>(w) << std::endl;
+    ShowWindow(w,saved.maximized?SW_SHOWMAXIMIZED:SW_SHOW); std::cout << "window\t" << reinterpret_cast<uintptr_t>(w) << std::endl;
     std::thread([w]{
         std::string line;
         while (std::getline(std::cin,line)) {

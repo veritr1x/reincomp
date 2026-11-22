@@ -1,18 +1,20 @@
 {
   "portable": {
     "bunkerVersion": "1.12.16",
-    "sha256": "2420306eae0509a316e23b35d80494f6d634f0e00a7f2b8d5e3d583e76217ba2",
-    "size": 1057618945,
+    "sha256": "49ace1444489837981a349e42e0c683a2b10a3b53ab5ba4eedf23a479af4f7a0",
+    "size": 1057733555,
     "playerMembers": {
-      "game/EngineCalls.dll": "776e89b6322f93228f69f7967860c39908fb2b9f29649112c625f36b9f9cfc58",
-      "game/GameAssembly.dll": "45d218db6a6706e02552fa41c9869adf090a6c1d371563ce4693e22a70db9315",
+      "game/EngineCalls.dll": "21dd6b1fdf6b3d11afc79ea53447a1469155652b7ee26c8139d6c0e0858c9767",
+      "game/GameAssembly.dll": "5fd5b71208045930453b0cda60110123b0bae36bb84d9605a02b96081aaee83c",
       "game/archive-media.exe": "16b2edfdfd5347f1f8a2806490bc980c26dd692e0ac989cbdb5663fe4a968734",
       "game/desktop_bundles.py": "514548a3bd9a53e65e3c6b661bdea365c3917795b10f66df2afb98f120add274",
       "game/desktop_services.py": "1ef42d2a2c374f4b8cb2e1b782409a0716eec7e8953d60dd9b74d7427d1fb8dc",
+      "game/portable-emblem.json": "8e16f2ff05087d78565dc174de656a1c00361cb08f4dde6bb7e6cea8b0f2eeb5",
       "game/resource-setup.css": "9e053656b6aa02b705eb89fc5f1b54b13e77f633cbd86777cacc8912273b242a",
-      "game/resource-setup.html": "b10c2688bd0ecee80f861f4282427d6a83a6306c798164a5e99a2fd50da9d481",
-      "game/resource-window.exe": "60825e4ab4cbdabf53ddf50b12a950de32faa62b93df236d28f92544b8d4fca2",
-      "launcher.exe": "0c01108680e6f09e1011e6405f7c77de818e4c6158171d0d96c21fd0a56ecb4b",
+      "game/resource-setup.html": "0e9a40db5f306ffc1ed75dd39f9e8078789fc86b30e8d413fc842893f149aa0d",
+      "game/resource-window.exe": "303c32fbde5634adb4fffa85d21bbf1814465028b2191d4d58ef8ea0bfed3db1",
+      "launcher.exe": "100ef1857474f6359bacafe2c9c6ace35415a0658e4b3295e6491faf195b8f69",
+      "pods/app/web/static/css/automata.css": "ec662eb9424131d83bf0e558015b715ce72fa25938ea3d2075d46684a1714ea3",
       "server/bunker-server.exe": "dc4973fd7562bde0451e78056b9ccf7e9f599c3511723643a6528ecc59279ff5"
     },
     "hostObjects": {

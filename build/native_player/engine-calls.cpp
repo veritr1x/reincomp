@@ -166,8 +166,14 @@ static void setAssetUrl(State &s,void *fn){
     }
     auto useFile=[&](const std::filesystem::path &path){
         wchar_t converted[32768];DWORD count=32768;
-        if(SUCCEEDED(UrlCreateFromPathW(path.c_str(),converted,&count,0)))
-            s.gpr.x1.qword=reinterpret_cast<uintptr_t>(managedPath(std::wstring(converted,count)));
+        if(FAILED(UrlCreateFromPathW(path.c_str(),converted,&count,0)))return;
+        std::wstring fileUrl(converted,count);
+        // Unity 2019's Windows file handler opens %20 as part of the filename.
+        // Restore spaces only after converting the native path to a file URL.
+        for(auto space=fileUrl.find(L"%20");space!=fileUrl.npos;space=fileUrl.find(L"%20",space+1)){
+            fileUrl.replace(space,3,1,L' ');
+        }
+        s.gpr.x1.qword=reinterpret_cast<uintptr_t>(managedPath(fileUrl));
     };
     auto jar=url.find(L"jar:file:");
     if(jar!=url.npos){
@@ -200,6 +206,11 @@ static void setAssetUrl(State &s,void *fn){
 }
 extern "C" __declspec(dllexport) void AfterRenderPipeline(){render_pacing::afterPipeline();}
 extern "C" __declspec(dllexport) void AdvanceDesktopInput(){desktop_input::advance();}
+extern "C" __declspec(dllexport) bool ConsumeDesktopSkip(){
+    const bool pressed=desktop_input::skipRequested;
+    desktop_input::skipRequested=false;
+    return pressed;
+}
 extern "C" __declspec(dllexport) void DesktopGamepadsChanged(){desktop_gamepad::devicesChanged.store(true);}
 extern "C" __declspec(dllexport) void ShutdownDesktopGamepads(){desktop_gamepad::shutdown();}
 extern "C" __declspec(dllexport) bool DesktopTouchActive(){

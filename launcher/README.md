@@ -61,9 +61,10 @@ With a `pods/` folder, the launcher starts the server with its control
 endpoint (`-control`, a random token) and starts Bunker's Pod Programs beside
 it with the Python in `pods/python`. The game does not wait for it. When the
 pages are served, the launcher writes their address and token to
-`data/bunker-view.json`. Ctrl+B in the game window opens a WebView2 pane over
-the game and loads them; Ctrl+B again, or the pages' Close, hides it. The
-game keeps running underneath. Pod Programs keeps its own files in
+`data/bunker-view.json`. Ctrl+B in the Windows player opens the Bunker launcher
+over the running game. Xbox View (Select/Back) and PlayStation Options also
+toggle the launcher. Choose Pod Programs or Archive there. Press the shortcut
+again or select **Back to the game** to resume. Pod Programs keeps its own files in
 `data/pods`, its log is `data/pods.log`, and the pane's browser data is in
 `data/webview`. It needs the Microsoft Edge WebView2 Runtime, which Windows
 11 has.
@@ -101,7 +102,7 @@ CGO_ENABLED=0 go build -trimpath -ldflags "-s -w -X main.version=<version>" -o r
 Run these commands from the repository root with a built installation.
 Register the local player once, choose **Best** in the game’s graphics settings
 and use a save that has reached the desired scene. For a save containing
-multiple players, Ctrl+B → Players lets you choose the character.
+multiple players, Ctrl+B → Pod Programs → Players lets you choose the character.
 
 ```powershell
 .\build\replay_checkpoint.ps1 menu -Install .\build-output\reincomp
@@ -138,7 +139,7 @@ the installed player’s current save. To reproduce device-local UI settings
 and notification history, add `-PlayerPrefs path\to\emulator-playerprefs.xml`
 with the game's Unity Android PlayerPrefs XML. Each replay uses a temporary
 copy, including the emulator's language and saved registration. When the backup
-has multiple characters, let the replay sign in once. Use **Ctrl+B → Players →
+has multiple characters, let the replay sign in once. Use **Ctrl+B → Pod Programs → Players →
 Use this player** to select the character for that registration, then restart
 the replay with the same XML. On a fresh install, confirm the game's resource
 download when it first opens the chapter. Bunker serves those files from the

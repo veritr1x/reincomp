@@ -27,7 +27,7 @@ To build from source instead, see [BUILDING.md](BUILDING.md).
 - Mouse or touch: tap and drag.
 - Movement: WASD, left stick or D-pad. Right stick moves the pointer.
 - A / Cross taps, B / Circle goes back. Space, Y or Triangle skips.
-- Alt+Enter toggles fullscreen. Ctrl+B opens Bunker's Pod Programs.
+- Alt+Enter toggles fullscreen. Ctrl+B, Xbox View (Select/Back), or PlayStation Options opens the Bunker launcher. Press it again to return to the game.
 
 ## Saves
 

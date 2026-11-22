@@ -88,7 +88,12 @@ struct BunkerView::Impl:std::enable_shared_from_this<Impl> {
   EventRegistrationToken completed_token{},request_token{};
   PageEvent pageEvent;
   std::wstring address,origin;
-#if REINCOMP_VIEW_REVISION >= 2
+#ifdef REINCOMP_BUNKER_MODULES
+  // The running game shares its launcher's loopback UI. Pod Programs still
+  // uses the authenticated dashboard session and its existing startup path.
+  std::wstring launcherHome;
+#endif
+#if REINCOMP_VIEW_REVISION >= 2 || defined(REINCOMP_BUNKER_MODULES)
   std::wstring dashboardPath=L"/";
 #endif
   std::map<std::wstring,std::wstring> headers;
@@ -158,6 +163,9 @@ struct BunkerView::Impl:std::enable_shared_from_this<Impl> {
   }
   void Show(bool on){
     if(!on){if(touching)ControllerInput(bunker::web_controller::Cancel,{});UpdateArea(nullptr);}
+#ifdef REINCOMP_BUNKER_MODULES
+    if(!on && !launcherHome.empty()){dashboardPath.clear();loaded=waiting=false;}
+#endif
     visible=on;
     if(controller){
       controller->put_IsVisible(on?TRUE:FALSE);
@@ -222,7 +230,7 @@ struct BunkerView::Impl:std::enable_shared_from_this<Impl> {
           arguments->put_Handled(TRUE);
           COREWEBVIEW2_PHYSICAL_KEY_STATUS status{};arguments->get_PhysicalKeyStatus(&status);
           if(kind==COREWEBVIEW2_KEY_EVENT_KIND_KEY_DOWN&&!status.WasKeyDown){
-            if(self->pageEvent)PostMessageW(self->window,WM_APP+0x36b,0,0);
+            if(self->pageEvent)PostMessageW(self->window,web_controller::ToggleLauncher,0,0);
             else PostMessageW(self->window,WM_APP+0x36e,0,0);
           }
         }
@@ -245,10 +253,19 @@ struct BunkerView::Impl:std::enable_shared_from_this<Impl> {
         LPWSTR address=nullptr;
         if(SUCCEEDED(arguments->get_Uri(&address))&&address){
           const std::wstring uri(address);CoTaskMemFree(address);
+#ifdef REINCOMP_BUNKER_MODULES
+          if(!self->launcherHome.empty() && uri.rfind(self->launcherHome+L"open/",0)==0){
+            arguments->put_Cancel(TRUE);
+            self->dashboardPath=uri.substr(self->launcherHome.size()+4);
+            self->loaded=false;
+            self->Load();
+            return S_OK;
+          }
+#endif
           const std::wstring toggle=L"/bunker/desktop-toggle";
           if(uri.size()>=toggle.size()&&!uri.compare(uri.size()-toggle.size(),toggle.size(),toggle)){
             arguments->put_Cancel(TRUE);
-            PostMessageW(self->window,self->pageEvent?WM_APP+0x36b:WM_APP+0x36e,0,0);return S_OK;
+            PostMessageW(self->window,self->pageEvent?web_controller::ToggleLauncher:WM_APP+0x36e,0,0);return S_OK;
           }
           if(self->pageEvent){
             if(uri.compare(0,self->origin.size(),self->origin)!=0 || self->origin.empty()){
@@ -260,7 +277,15 @@ struct BunkerView::Impl:std::enable_shared_from_this<Impl> {
             return S_OK;
           }
           const std::wstring close=L"/bunker/close";
-          if(uri.size()>=close.size()&&!uri.compare(uri.size()-close.size(),close.size(),close)){arguments->put_Cancel(TRUE);self->Show(false);}
+          if(uri.size()>=close.size()&&!uri.compare(uri.size()-close.size(),close.size(),close)){
+            arguments->put_Cancel(TRUE);
+#ifdef REINCOMP_BUNKER_MODULES
+            if(!self->launcherHome.empty() && !self->dashboardPath.empty()){
+              self->dashboardPath.clear();self->loaded=false;self->Load();return S_OK;
+            }
+#endif
+            self->Show(false);
+          }
         }
         return S_OK;
       });
@@ -305,6 +330,12 @@ struct BunkerView::Impl:std::enable_shared_from_this<Impl> {
       return;
     }
     if(!visible)return;
+#ifdef REINCOMP_BUNKER_MODULES
+    if(!launcherHome.empty() && dashboardPath.empty()){
+      loaded=SUCCEEDED(web->Navigate((launcherHome+L"?game").c_str()));
+      return;
+    }
+#endif
     std::ifstream file(state_file.c_str(),std::ios::binary);std::stringstream content;content<<file.rdbuf();
     const auto json=content.str();const auto url=Field(json,"url"),token=Field(json,"token"),error=Field(json,"error");
     if(!error.empty()){KillTimer(window,kTimer);web->NavigateToString(Page(Wide(error)).c_str());return;}
@@ -333,7 +364,7 @@ struct BunkerView::Impl:std::enable_shared_from_this<Impl> {
       }
     }
     Drop(cookies);Drop(web2);
-#if REINCOMP_VIEW_REVISION >= 2
+#if REINCOMP_VIEW_REVISION >= 2 || defined(REINCOMP_BUNKER_MODULES)
     loaded=SUCCEEDED(web->Navigate((Wide(url)+dashboardPath).c_str()));
 #else
     loaded=SUCCEEDED(web->Navigate(Wide(url+"/").c_str()));
@@ -360,6 +391,12 @@ BunkerView::BunkerView(const std::wstring &loader,const std::wstring &state_file
 #else
   impl_(std::make_shared<Impl>()){
   impl_->loader=Wide(loader,CP_ACP);impl_->state_file=Wide(state_file,CP_ACP);impl_->user_data=Wide(user_data,CP_ACP);
+#endif
+#ifdef REINCOMP_BUNKER_MODULES
+  if(const auto *url=_wgetenv(L"REINCOMP_LAUNCHER_URL");url && *url){
+    impl_->launcherHome=url;
+    impl_->dashboardPath.clear();
+  }
 #endif
 }
 BunkerView::BunkerView(const std::string &loader,const std::string &user_data,void *parent,PageEvent notify):
@@ -453,7 +490,7 @@ bool BunkerView::Message(void *hwnd,uint32_t message,uint64_t wparam,int64_t lpa
   if(!p.window)p.window=static_cast<HWND>(hwnd);
   if(p.pageEvent){if(message==WM_SIZE)p.Fit();if(message==WM_DESTROY)p.Close();return false;}
   switch(message){
-    case WM_APP+0x36b:p.Toggle();return true;
+    case web_controller::ToggleLauncher:p.Toggle();return true;
     case WM_APP+0x36e:if(p.visible)p.Show(false);return true;
     case WM_KEYDOWN:
       if(wparam=='B'&&GetKeyState(VK_CONTROL)<0){

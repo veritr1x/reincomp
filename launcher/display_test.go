@@ -1,6 +1,38 @@
 package main
 
-import "testing"
+import (
+	"os"
+	"path/filepath"
+	"testing"
+)
+
+func TestPreviousWindowSize(t *testing.T) {
+	original := displayMode
+	displayMode = func() (int, int, int) { return 1920, 1080, 60 }
+	t.Cleanup(func() { displayMode = original })
+	data := t.TempDir()
+	if size, max := previousWindowSize(data); size != "" || max {
+		t.Fatalf("fresh install returned %q, maximized %v", size, max)
+	}
+	for _, tc := range []struct {
+		file, want string
+		maximized  bool
+	}{
+		{"1438 778 0", "1438x778", false},
+		{"1190 702 1", "1190x702", true},
+		{"3840 2160 0", "1920x1080", false},
+		{"1400 0 0", "", false},
+		{"1400 800 2", "", false},
+		{"1400", "", false},
+	} {
+		if err := os.WriteFile(filepath.Join(data, "window-size"), []byte(tc.file), 0600); err != nil {
+			t.Fatal(err)
+		}
+		if size, max := previousWindowSize(data); size != tc.want || max != tc.maximized {
+			t.Errorf("read %q as %q, maximized %v", tc.file, size, max)
+		}
+	}
+}
 
 func TestBunkerDisplay(t *testing.T) {
 	mode := func() (int, int, int) { return 3840, 2160, 120 }

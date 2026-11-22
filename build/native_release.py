@@ -129,6 +129,22 @@ def prepare_windows_pod_files(app):
         if source != updated:
             path.write_text(updated, encoding='utf-8')
 
+    # The phone app supplies Close outside compact landscape. On Windows the
+    # WebView supplies it at every size. Keep the sidebar title compact-only.
+    css = app/'web/static/css/automata.css'
+    original = css.read_bytes()
+    updated = original
+    for old, new in (
+        (b'.shell-head, .live-short { display: none; }',
+         b'.shell-head { display: flex; flex: none; }\n.shell-head b, .live-short { display: none; }'),
+        (b'.shell-head b { font-size:', b'.shell-head b { display: block; font-size:'),
+    ):
+        if updated.count(old) + updated.count(new) != 1:
+            raise ValueError('The pinned Pod Programs navigation styles changed')
+        updated = updated.replace(old, new)
+    if updated != original:
+        css.write_bytes(updated)
+
 
 def build_windows_server(go, source, work, destination, env):
     # The pinned server keeps a file handle for lazy table reads. Windows cannot

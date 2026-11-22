@@ -4,6 +4,7 @@
 #include "inspect-player-scene.h"
 #include "player-window.h"
 #include "screen-route.h"
+#include "desktop-skip.h"
 static std::chrono::steady_clock::time_point titleStarted{};
 static uint32_t routeTitleHandle=0;
 static uint32_t routeAutoHandle=0;
@@ -66,7 +67,7 @@ extern "C" void *desktop_arena_tap_address(unsigned row){
 }
 extern "C" __declspec(dllexport) void BunkerArenaTap(unsigned row,P target){desktop_arena_tap(row,target);}
 static void showBunkerFromHeader(){
-    if(auto window=player_window::attached.load())PostMessageW(window,WM_APP+0x36b,0,0);
+    if(auto window=player_window::attached.load())PostMessageW(window,bunker::web_controller::ToggleLauncher,0,0);
 }
 static bool desktopHeaderReady=false;
 static std::atomic<P> campaignBadgeUpdate{},headerStart{},headerUpdate{},flyingMomUpdate{},battleHudUpdate{};
@@ -267,11 +268,14 @@ static void observePlayerFrame(){
 #endif
     player_window::install();
     if(const auto size=player_window::pendingResolution.exchange(0,std::memory_order_acq_rel)){
-        setSize(int(size>>16),int(size&0xffff),fullScreenMode(),0);
+        if(width()!=int(size>>16) || height()!=int(size&0xffff))
+            setSize(int(size>>16),int(size&0xffff),fullScreenMode(),0);
     }
     game_pages::frame(width(),height());
     static auto desktopInput=reinterpret_cast<void(*)()>(GetProcAddress(GetModuleHandleW(L"EngineCalls.dll"),"AdvanceDesktopInput"));
     if(desktopInput)desktopInput();
+    static auto skipPressed=reinterpret_cast<bool(*)()>(GetProcAddress(GetModuleHandleW(L"EngineCalls.dll"),"ConsumeDesktopSkip"));
+    if(skipPressed && skipPressed())desktop_skip::press(width(),height());
     if(frame_cpu::enabled)frame_cpu::begin(id);
     int renderInterval=checkpoint && requestedRate && applyInterval ? applyInterval(requestedRate) : 0;
 #ifdef REINCOMP_BUNKER_MODULES
@@ -296,8 +300,11 @@ static void observePlayerFrame(){
         const int desiredMode=borderless?1:3;
         if(!interactive || lastFrame<0){
             const char *w=std::getenv("REINCOMP_WINDOW_WIDTH"),*h=std::getenv("REINCOMP_WINDOW_HEIGHT");
-            const int desiredW=interactive && w?std::atoi(w):3840;
-            const int desiredH=interactive && h?std::atoi(h):2160;
+            RECT client{};
+            const auto parent=player_window::launcherWindow();
+            const bool embedded=parent && GetClientRect(parent,&client) && client.right>0 && client.bottom>0;
+            const int desiredW=embedded?client.right:(interactive && w?std::atoi(w):3840);
+            const int desiredH=embedded?client.bottom:(interactive && h?std::atoi(h):2160);
             if(width()!=desiredW || height()!=desiredH || (lastFrame<0 && fullScreenMode()!=desiredMode))
                 setSize(desiredW,desiredH,desiredMode,0);
         }

@@ -79,6 +79,23 @@ func desktopDisplay(conf, fps, size string, mode func() (int, int, int)) display
 // The launcher and its save commands can also be built on a non-Windows host.
 var displayMode = func() (int, int, int) { return 0, 0, 0 }
 
+func previousWindowSize(data string) (string, bool) {
+	contents, err := os.ReadFile(filepath.Join(data, "window-size"))
+	if err != nil {
+		return "", false
+	}
+	var width, height, maximized int
+	if n, err := fmt.Sscan(string(contents), &width, &height, &maximized); err != nil || n != 3 ||
+		width < 1 || height < 1 || width > 32767 || height > 32767 || (maximized != 0 && maximized != 1) {
+		return "", false
+	}
+	screenW, screenH, _ := displayMode()
+	if screenW > 0 && screenH > 0 {
+		width, height = min(width, screenW), min(height, screenH)
+	}
+	return fmt.Sprintf("%dx%d", width, height), maximized == 1
+}
+
 func savedDisplay(data, fps, render string) (displaySettings, error) {
 	conf, err := os.ReadFile(filepath.Join(data, "pods", "display.conf"))
 	if err != nil && !errors.Is(err, os.ErrNotExist) {

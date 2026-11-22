@@ -39,6 +39,7 @@ static void sampleFingers(void (*read)(int,Touch *)){
     for (auto &finger : fingers) finger.id = fingerId(static_cast<uint32_t>(finger.id));
 }
 static bool padBack, lastBack;
+static bool skipRequested;
 static bool sparseMouse=std::getenv("REINCOMP_COMPARE_MENU_POINTER")==nullptr, needMouse=true;
 static uint64_t mouseChecks=0, idleChecks=0;
 enum class MouseAction { Down, Move, Up };
@@ -171,22 +172,23 @@ static bool controller(HWND window,XINPUT_GAMEPAD &result){
     return desktop_gamepad::readPlayStation(window,result);
 }
 static Point controllerCursor(HWND window,Point axes,float dt,Point original,int w,int h){
-    if(!axes.x && !axes.y)return original;
     RECT bounds{};
     POINT at{};
     if(!GetClientRect(window,&bounds) || !GetCursorPos(&at) || !ScreenToClient(window,&at) ||
        bounds.right<1 || bounds.bottom<1)return original;
     // Keep subpixel motion from a lightly deflected stick across frames.
     static Point fraction{};
-    const float scale=bounds.bottom*std::fmin(dt,0.05f);
-    const float dx=axes.x*scale+fraction.x,dy=-axes.y*scale+fraction.y;
-    const int ix=int(dx),iy=int(dy);
-    fraction={dx-ix,dy-iy};
-    at.x=std::clamp<LONG>(at.x+ix,0,bounds.right-1);
-    at.y=std::clamp<LONG>(at.y+iy,0,bounds.bottom-1);
-    Point position{float(at.x)*w/bounds.right,float(bounds.bottom-1-at.y)*h/bounds.bottom};
-    if(ClientToScreen(window,&at))SetCursorPos(at.x,at.y);
-    return position;
+    if(axes.x || axes.y){
+        const float scale=bounds.bottom*std::fmin(dt,0.05f);
+        const float dx=axes.x*scale+fraction.x,dy=-axes.y*scale+fraction.y;
+        const int ix=int(dx),iy=int(dy);
+        fraction={dx-ix,dy-iy};
+        at.x=std::clamp<LONG>(at.x+ix,0,bounds.right-1);
+        at.y=std::clamp<LONG>(at.y+iy,0,bounds.bottom-1);
+        POINT screen=at;
+        if(ClientToScreen(window,&screen))SetCursorPos(screen.x,screen.y);
+    }
+    return {float(at.x)*w/bounds.right,float(bounds.bottom-1-at.y)*h/bounds.bottom};
 }
 // Keep a press with its original page when the cursor crosses its border
 // or the page closes before the player releases the button.
@@ -322,20 +324,70 @@ static void advance(){
 
     XINPUT_GAMEPAD pad{};
     const bool padConnected=focused && controller(window,pad);
+    // Bunker owns keyboard focus while open, so handle its toggle on both
+    // sides of the WebView. Require a release after reconnect or refocus.
+    static bool launcherButtonReady=false;
+    const bool launcherButtonDown=(pad.wButtons&XINPUT_GAMEPAD_BACK)!=0;
+    if(padConnected && launcherButtonReady && launcherButtonDown){
+        const BOOL posted=PostMessageW(window,bunker::web_controller::ToggleLauncher,0,0);
+        if(tracePointer)if(auto log=std::fopen("desktop-input.log","a")){
+            std::fprintf(log,"frame=%d launcher toggle posted=%d\n",current,int(posted));
+            std::fclose(log);
+        }
+    }
+    launcherButtonReady=padConnected && !launcherButtonDown;
     auto aim=thumb(pad.sThumbRX,pad.sThumbRY,XINPUT_GAMEPAD_RIGHT_THUMB_DEADZONE);
     if(aim.x || aim.y)needMouse=true;
-    if(focused)pos=controllerCursor(window,aim,dt,pos,w,h);
+    if(padConnected && (aim.x || aim.y || (pad.wButtons&XINPUT_GAMEPAD_A) || padPointer.held))
+        pos=controllerCursor(window,aim,dt,pos,w,h);
     static const auto hit=reinterpret_cast<bunker::web_controller::HitTest>(
         GetProcAddress(GetModuleHandleW(L"GameAssembly.dll"),"DesktopWebTarget"));
     const bool dashboard=browserPad.route(window,padConnected,pad,dt,hit,bunker::web_controller::post);
     lastBack=padConnected && padBack;
     padBack=(pad.wButtons&XINPUT_GAMEPAD_B)!=0;
-    padPointer.sample(0,false,pad.wButtons&XINPUT_GAMEPAD_A,false,!padConnected||dashboard,pos,pos,dt);
+    static bool outsidePress=false;
+    const bool tapHeld=(pad.wButtons&XINPUT_GAMEPAD_A)!=0;
+    if(!tapHeld)outsidePress=false;
+    else if(!padPointer.held && (pos.x<0 || pos.y<0 || pos.x>=w || pos.y>=h))outsidePress=true;
+    padPointer.sample(0,false,tapHeld&&!outsidePress,false,!padConnected||dashboard,pos,pos,dt);
     if(padPointer.visible)padPointer.touch.id=fingerId(padFinger);
+    if(tracePointer && padPointer.visible && padPointer.touch.phase!=bunker::desktop_touch::Stationary){
+        if(auto log=std::fopen("desktop-input.log","a")){
+            std::fprintf(log,"frame=%d controller phase=%d position=%.1f,%.1f surface=%d,%d\n",
+                current,int(padPointer.touch.phase),padPointer.touch.position.x,padPointer.touch.position.y,w,h);
+            std::fclose(log);
+        }
+    }
 
     bunker::windows::keyboard_touch::Stick keys;
+    GUITHREADINFO gui{sizeof(gui)};
+    const bool gameKeys=focused && GetGUIThreadInfo(0,&gui) &&
+                        (gui.hwndFocus==window || (parent && gui.hwndFocus==parent));
+    // Arm each binding after a released sample in the focused game. A key
+    // held across a focus change or a controller reconnect is not a press.
+    static bool keyReady=false,padReady=false;
+    // Use one clock for Space. A delayed Unity key-down after the Win32
+    // key-up can otherwise dispatch the same physical press twice.
+    const bool space=gameKeys && GetAsyncKeyState(VK_SPACE)<0;
+    const bool skipButton=(pad.wButtons&XINPUT_GAMEPAD_Y)!=0;
+    if(gameKeys && !dashboard && ((space && keyReady) || (skipButton && padReady))){
+        skipRequested=true;
+        if(tracePointer)if(auto log=std::fopen("desktop-input.log","a")){
+            std::fprintf(log,"frame=%d skip input=%s\n",current,space && keyReady?"space":"controller");
+            std::fclose(log);
+        }
+    }
+    keyReady=gameKeys && !dashboard && !space;
+    padReady=gameKeys && !dashboard && padConnected && !skipButton;
+    if(!gameKeys || dashboard)skipRequested=false;
     if(focused&&!dashboard){
-        auto active=[](int key){return keyHeld(key) || (keyDown && keyDown(key));};
+        // Unity can miss keyboard state when its window is embedded in the launcher.
+        // The host can retain focus after Deploy. A focused WebView owns its own keys.
+        const bool embeddedKeys=parent && gameKeys;
+        auto active=[embeddedKeys](int key){
+            return keyHeld(key) || (keyDown && keyDown(key)) ||
+                   (embeddedKeys && GetAsyncKeyState(key-'a'+'A')<0);
+        };
         keys.Set('W',active('w') || (pad.wButtons&XINPUT_GAMEPAD_DPAD_UP));
         keys.Set('A',active('a') || (pad.wButtons&XINPUT_GAMEPAD_DPAD_LEFT));
         keys.Set('S',active('s') || (pad.wButtons&XINPUT_GAMEPAD_DPAD_DOWN));

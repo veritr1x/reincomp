@@ -96,6 +96,7 @@ def dependencies(windows, release):
             with zip_file.open(name) as src, dest.open('wb') as out:
                 shutil.copyfileobj(src,out)
     shutil.copyfile(NATIVE/'desktop-display.html',release/'pods/app/web/templates/desktop-display.html')
+    native_release.prepare_windows_pod_files(release/'pods/app')
 
 
 def build_native(a, work, bunker, release, abi):
