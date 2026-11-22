@@ -19,6 +19,8 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+      - name: Test Windows updater browser handoff
+        run: python launcher/test_update_player.py
       - uses: msys2/setup-msys2@v2
         id: msys2
         with:

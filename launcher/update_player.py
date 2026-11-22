@@ -40,6 +40,69 @@ def edge_path():
     raise FileNotFoundError("Install Microsoft Edge to build this update.")
 
 
+@contextlib.contextmanager
+def browser_job(args):
+    """Own only this build's Edge process tree, including a relaunched browser."""
+    import _winapi
+    import ctypes as c
+    from ctypes import wintypes as w
+
+    class BasicLimits(c.Structure):
+        _fields_ = [("time_limits", c.c_int64 * 2), ("flags", w.DWORD),
+                    ("working_set_limits", c.c_size_t * 2), ("active_limit", w.DWORD),
+                    ("affinity", c.c_size_t), ("priority", w.DWORD), ("scheduling", w.DWORD)]
+
+    class ExtendedLimits(c.Structure):
+        _fields_ = [("basic", BasicLimits), ("io_counters", c.c_uint64 * 6),
+                    ("memory_limits", c.c_size_t * 4)]
+
+    class BasicAccounting(c.Structure):
+        _fields_ = [("times", c.c_int64 * 4), ("page_faults", w.DWORD), ("total", w.DWORD),
+                    ("active", w.DWORD), ("terminated", w.DWORD)]
+
+    kernel = c.WinDLL("kernel32", use_last_error=True)
+    kernel.CreateJobObjectW.restype = w.HANDLE
+    job = w.HANDLE(kernel.CreateJobObjectW(None, None))
+    if not job:
+        raise c.WinError(c.get_last_error())
+
+    def active():
+        info = BasicAccounting()
+        if not kernel.QueryInformationJobObject(job, 1, c.byref(info), c.sizeof(info), None):
+            raise c.WinError(c.get_last_error())
+        return info.active != 0
+
+    try:
+        limits = ExtendedLimits()
+        limits.basic.flags = 0x2000  # JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+        if not kernel.SetInformationJobObject(job, 9, c.byref(limits), c.sizeof(limits)):
+            raise c.WinError(c.get_last_error())
+        # Assign Edge before its first thread can spawn another process and exit.
+        process, thread, _, _ = _winapi.CreateProcess(str(args[0]), subprocess.list2cmdline(args),
+            None, None, False, 0x4 | subprocess.CREATE_NO_WINDOW, None, None, subprocess.STARTUPINFO())
+        try:
+            if not kernel.AssignProcessToJobObject(job, w.HANDLE(process)):
+                error = c.WinError(c.get_last_error())
+                _winapi.TerminateProcess(process, 1)
+                raise error
+            if kernel.ResumeThread(w.HANDLE(thread)) == -1:
+                raise c.WinError(c.get_last_error())
+        finally:
+            _winapi.CloseHandle(thread)
+            _winapi.CloseHandle(process)
+        try:
+            yield active
+        finally:
+            if not kernel.TerminateJobObject(job, 0):
+                raise c.WinError(c.get_last_error())
+            # Let the browser release its private profile before removing it.
+            deadline = time.monotonic() + 5
+            while active() and time.monotonic() < deadline:
+                time.sleep(.05)
+    finally:
+        _winapi.CloseHandle(job.value)
+
+
 def rebuild(root, output, version, manifest_hash, base=SITE, cancel=None):
     if not SHA.fullmatch(manifest_hash):
         raise ValueError("Invalid Windows runtime digest")
@@ -159,24 +222,22 @@ try {
     with http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler) as server:
         authority = "127.0.0.1:" + str(server.server_port)
         threading.Thread(target=server.serve_forever, daemon=True).start()
-        with tempfile.TemporaryDirectory(prefix="bunker-update-edge-", ignore_cleanup_errors=True) as profile:
-            browser = subprocess.Popen([edge_path(), "--headless=new", "--no-first-run", "--disable-extensions",
+        try:
+            with tempfile.TemporaryDirectory(prefix="bunker-update-edge-", ignore_cleanup_errors=True) as profile, browser_job([
+                edge_path(), "--headless=new", "--no-first-run", "--disable-extensions",
                 "--disable-background-networking", "--disable-sync", "--no-proxy-server",
                 "--host-resolver-rules=MAP * ~NOTFOUND, EXCLUDE 127.0.0.1", "--user-data-dir=" + profile,
-                "http://" + authority + prefix], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            try:
+                "http://" + authority + prefix]) as browser_active:
                 deadline = time.monotonic() + 1800
                 while not finished.wait(.5):
                     if cancel and cancel.is_set():
                         raise RuntimeError("Update canceled")
-                    if browser.poll() is not None or time.monotonic() > deadline:
+                    if not browser_active() or time.monotonic() > deadline:
                         raise RuntimeError("The local update build did not finish")
                 if failure:
                     raise RuntimeError(failure[0])
-            finally:
-                browser.terminate()
-                browser.wait()
-                server.shutdown()
+        finally:
+            server.shutdown()
     return expected
 
 

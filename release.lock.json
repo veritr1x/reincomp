@@ -1,8 +1,8 @@
 {
   "portable": {
     "bunkerVersion": "1.12.16",
-    "sha256": "49ace1444489837981a349e42e0c683a2b10a3b53ab5ba4eedf23a479af4f7a0",
-    "size": 1057733555,
+    "sha256": "f5cbdb2b5a8c1c92737f528bb6e1ad6391ebabbd091f2174a1f1e08adb7f4226",
+    "size": 1057736627,
     "playerMembers": {
       "game/EngineCalls.dll": "21dd6b1fdf6b3d11afc79ea53447a1469155652b7ee26c8139d6c0e0858c9767",
       "game/GameAssembly.dll": "5fd5b71208045930453b0cda60110123b0bae36bb84d9605a02b96081aaee83c",
@@ -13,7 +13,7 @@
       "game/resource-setup.css": "9e053656b6aa02b705eb89fc5f1b54b13e77f633cbd86777cacc8912273b242a",
       "game/resource-setup.html": "0e9a40db5f306ffc1ed75dd39f9e8078789fc86b30e8d413fc842893f149aa0d",
       "game/resource-window.exe": "303c32fbde5634adb4fffa85d21bbf1814465028b2191d4d58ef8ea0bfed3db1",
-      "launcher.exe": "100ef1857474f6359bacafe2c9c6ace35415a0658e4b3295e6491faf195b8f69",
+      "launcher.exe": "1cf2bea2fd2e85b5d9384687556b24fb592a3713a123f1cc97acc75a0ea944ae",
       "pods/app/web/static/css/automata.css": "ec662eb9424131d83bf0e558015b715ce72fa25938ea3d2075d46684a1714ea3",
       "server/bunker-server.exe": "dc4973fd7562bde0451e78056b9ccf7e9f599c3511723643a6528ecc59279ff5"
     },
