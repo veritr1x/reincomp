@@ -1,7 +1,7 @@
 {
   "portable": {
-    "bunkerVersion": "1.12.16",
-    "sha256": "f5cbdb2b5a8c1c92737f528bb6e1ad6391ebabbd091f2174a1f1e08adb7f4226",
+    "bunkerVersion": "1.12.17",
+    "sha256": "d9257e50aa54411b43a1af11ebfa5101aa2a8f3d1d5e4f3ab3dad18f86ed941c",
     "size": 1057736627,
     "playerMembers": {
       "game/EngineCalls.dll": "21dd6b1fdf6b3d11afc79ea53447a1469155652b7ee26c8139d6c0e0858c9767",

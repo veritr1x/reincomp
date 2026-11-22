@@ -3,6 +3,13 @@
 What changed, newest first, by date and area. A release's heading comes
 above the dated sections it holds.
 
+## 0.2.2 (2026-11-22)
+
+- The Windows game opens at its saved window size and fits the game view on the first frame. Deploy also handles installation folders with spaces.
+- WASD moves the character in 2D and 3D scenes. The right stick moves the cursor, and Xbox A or PlayStation Cross taps at its position. Space, Xbox Y, or PlayStation Triangle activates Skip when the scene offers it.
+- Ctrl+B, Xbox View (Select/Back), and PlayStation Options open the Bunker launcher. Press again to return to the game. Pod Programs keeps its Close button visible across desktop window sizes.
+- Automatic Windows updates now finish when Edge hands the build to a child process. The updater also closes its private browser processes after the build.
+
 ## 0.2.1 (2026-11-21)
 
 - The portable Windows player can update and restart from Bunker’s launcher.
