@@ -119,12 +119,6 @@ def prepare_windows_pod_files(pods, bunker):
     app = pods/'app'
     shutil.copytree(bunker/'android/app/src/main/python', app, dirs_exist_ok=True,
                     ignore=shutil.ignore_patterns('__pycache__', '*.py[co]'))
-    # Backport the Archive's desktop Close control until it ships in the pinned Bunker release.
-    patch = NATIVE/'bunker-archive-close.patch'
-    apply = ['git', '-c', 'core.autocrlf=false', 'apply', '--no-index']
-    env = {**os.environ, 'GIT_CEILING_DIRECTORIES': str(app.resolve().parent)}
-    if subprocess.run([*apply, '--reverse', '--check', patch], cwd=app, env=env, stderr=subprocess.DEVNULL).returncode:
-        run(*apply, patch, cwd=app, env=env)
     version = pods/'VERSION'
     with version.open('rb') as stream:
         previous = stream.readline()

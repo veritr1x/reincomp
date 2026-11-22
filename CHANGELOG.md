@@ -3,6 +3,12 @@
 What changed, newest first, by date and area. A release's heading comes
 above the dated sections it holds.
 
+## 0.2.3 (2026-11-22)
+
+- Deck Builder now displays character portraits and equipment images in the Windows player.
+- The Archive has a visible Close button in narrow and wide windows. Use it to return to the launcher.
+- Windows builds now use Bunker 1.12.18.
+
 ## 0.2.2 (2026-11-22)
 
 - The Windows game opens at its saved window size and fits the game view on the first frame. Deploy also handles installation folders with spaces.
