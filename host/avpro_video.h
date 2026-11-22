@@ -16,11 +16,10 @@
 // into a GL_TEXTURE_2D whose name _GetTextureHandle reports, as the Java
 // player's non-OES path does. The movie finishes when the clock reaches its
 // duration. No audio track is played.
-// Without a decoder (other platforms, unresolvable path, decode failure) a
-// movie has no video track: it reports its real duration (MP4 mvhd) or 1 s,
-// plays for one Update() and then finishes, so AVPro raises Started and then
-// FinishedPlaying and the game continues as it does when a movie ends on a
-// device. Looping movies keep playing. Method names and descriptors are the APK's (dexdump of
+// Without a decoder a readable MP4 still runs its playback clock. Chapter
+// titles cue the next scene before the movie ends. For a missing or untimed
+// file, deliver Started and FinishedPlaying on successive updates.
+// Looping movies keep playing. Method names and descriptors are the APK's (dexdump of
 // classes.dex). Unimplemented array/double methods (GetTextureTransform,
 // GetSeekableTimeRange, GetCurrentAbsoluteTimestamp) are not declared, so a
 // call fails as a Java NoSuchMethodError instead of returning invented data.
@@ -127,6 +126,7 @@ class Service {
     int index = 0;
     bool opened = false, playing = false, paused = false, finished = false, looping = false, muted = false;
     int updates_playing = 0;
+    bool timed = false;
     int64_t duration_ms = 0, position_ms = 0;
     uint32_t volume = 0x3f800000, pan = 0, rate = 0x3f800000;  // binary32 bits
     std::string path;
@@ -256,7 +256,8 @@ class Service {
       p->path = guest;
       p->opened = true;
       p->decoder = std::move(decoder);
-      p->duration_ms = duration && *duration > 0 ? *duration : 1000;
+      p->timed = duration && *duration > 0;
+      p->duration_ms = p->timed ? *duration : 1000;
       Log(*p, p->decoder ? "opened (decoding video)" : duration ? "opened (mvhd duration, no decoder)" : "opened (file not in app storage; 1 s)");
       return true;
     });
@@ -297,12 +298,12 @@ class Service {
     mutate("Seek", "(I)V", seek);
     mutate("SeekFast", "(I)V", seek);
     mutate("Update", "()V", [this](Player &p, const Args &) {
-      if (p.decoder) {
+      if (p.decoder || p.timed) {
         if (!p.playing || p.Now() < p.duration_ms) return;
         if (p.looping) {
           p.position_ms = 0;
           p.started = Clock::now();
-          p.decoder->Seek(0);
+          if (p.decoder) p.decoder->Seek(0);
           return;
         }
         p.playing = false;

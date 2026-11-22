@@ -17,16 +17,60 @@ namespace {
 using bunker::windows::BunkerView;
 constexpr UINT choose = WM_APP+101, player = WM_APP+102, finish = WM_APP+103, toggle = WM_APP+104;
 constexpr UINT openProgram = WM_APP+105, resetProgram=WM_APP+106;
+constexpr UINT showSetup = WM_APP+107, updateSetup=WM_APP+108;
+constexpr UINT_PTR setupTimer=2;
+enum { pickArchive=301, pickFolder, deployGame };
 std::unique_ptr<BunkerView> page, dashboard;
 std::filesystem::path install;
 HWND child{};
 DWORD playerPid{};
 WINDOWPLACEMENT previous{sizeof(WINDOWPLACEMENT)};
 bool fullscreen{};
+HWND setupHint{}, archiveButton{}, folderButton{}, deployButton{}, setupStatus{};
+
+void layoutSetup(HWND window) {
+    if (!setupHint) return;
+    RECT r{};
+    GetClientRect(window,&r);
+    const int margin=16, width=std::max(1L,r.right-2*margin);
+    MoveWindow(setupHint,margin,margin,width,40,TRUE);
+    int y=margin+44;
+    for (HWND button : {archiveButton,folderButton,deployButton}) {
+        MoveWindow(button,margin,y,std::min(width,280),30,TRUE);
+        y+=36;
+    }
+    MoveWindow(setupStatus,margin,y,width,std::max(1L,r.bottom-y-margin),TRUE);
+}
+
+void showNativeSetup(HWND window) {
+    if (setupHint || child) return;
+    auto control=[&](const wchar_t *cls,const wchar_t *label,DWORD style,UINT_PTR id) {
+        HWND h=CreateWindowExW(0,cls,label,WS_CHILD|WS_VISIBLE|style,0,0,0,0,window,
+                                reinterpret_cast<HMENU>(id),GetModuleHandleW(nullptr),nullptr);
+        SendMessageW(h,WM_SETFONT,reinterpret_cast<WPARAM>(GetStockObject(DEFAULT_GUI_FONT)),TRUE);
+        return h;
+    };
+    setupHint=control(L"STATIC",L"Bunker setup\nChoose your Android game files, then select Deploy.",0,0);
+    archiveButton=control(L"BUTTON",L"Choose resource archive...",WS_TABSTOP|WS_DISABLED,pickArchive);
+    folderButton=control(L"BUTTON",L"Copy extracted folder...",WS_TABSTOP|WS_DISABLED,pickFolder);
+    deployButton=control(L"BUTTON",L"Deploy",WS_TABSTOP|WS_DISABLED,deployGame);
+    setupStatus=control(L"STATIC",L"Checking game files...",SS_NOPREFIX,0);
+    layoutSetup(window);
+    SetTimer(window,setupTimer,700,nullptr);
+    std::cout << "setup-state" << std::endl;
+}
+
+void closeNativeSetup(HWND window) {
+    KillTimer(window,setupTimer);
+    for (HWND control : {setupHint,archiveButton,folderButton,deployButton,setupStatus})
+        if (control) DestroyWindow(control);
+    setupHint=archiveButton=folderButton=deployButton=setupStatus=nullptr;
+}
 
 void fit(HWND window) {
     RECT r{};
     GetClientRect(window, &r);
+    layoutSetup(window);
     if (child && IsWindow(child)) PostMessageW(child,WM_APP+0x370,0,0);
     else if (page) page->PageFrame(0, 0, r.right, r.bottom, r.right, r.bottom);
 }
@@ -62,6 +106,7 @@ void attach(HWND window) {
                 if (!SetParent(w,window) && GetLastError()) continue;
             }
             child = w;
+            closeNativeSetup(window);
             dashboard.reset();
             if (page) { page->Visible(false); page.reset(); }
             fit(window);
@@ -78,6 +123,25 @@ LRESULT CALLBACK events(HWND w,UINT message,WPARAM wp,LPARAM lp) {
         window_size::save(w,install/"data");
     if (dashboard && dashboard->Message(w,message,wp,lp)) return 0;
     switch (message) {
+    case showSetup: showNativeSetup(w); return 0;
+    case updateSetup: {
+        std::unique_ptr<std::wstring> status(reinterpret_cast<std::wstring *>(lp));
+        if (setupHint) {
+            EnableWindow(archiveButton,wp & 1); EnableWindow(folderButton,wp & 1);
+            EnableWindow(deployButton,wp & 2);
+            SetWindowTextW(setupStatus,status->c_str());
+        }
+        return 0;
+    }
+    case WM_COMMAND:
+        if (setupHint && HIWORD(wp)==BN_CLICKED) {
+            switch (LOWORD(wp)) {
+            case pickArchive: std::cout << "setup-choose" << std::endl; return 0;
+            case pickFolder:  std::cout << "setup-folder" << std::endl; return 0;
+            case deployGame:  std::cout << "setup-deploy" << std::endl; return 0;
+            }
+        }
+        break;
     case resetProgram: dashboard.reset(); if(page)page->Visible(true);return 0;
     case openProgram: {
         std::unique_ptr<std::wstring> path(reinterpret_cast<std::wstring *>(lp));
@@ -123,7 +187,10 @@ LRESULT CALLBACK events(HWND w,UINT message,WPARAM wp,LPARAM lp) {
         return 0;
     }
     case player: playerPid=DWORD(wp); child=nullptr; SetTimer(w,1,50,nullptr); return 0;
-    case WM_TIMER: if (wp==1 && playerPid) attach(w); return 0;
+    case WM_TIMER:
+        if (wp==1 && playerPid) attach(w);
+        if (wp==setupTimer && setupHint) std::cout << "setup-state" << std::endl;
+        return 0;
     case WM_EXITSIZEMOVE:
     case WM_SETFOCUS: if (child) PostMessageW(child,WM_APP+0x36f,0,0); break;
     case WM_DPICHANGED: {
@@ -172,14 +239,25 @@ int WINAPI wWinMain(HINSTANCE instance,HINSTANCE,PWSTR,int) {
     auto w=CreateWindowExW(0,wc.lpszClassName,L"Nier Reincarnation",style,
         work.left+(work.right-work.left-width)/2,work.top+(work.bottom-work.top-height)/2,width,height,nullptr,nullptr,instance,nullptr);
     if (!w) return 1;
+    // WebView2 discovery and the first ShowWindow can block in a cold Wine prefix.
+    std::cout << "window\t" << reinterpret_cast<uintptr_t>(w) << std::endl;
     page=std::make_unique<BunkerView>((root/L"pods/WebView2Loader.dll").wstring(),(root/L"data/setup-webview").wstring(),
-        w,[](const std::wstring &,const std::wstring &){});
+        w,[w](const std::wstring &event,const std::wstring &){
+            if (event==L"WebViewUnavailable") PostMessageW(w,showSetup,0,0);
+        });
     fit(w); page->OpenExternalLinks(true); page->Navigate(url); page->Visible(true);
-    ShowWindow(w,saved.maximized?SW_SHOWMAXIMIZED:SW_SHOW); std::cout << "window\t" << reinterpret_cast<uintptr_t>(w) << std::endl;
+    ShowWindow(w,saved.maximized?SW_SHOWMAXIMIZED:SW_SHOW);
     std::thread([w]{
         std::string line;
         while (std::getline(std::cin,line)) {
-            if (line=="choose") PostMessageW(w,choose,0,0);
+            if (line.size()>=8 && line.compare(0,6,"setup ")==0 && line[6]>='0' && line[6]<='3' && line[7]=='\t') {
+                const char *text=line.c_str()+8;
+                const int size=MultiByteToWideChar(CP_UTF8,0,text,-1,nullptr,0);
+                if (!size) continue;
+                auto status=std::make_unique<std::wstring>(size,L'\0');
+                MultiByteToWideChar(CP_UTF8,0,text,-1,status->data(),size);
+                if (PostMessageW(w,updateSetup,line[6]-'0',reinterpret_cast<LPARAM>(status.get()))) status.release();
+            } else if (line=="choose") PostMessageW(w,choose,0,0);
             else if (line=="choose-folder" || line=="choose-in-place") PostMessageW(w,choose,line=="choose-folder"?4:5,0);
             else if (line=="reset-program") PostMessageW(w,resetProgram,0,0);
             else if (line=="import-master") PostMessageW(w,choose,3,0);
@@ -194,6 +272,9 @@ int WINAPI wWinMain(HINSTANCE instance,HINSTANCE,PWSTR,int) {
         PostMessageW(w,finish,0,0);
     }).detach();
     MSG msg{};
-    while (GetMessageW(&msg,nullptr,0,0)>0) { TranslateMessage(&msg); DispatchMessageW(&msg); }
+    while (GetMessageW(&msg,nullptr,0,0)>0) {
+        if (setupHint && IsDialogMessageW(w,&msg)) continue;
+        TranslateMessage(&msg); DispatchMessageW(&msg);
+    }
     return 0;
 }

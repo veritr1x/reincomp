@@ -44,8 +44,11 @@ With auto-deploy off, it opens the launcher and waits for Deploy. Use
 row opens the shared dashboard with Display, Summon Rates and the save editors.
 The Archive has its own row on the launcher.
 Options includes save import and export, master-data import, auto-deploy,
-theme, server status and the log. Stop Lunar Tear before changing the
-installed resources or importing a save. Deploy starts the game in this window.
+theme, server status and the log. During play, press **Ctrl+B → Options → Stop
+Lunar Tear**. Confirm to close the game and return to the launcher with the
+server stopped. Under **Options → Import save backup**, select your Bunker
+backup ZIP or the emulator's `game.db`. Select **Deploy** to resume with the
+imported save. The previous save is kept in `.bunker-player/data/server.before-import`.
 
 In the portable Windows player, **Options → Check for updates** offers
 **Update and restart** when a newer Windows release is available. Enable

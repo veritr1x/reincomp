@@ -148,6 +148,11 @@ func run(root, resourceDir, assets, fps, render string, prepareOnly, fullscreen,
 		assets = locateResources(root, resourceDir)
 	}
 	var setup *resourceWindow
+	defer func() {
+		if setup != nil {
+			setup.close()
+		}
+	}()
 	view := filepath.Join(data, "bunker-view.json")
 	os.Remove(view)
 	readyFiles := resourcesReady(assets)
@@ -173,7 +178,6 @@ func run(root, resourceDir, assets, fps, render string, prepareOnly, fullscreen,
 			if e != nil {
 				return e
 			}
-			defer setup.close()
 		} else if e = importArchive(context.Background(), server, assets, master, dump, func(s string) { fmt.Println(s) }); e != nil {
 			return e
 		}
@@ -193,6 +197,18 @@ func run(root, resourceDir, assets, fps, render string, prepareOnly, fullscreen,
 			}
 		}
 		err := serveAndPlay(root, data, assets, game, server, view, native, apk, fps, render, desktop, fullscreen, setup)
+		// The in-game menu lives inside Unity. Once the game and the server
+		// have exited, restore a standalone launcher with its own file picker.
+		if errors.Is(err, errReturnToLauncher) {
+			if setup != nil {
+				setup.close()
+			}
+			setup, e = startLauncher(root, server, assets, "", "", resourcesReady(assets), false)
+			if e != nil {
+				return e
+			}
+			continue
+		}
 		if !errors.Is(err, errStoppedFromLauncher) {
 			return err
 		}
@@ -209,6 +225,7 @@ func run(root, resourceDir, assets, fps, render string, prepareOnly, fullscreen,
 }
 
 var errStoppedFromLauncher = errors.New("Lunar Tear stopped from the launcher")
+var errReturnToLauncher = errors.New("return to the launcher after stopping the game")
 
 func serveAndPlay(root, data, assets, game, server, view, native, apk, fps, render string, desktop, fullscreen bool, setup *resourceWindow) error {
 	// The Bunker's pages (Pod Programs) are served when the pods folder is there.
@@ -392,7 +409,10 @@ func serveAndPlay(root, data, assets, game, server, view, native, apk, fps, rend
 			}
 			return resizePlayerWindow(pid, display.size)
 		}
-		e = session.play(makePlayer)
+		e = session.play(makePlayer, menu)
+		if errors.Is(e, errReturnToLauncher) {
+			return e
+		}
 	} else {
 		cmd, err := makePlayer()
 		if err != nil {

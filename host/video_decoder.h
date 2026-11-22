@@ -112,7 +112,9 @@ class MediaFoundationDecoder final : public Decoder {
   bool Init(const std::filesystem::path &path) {
     IMFAttributes *attrs = nullptr;
     if (FAILED(MFCreateAttributes(&attrs, 2))) return false;
-    attrs->SetUINT32(MF_SOURCE_READER_ENABLE_VIDEO_PROCESSING, TRUE);
+    // The chapter title is 1334 pixels wide on a padded H.264 surface.
+    // The advanced processor exposes the actual RGB row pitch via Lock2D.
+    attrs->SetUINT32(MF_SOURCE_READER_ENABLE_ADVANCED_VIDEO_PROCESSING, TRUE);
     const HRESULT hr = MFCreateSourceReaderFromURL(path.wstring().c_str(), attrs, &reader_);
     attrs->Release();
     if (FAILED(hr)) { std::fprintf(stderr, "Video decoder: open failed hr=%#lx\n", (unsigned long)hr); return false; }

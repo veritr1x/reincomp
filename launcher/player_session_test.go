@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -8,6 +9,40 @@ import (
 	"testing"
 	"time"
 )
+
+func TestStopLunarTearClosesPlayerAndReturnsToLauncher(t *testing.T) {
+	dir := t.TempDir()
+	menu := &resourceWindow{stopServices: make(chan struct{}, 1)}
+	started := make(chan int, 1)
+	session := &playerSession{started: func(pid int) { started <- pid }}
+	oldClose := closePlayerWindow
+	closePlayerWindow = func(pid int) bool {
+		return os.WriteFile(filepath.Join(dir, strconv.Itoa(pid)), nil, 0600) == nil
+	}
+	defer func() { closePlayerWindow = oldClose }()
+	done := make(chan error, 1)
+	go func() {
+		done <- session.play(func() (*exec.Cmd, error) {
+			cmd := exec.Command(os.Args[0], "-test.run=^TestCalendarChild$")
+			cmd.Env = append(os.Environ(), "REINCOMP_CALENDAR_TEST_DIR="+dir)
+			return cmd, nil
+		}, menu)
+	}()
+	select {
+	case <-started:
+		menu.stopServices <- struct{}{}
+	case <-time.After(5 * time.Second):
+		t.Fatal("player did not start")
+	}
+	select {
+	case err := <-done:
+		if !errors.Is(err, errReturnToLauncher) {
+			t.Fatalf("Stop returned %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Stop did not finish the game session")
+	}
+}
 
 // The helper exits on its own close signal, like a player handling WM_CLOSE.
 func TestCalendarChild(t *testing.T) {
@@ -42,7 +77,7 @@ func TestPlayerRestartsAroundCalendarEdit(t *testing.T) {
 	defer func() { closePlayerWindow = oldClose }()
 	s := &playerSession{requests: make(chan playerRequest), editorGone: make(chan struct{})}
 	done := make(chan error, 1)
-	go func() { done <- s.play(makePlayer) }()
+	go func() { done <- s.play(makePlayer, nil) }()
 	waitPlayer := func(previous string) string {
 		t.Helper()
 		for end := time.Now().Add(5 * time.Second); time.Now().Before(end); {

@@ -1,8 +1,8 @@
 {
   "portable": {
-    "bunkerVersion": "1.12.18",
-    "sha256": "8a5e41869cfbc89b6ea74b88e527112d77f979cf8ce7e62cc08b7dc3097f2362",
-    "size": 1057737579,
+    "bunkerVersion": "1.12.19",
+    "sha256": "e9be2cf0529f78158e8bab2358b8d65af326a5c7d151b5ebaec4c46e10591ae2",
+    "size": 1057763073,
     "playerMembers": {
       "game/EngineCalls.dll": "21dd6b1fdf6b3d11afc79ea53447a1469155652b7ee26c8139d6c0e0858c9767",
       "game/GameAssembly.dll": "5fd5b71208045930453b0cda60110123b0bae36bb84d9605a02b96081aaee83c",
@@ -10,20 +10,22 @@
       "game/bunker_icon.py": "cc881470a8c2573943345eb50d03314de1d0c5ee205b4e2964a3df5ec6020b63",
       "game/desktop_bundles.py": "514548a3bd9a53e65e3c6b661bdea365c3917795b10f66df2afb98f120add274",
       "game/desktop_services.py": "c85695d3afd3316de83ba3ee33284038220292139c30e02760a12b2a5de33a9e",
+      "game/package_assets.py": "985eddf6f559caf278a3e51d571d6263d9ec5938e7c959ff848a70c2ce5759bc",
       "game/portable-emblem.json": "8e16f2ff05087d78565dc174de656a1c00361cb08f4dde6bb7e6cea8b0f2eeb5",
       "game/resource-setup.css": "9e053656b6aa02b705eb89fc5f1b54b13e77f633cbd86777cacc8912273b242a",
-      "game/resource-setup.html": "0e9a40db5f306ffc1ed75dd39f9e8078789fc86b30e8d413fc842893f149aa0d",
-      "game/resource-window.exe": "303c32fbde5634adb4fffa85d21bbf1814465028b2191d4d58ef8ea0bfed3db1",
-      "launcher.exe": "1cf2bea2fd2e85b5d9384687556b24fb592a3713a123f1cc97acc75a0ea944ae",
-      "pods/VERSION": "a584ce07ae14c1fe72e17733cbf7c0d48fd5e245eabf8aefdd13399a9e0c8bbf",
+      "game/resource-setup.html": "7c656e12baa0d429b3fc5ab067a77b80118d011143a7eb82d2bdac3681cb54b4",
+      "game/resource-window.exe": "fd27a2442ca7004085d19bd292655cbe306b4e59cd3ce805e72cbb48c9cbf85c",
+      "launcher.exe": "0de89ff9f231ac4b51e869bb1467f63b96a2a1b19fea9b2119cb5a2d153f596b",
+      "pods/VERSION": "76eff75482e785ae09b1d94af014cf099cdbb04416a4629a1840100b02f76153",
       "pods/app/archive/static/archive.css": "8f20523fbb327ba8502e4c83b676b105c23160e404244fd001107be4288bc7ad",
       "pods/app/archive/templates/base.html": "6ebb5bb56648c3cce2fdcb9152d08ce0f66246d5357aafdf609e17c001903fd0",
       "pods/app/desktop_runtime.py": "516bd98b06fa2829267acab2b366de7f78c220bb6c6cbd7d08e6f4cdcd43020d",
       "pods/app/web/static/css/automata.css": "deff39f2c6f4c308a9d44e59c649e844740ab3b0bb6e32c316f0a911e0d8386c",
       "pods/app/web/templates/base.html": "8d38659b40fd80eb578b2b834b597683b9147f532ca3cc7b4587bb7213ec3aca",
-      "server/bunker-server.exe": "fee8a27faeece01a80c024b9cbe184e9e3e91d7ca74a077af93bfcbcc0fecaff"
+      "server/bunker-server.exe": "6b8524c0a6c816369d9be5a39b257a7c6579a7e65e7d52e61bd243c991ab9b89"
     },
     "hostObjects": {
+      "embedded-bootstrap.o": "6ae308e80f28cc9c63953954203134785af64fa82f7a681221e69df92331271c",
       "host-033.o": "c9bf912b07fc30381fe6f922ed7e4a30a7fd849db7d704ea7994e247e05c5d32",
       "runtime-host.o": "b8148b7792d4e01e4000f39a173b016d7a9d21b78376edc3776dcd2f90a1cff2"
     }

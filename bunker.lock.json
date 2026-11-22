@@ -1,16 +1,16 @@
 {
   "bunker": {
     "repository": "https://github.com/veritr1x/bunker",
-    "release": "v1.12.18",
-    "commit": "93afbeafc0cae95684edcaeb1c70fac3818a08e8",
+    "release": "v1.12.19",
+    "commit": "b9c7c0e5fe2237d0ced7a9e23c4793ff414951b6",
     "browserKit": {
-      "file": "bunker-windows-browser-1.12.18.zip",
-      "sha256": "12d798094c4e785da2f2c7822c04bbc1b82b64fb92a2067ddf4bb404f85d2fca"
+      "file": "bunker-windows-browser-1.12.19.zip",
+      "sha256": "5140026902f0fb6eecea174bf93cfeb698f8c3c69fe60ea399e841a4e2b08525"
     },
     "server": {
       "windows-x86_64": {
-        "file": "bunker-server-1.12.18-windows-x86_64.exe",
-        "sha256": "5efa0c757e87ed820d36926ee5aab279614cd21b4d74bc4c0ea28df951272818"
+        "file": "bunker-server-1.12.19-windows-x86_64.exe",
+        "sha256": "2920b3d6930e0839a0f2c7cbd99d5b1507b3084ba4d44d9308143dca358754e2"
       }
     }
   }

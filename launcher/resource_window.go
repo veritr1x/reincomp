@@ -62,6 +62,59 @@ type resourceWindow struct {
 }
 
 func (w *resourceWindow) send(line string) { fmt.Fprintln(w.input, line) }
+
+// The caller holds mu and has checked that the game files are ready.
+func (w *resourceWindow) launch(path string) {
+	if !w.services {
+		w.services = true
+		w.startServices <- struct{}{}
+	}
+	if path != "" {
+		w.send("program " + path)
+		return
+	}
+	w.deployed = true
+	w.status = "Starting the game…"
+	close(w.deploy)
+}
+
+// A Win32 setup window uses the same pickers, import worker and deploy channel
+// when WebView2 cannot initialize (for example, in a fresh Proton prefix).
+func (w *resourceWindow) nativeSetup(action string) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	canChoose := !w.busy && !w.deployed && !w.services
+	canDeploy := !w.busy && !w.deployed && w.verified
+	switch action {
+	case "setup-choose", "setup-folder":
+		if canChoose {
+			w.busy = true
+			if action == "setup-folder" {
+				w.send("choose-folder")
+			} else {
+				w.send("choose")
+			}
+		}
+	case "setup-deploy":
+		if canDeploy {
+			w.launch("")
+		}
+	case "setup-state":
+		flags := 0
+		if canChoose {
+			flags |= 1
+		}
+		if canDeploy {
+			flags |= 2
+		}
+		message := strings.Join(strings.Fields(w.status), " ")
+		if message == "" && canDeploy {
+			message = "Game files are ready."
+		}
+		w.send(fmt.Sprintf("setup %d\t%s", flags, message))
+	}
+}
+
 func (w *resourceWindow) close() {
 	w.cancel()
 	w.server.Close()
@@ -328,7 +381,7 @@ func startLauncher(root, server, assets, master, dump string, ready, inGameOnly 
 			}
 			w.mu.Lock()
 			defer w.mu.Unlock()
-			if w.busy || w.deployed {
+			if w.busy || (w.deployed && action != "stop") {
 				http.Error(out, "Busy", 409)
 				return
 			}
@@ -359,6 +412,7 @@ func startLauncher(root, server, assets, master, dump string, ready, inGameOnly 
 					return
 				}
 				w.busy = true
+				w.status = "Stopping Lunar Tear…"
 				w.stopServices <- struct{}{}
 			case "check":
 				if w.checkURL == "" {
@@ -432,17 +486,10 @@ func startLauncher(root, server, assets, master, dump string, ready, inGameOnly 
 					http.Error(out, "Unknown Pod Programs page.", 400)
 					return
 				}
-				if !w.services {
-					w.services = true
-					w.startServices <- struct{}{}
-				}
 				if action == "deploy" {
-					w.deployed = true
-					w.status = "Starting the game…"
-					close(w.deploy)
-				} else {
-					w.send("program " + path)
+					path = ""
 				}
+				w.launch(path)
 			}
 			out.WriteHeader(http.StatusNoContent)
 		default:
@@ -477,6 +524,8 @@ func startLauncher(root, server, assets, master, dump string, ready, inGameOnly 
 		for lines.Scan() {
 			action, value, _ := strings.Cut(lines.Text(), "\t")
 			switch action {
+			case "setup-state", "setup-choose", "setup-folder", "setup-deploy":
+				w.nativeSetup(action)
 			case "window":
 				if handle, err := strconv.ParseUint(value, 10, 64); err == nil && handle != 0 {
 					opened <- value
@@ -508,7 +557,11 @@ func startLauncher(root, server, assets, master, dump string, ready, inGameOnly 
 					err = saves(root, value, "")
 				}
 				w.mu.Lock()
-				w.status = "Save backup complete."
+				if action == "import-save" {
+					w.status = "Save restored. Your previous save is in data/server.before-import."
+				} else {
+					w.status = "Save backup complete."
+				}
 				if err != nil {
 					w.status = err.Error()
 				}
@@ -529,7 +582,8 @@ func startLauncher(root, server, assets, master, dump string, ready, inGameOnly 
 	case <-w.done:
 		w.close()
 		return nil, fmt.Errorf("The Bunker resource window could not open.")
-	case <-time.After(30 * time.Second):
+	// Wine can spend over 30 seconds initializing its desktop on the first run.
+	case <-time.After(90 * time.Second):
 		w.close()
 		return nil, fmt.Errorf("The Bunker resource window timed out.")
 	}

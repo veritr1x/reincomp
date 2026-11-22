@@ -703,13 +703,19 @@ int main(int argc,char **argv){
     std::unique_ptr<ReflectionHelper> reflection_helper;
     // The input APK was SHA256-verified above. No extra split/JAR/DEX sources or
     // dynamic Java code loader are exposed by this diagnostic's closed catalog.
-    // AVPro Video story movies (com.RenderHeads.AVProVideo + libAVProLocal.so):
-    // Declared after AndroidContext (SetContext takes android/content/Context);
-    // no decoder; a movie opens, plays for one update and finishes.
-    bunker::windows::avpro_video::Service avpro_video(java,[storage](const std::string &guest)->std::optional<fs::path>{
-      static const std::string prefix="/data/user/0/bunker/";
-      if(guest.compare(0,prefix.size(),prefix)||guest.find("..")!=std::string::npos)return std::nullopt;
-      return storage/fs::u8path(guest.substr(prefix.size()));});
+    // Downloaded movies live in app storage. Chapter titles use StreamingAssets
+    // URLs inside the APK, whose contents the launcher extracts to apk-assets.
+    const auto movie_assets = "jar:file://" + Utf8(context_config.source_dir) + "!/assets/";
+    const auto movie_storage = Utf8(context_config.data_dir) + "/";
+    bunker::windows::avpro_video::Service avpro_video(java,[storage,movie_assets,movie_storage](const std::string &guest)->std::optional<fs::path>{
+      const bool packaged = guest.compare(0,movie_assets.size(),movie_assets)==0;
+      if(!packaged && guest.compare(0,movie_storage.size(),movie_storage)!=0)return std::nullopt;
+      const auto tail = guest.substr(packaged ? movie_assets.size() : movie_storage.size());
+      const auto relative = fs::u8path(tail);
+      if(relative.empty() || relative.has_root_path() || tail.find_first_of("\\:")!=std::string::npos)return std::nullopt;
+      for(const auto &part:relative)if(part=="..")return std::nullopt;
+      return (packaged ? storage.parent_path()/"apk-assets" : storage)/relative;
+    });
     stage="asset-pack wrapper setup";AndroidAssetPackWrapper asset_packs(java,{runtime_apk_sha256,"b2be67185a866f3489146d9864ca40d1de5c2668037f026609890afe12940689",true});
     stage="native providers setup";
     // Real policy/semaphores for explicitly bound threads. These cohorts are

@@ -11,6 +11,13 @@ from desktop_bundles import UnityPy, convert_texture
 from desktop_shader import convert as convert_shader
 
 
+def copy_asset(source, destination):
+    # Python's Windows copy2 calls CopyFile2, which older Wine prefixes stub.
+    destination = shutil.copyfile(source, destination)
+    shutil.copystat(source, destination)
+    return destination
+
+
 def stage(apk, folder, metadata):
     data = folder/'game/WindowsPlayer_Data'
     assets = folder/'data/apk-assets'
@@ -53,7 +60,7 @@ def stage(apk, folder, metadata):
                     with part.open('rb') as stream:
                         shutil.copyfileobj(stream,out)
         else:
-            shutil.copy2(file, dest)
+            copy_asset(file, dest)
         with dest.open('rb') as f:
             header = f.read(48)
         if header[8:12] != b'\0\0\0\x15' or header[20:31] != b'2019.4.29f1':
@@ -92,11 +99,11 @@ def stage(apk, folder, metadata):
     (data/'Managed/Metadata/global-metadata.dat').write_bytes(metadata)
     # The Android IL2CPP backend opens these through its mounted private
     # storage. The Windows player does not perform Android's first-run copy.
-    shutil.copytree(data/'Managed', folder/'data/storage/files/il2cpp', dirs_exist_ok=True)
+    shutil.copytree(data/'Managed', folder/'data/storage/files/il2cpp', dirs_exist_ok=True, copy_function=copy_asset)
     # Keep the original APK available to the Android asset manager.
     packaged = folder/'data/game-sound.apk'
     if apk.resolve() != packaged.resolve():
-        shutil.copy2(apk, packaged)
+        copy_asset(apk, packaged)
     emblem = folder/'game/portable-emblem.json'
     if emblem.is_file():
         from header_emblem import image_bytes

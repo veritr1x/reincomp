@@ -19,6 +19,8 @@ releases. The EXE is built on your PC from these files:
 Open [Bunker's web builder](https://veritr1x.github.io/bunker/), choose
 **Windows**, select your APK and master data, and run the downloaded EXE.
 Its launcher imports the assets and starts the game.
+If WebView2 is unavailable, use **Choose resource archive** or **Copy extracted
+folder** in the setup window. Select **Deploy** when the game files are ready.
 
 To build from source instead, see [BUILDING.md](BUILDING.md).
 

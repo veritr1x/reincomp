@@ -3,6 +3,13 @@
 What changed, newest first, by date and area. A release's heading comes
 above the dated sections it holds.
 
+## 0.2.4 (2026-11-23)
+
+- Chapter 1 weapon memories now play their opening movie and continue into dialogue and movement. The story also advances when a video decoder is unavailable.
+- The Windows launcher shows native setup controls when WebView2 is unavailable. First-run asset preparation works on older Wine versions.
+- During play, **Ctrl+B → Options → Stop Lunar Tear** closes the game and server, then returns to the launcher. You can import a Bunker backup ZIP or an emulator's `game.db` and deploy again.
+- Windows builds use Bunker 1.12.19.
+
 ## 0.2.3 (2026-11-22)
 
 - Deck Builder now displays character portraits and equipment images in the Windows player.

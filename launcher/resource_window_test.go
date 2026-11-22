@@ -8,6 +8,45 @@ import (
 	"testing"
 )
 
+func TestNativeSetupImportsBeforeDeploy(t *testing.T) {
+	output := filepath.Join(t.TempDir(), "helper-commands")
+	pipe, err := os.Create(output)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pipe.Close()
+	w := &resourceWindow{input: pipe, deploy: make(chan struct{}), startServices: make(chan struct{}, 1)}
+	w.nativeSetup("setup-state")
+	w.nativeSetup("setup-deploy")
+	w.nativeSetup("setup-folder")
+	w.nativeSetup("setup-choose")
+	w.nativeSetup("setup-state")
+	if w.deployed || !w.busy {
+		t.Fatal("expected just one active file picker before resources are verified")
+	}
+	w.verified, w.busy = true, false
+	w.nativeSetup("setup-state")
+	w.nativeSetup("setup-deploy")
+	w.nativeSetup("setup-deploy")
+	w.nativeSetup("setup-state")
+	select {
+	case <-w.deploy:
+	default:
+		t.Fatal("verified resources did not deploy")
+	}
+	if len(w.startServices) != 1 || !w.deployed {
+		t.Fatal("expected one service start")
+	}
+	got, err := os.ReadFile(output)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "setup 1\t\nchoose-folder\nsetup 0\t\nsetup 3\tGame files are ready.\nsetup 0\tStarting the game…\n"
+	if string(got) != want {
+		t.Fatalf("native setup commands = %q, want %q", got, want)
+	}
+}
+
 func TestDirectGameHasRunningLauncher(t *testing.T) {
 	root := t.TempDir()
 	master := filepath.Join(root, masterName)
@@ -43,5 +82,23 @@ func TestDirectGameHasRunningLauncher(t *testing.T) {
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusConflict {
 		t.Fatalf("second Deploy returned HTTP %d", resp.StatusCode)
+	}
+	for _, test := range []struct {
+		action string
+		want   int
+	}{{"stop", http.StatusNoContent}, {"import-save", http.StatusConflict}, {"stop", http.StatusConflict}} {
+		req, err := http.NewRequest(http.MethodPost, menu.homeURL+test.action, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Header.Set("Origin", "http://"+req.URL.Host)
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != test.want || len(menu.stopServices) != 1 {
+			t.Fatalf("%s after Deploy returned HTTP %d, queued stops %d", test.action, resp.StatusCode, len(menu.stopServices))
+		}
 	}
 }

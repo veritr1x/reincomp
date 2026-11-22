@@ -183,6 +183,9 @@ struct BunkerView::Impl:std::enable_shared_from_this<Impl> {
   void Fail(const char *what,HRESULT result){
     failed=true;creating=false;visible=false;
     std::fprintf(stderr,"Bunker view: %s failed (0x%08lx). The Microsoft Edge WebView2 Runtime may be missing.\n",what,static_cast<unsigned long>(result));
+#if REINCOMP_VIEW_REVISION >= 2
+    if(pageEvent)pageEvent(L"WebViewUnavailable",address);
+#endif
   }
   void Create(){
     using CreateEnvironment=HRESULT(STDAPICALLTYPE*)(PCWSTR,PCWSTR,ICoreWebView2EnvironmentOptions*,ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandler*);

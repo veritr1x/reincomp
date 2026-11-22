@@ -86,7 +86,16 @@ func (s *playerSession) close() {
 	s.server.Close()
 }
 
-func (s *playerSession) play(makePlayer func() (*exec.Cmd, error)) error {
+func (s *playerSession) play(makePlayer func() (*exec.Cmd, error), menu *resourceWindow) error {
+	var stopServices <-chan struct{}
+	if menu != nil {
+		stopServices = menu.stopServices
+		menu.mu.Lock()
+		if !menu.busy {
+			menu.status = ""
+		}
+		menu.mu.Unlock()
+	}
 	var restart *playerRequest
 	for {
 		cmd, err := makePlayer()
@@ -107,16 +116,24 @@ func (s *playerSession) play(makePlayer func() (*exec.Cmd, error)) error {
 		go func() { exited <- cmd.Wait() }()
 	playing:
 		for {
+			var req playerRequest
 			select {
 			case err := <-exited:
-				return err
+				select {
+				case <-stopServices:
+					return errReturnToLauncher
+				default:
+					return err
+				}
 			case <-s.windowClosed:
 				if !closePlayerWindow(cmd.Process.Pid) {
 					cmd.Process.Kill()
 				}
 				<-exited
 				return nil
-			case req := <-s.requests:
+			case <-stopServices:
+				// A launcher stop ends this session, including its server.
+			case req = <-s.requests:
 				if req.display {
 					req.result <- s.applyDisplay(cmd.Process.Pid)
 					continue
@@ -125,24 +142,37 @@ func (s *playerSession) play(makePlayer func() (*exec.Cmd, error)) error {
 					req.result <- nil
 					continue
 				}
-				if !closePlayerWindow(cmd.Process.Pid) {
-					req.result <- errors.New("the game window is not ready to close")
-					continue
-				}
+			}
+			var stopErr error
+			if closePlayerWindow(cmd.Process.Pid) {
 				select {
 				case err := <-exited:
+					if req.result == nil {
+						return errReturnToLauncher
+					}
 					req.result <- err
+					break playing
 				case <-time.After(30 * time.Second):
-					req.result <- errors.New("the game did not close in time")
-					continue
+					stopErr = errors.New("the game did not close in time")
 				}
-				break playing
+			} else {
+				stopErr = errors.New("the game window is not ready to close")
+			}
+			if req.result != nil {
+				req.result <- stopErr
+			} else {
+				menu.mu.Lock()
+				menu.busy = false
+				menu.status = "Could not stop Lunar Tear: " + stopErr.Error() + ". Try again."
+				menu.mu.Unlock()
 			}
 		}
 		// Recover if the editor exits between stopping and restarting the player.
 	stopped:
 		for {
 			select {
+			case <-stopServices:
+				return errReturnToLauncher
 			case <-s.windowClosed:
 				return nil
 			case req := <-s.requests:

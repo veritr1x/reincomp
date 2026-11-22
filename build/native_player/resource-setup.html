@@ -113,7 +113,8 @@ async function update(){
   for(const id of ['import-save','import-master'])el(id).disabled=el('choose').disabled;
   el('export-save').disabled=el('choose').disabled||!s.saveBytes;
   el('service-options').hidden=!s.running;el('stop-first').hidden=!s.services&&!s.busy;
-  for(const id of ['check','stop'])el(id).disabled=s.busy||s.deployed;
+  el('check').disabled=s.busy||s.deployed;
+  el('stop').disabled=s.busy;
   el('auto-deploy').textContent=words[s.autoDeploy?'menu.auto_deploy_on':'menu.auto_deploy_off'];
   el('auto-deploy').disabled=s.busy||s.deployed;
   el('install-update').disabled=s.busy||s.services||s.deployed;
@@ -127,7 +128,7 @@ async function update(){
   const progress=s.busy&&!s.ready&&s.message.match(/(\d+)%/);
   el('meter').hidden=el('progress-label').hidden=!progress;
   if(progress){el('meter').style.setProperty('--progress',progress[0]);el('meter').setAttribute('aria-valuenow',progress[1]);el('progress-label').textContent=s.message}
-  detail(progress?words['main.keep_open']:inGame?'':s.message||(s.ready?'':words['main.choose_files_hint']));
+  detail(progress?words['main.keep_open']:s.message||(s.ready?'':words['main.choose_files_hint']));
 }
 async function act(id,action=id,body){
   if(el(id))el(id).disabled=true;
@@ -163,7 +164,11 @@ el('link-form').onsubmit=async e=>{
   finally{button.disabled=false}
 };
 el('deploy').onclick=()=>{if(inGame)location.assign('/bunker/desktop-toggle');else act('deploy')};
-for(const id of ['auto-deploy','export-save','import-master','check','stop'])el(id).onclick=()=>{closeOptions();act(id)};
+for(const id of ['auto-deploy','export-save','import-master','check'])el(id).onclick=()=>{closeOptions();act(id)};
+el('stop').onclick=()=>{
+  if(inGame&&!confirm('Close the game and stop Lunar Tear? You can import a save or deploy again from the launcher.'))return;
+  closeOptions();act('stop');
+};
 el('import-save').onclick=()=>{closeOptions();if(confirm({{ t('launcher.save_import.message')|tojson }}))act('import-save')};
 el('export-log').onclick=closeOptions;
 for(const a of programLinks)a.onclick=e=>{
