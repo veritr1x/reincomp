@@ -47,9 +47,9 @@ def archive_server_source(a, bunker, work, go):
         raise ValueError('Supply a prepared Bunker server checkout with --bunker for an offline build')
     if a.bunker:
         # An explicitly supplied checkout belongs to the player. Generate in our cache.
-        copy = work/'bunker-build-source'
+        copy = work/('bunker-build-source-'+(bunker/'VERSION').read_text().strip())
         if not copy.exists():
-            run('git', 'clone', '--no-hardlinks', bunker, copy)
+            run('git', 'clone', '--config', 'core.autocrlf=false', '--no-hardlinks', bunker, copy)
         bunker = copy
         server = bunker/'server'
     if not (server/'mobile').is_dir():
@@ -113,7 +113,25 @@ def patch_runtime_library(image, bunker, work, cxx):
         FreeLibrary(library._handle)
 
 
-def prepare_windows_pod_files(app):
+def prepare_windows_pod_files(pods, bunker):
+    # Keep the packaged Python runtime and wheels, and take the app itself
+    # from the same prepared Bunker checkout as the Windows server.
+    app = pods/'app'
+    shutil.copytree(bunker/'android/app/src/main/python', app, dirs_exist_ok=True,
+                    ignore=shutil.ignore_patterns('__pycache__', '*.py[co]'))
+    # Backport the Archive's desktop Close control until it ships in the pinned Bunker release.
+    patch = NATIVE/'bunker-archive-close.patch'
+    apply = ['git', '-c', 'core.autocrlf=false', 'apply', '--no-index']
+    env = {**os.environ, 'GIT_CEILING_DIRECTORIES': str(app.resolve().parent)}
+    if subprocess.run([*apply, '--reverse', '--check', patch], cwd=app, env=env, stderr=subprocess.DEVNULL).returncode:
+        run(*apply, patch, cwd=app, env=env)
+    version = pods/'VERSION'
+    with version.open('rb') as stream:
+        previous = stream.readline()
+        packages = stream.read()
+    if not previous.startswith(b'Bunker '):
+        raise ValueError('Unexpected Pod Programs version file')
+    version.write_bytes(b'Bunker '+(bunker/'VERSION').read_bytes().strip()+b'\n'+packages)
     # Windows _commit needs a writable descriptor, including when the bytes
     # were just written by copyfile. Keep Bunker's fsync before each replace.
     for name, files in [('android_patcher.py', ('backup', 'candidate')), ('android_runtime.py', ('stage',))]:
@@ -129,21 +147,17 @@ def prepare_windows_pod_files(app):
         if source != updated:
             path.write_text(updated, encoding='utf-8')
 
-    # The phone app supplies Close outside compact landscape. On Windows the
-    # WebView supplies it at every size. Keep the sidebar title compact-only.
-    css = app/'web/static/css/automata.css'
-    original = css.read_bytes()
-    updated = original
-    for old, new in (
-        (b'.shell-head, .live-short { display: none; }',
-         b'.shell-head { display: flex; flex: none; }\n.shell-head b, .live-short { display: none; }'),
-        (b'.shell-head b { font-size:', b'.shell-head b { display: block; font-size:'),
-    ):
-        if updated.count(old) + updated.count(new) != 1:
-            raise ValueError('The pinned Pod Programs navigation styles changed')
-        updated = updated.replace(old, new)
-    if updated != original:
-        css.write_bytes(updated)
+    templates = app/'web/templates'
+    shutil.copy2(NATIVE/'desktop-display.html', templates)
+    base = templates/'base.html'
+    source = base.read_text(encoding='utf-8')
+    anchor = '<a href="/users"'
+    if anchor not in source:
+        raise ValueError('The Bunker navigation template changed')
+    if '<a href="/bunker/archive">' not in source:
+        base.write_text(source.replace(anchor, '<a href="/bunker/archive">Archive</a>\n    '+anchor, 1),encoding='utf-8')
+    patcher = templates/'patcher.html'
+    patcher.write_text(patcher.read_text(encoding='utf-8').replace('"bunker-archive:" + i.ref','"/bunker/archive" + i.ref'), encoding='utf-8')
 
 
 def build_windows_server(go, source, work, destination, env):
@@ -229,18 +243,11 @@ def prepare(a, folder, work, server, deps, pods, bunker, cxx):
     for name in ('desktop_services.py','desktop_display.py','desktop_bundles.py','desktop_shader.py',
                  'resource_setup.py','resource-setup.html','resource-setup.css'):
         shutil.copy2(NATIVE/name,game/name)
-    prepare_windows_pod_files(folder/'pods/app')
-    templates = folder/'pods/app/web/templates'
-    shutil.copy2(NATIVE/'desktop-display.html', templates)
-    base = templates/'base.html'
-    source = base.read_text(encoding='utf-8')
-    anchor = '<a href="/users"'
-    if anchor not in source:
-        raise ValueError('The Bunker navigation template changed')
-    if '<a href="/bunker/archive">' not in source:
-        base.write_text(source.replace(anchor, '<a href="/bunker/archive">Archive</a>\n    '+anchor, 1),encoding='utf-8')
-    patcher = templates/'patcher.html'
-    patcher.write_text(patcher.read_text(encoding='utf-8').replace('"bunker-archive:" + i.ref','"/bunker/archive" + i.ref'), encoding='utf-8')
+    go = a.go or shutil.which('go')
+    if not go:
+        raise ValueError('Install Go or provide --go to compile the launcher, Bunker server and Archive helper')
+    server_source = archive_server_source(a, bunker, work, go)
+    prepare_windows_pod_files(folder/'pods',server_source.parent)
     shutil.copy2(a.master, data/'original-master.bin.e')
     patched = work/MASTER
     run(python,'-I','-X','utf8',folder/'pods/app/patcher/patch_masterdata.py','--input',a.master,'--output',patched)
@@ -287,10 +294,6 @@ def prepare(a, folder, work, server, deps, pods, bunker, cxx):
             raise ValueError(f'Need Unity 2019.4.29f1 Windows IL2CPP release {name}. Set --unity-player to its directory.')
         (game/destination).parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(player/name, game/destination)
-    go = a.go or shutil.which('go')
-    if not go:
-        raise ValueError('Install Go or provide --go to compile the launcher, Bunker server and Archive helper')
-    source = archive_server_source(a, bunker, work, go)
     env = os.environ.copy()
     if a.no_download:
         env.update(GOPROXY='off', GOTOOLCHAIN='local')
@@ -298,8 +301,8 @@ def prepare(a, folder, work, server, deps, pods, bunker, cxx):
     if a.unpinned_server:
         shutil.copy2(server, packaged_server)
     else:
-        build_windows_server(go, source, work, packaged_server, env)
-    build_archive_helper(go, source, work, game, env)
+        build_windows_server(go, server_source, work, packaged_server, env)
+    build_archive_helper(go, server_source, work, game, env)
     run(cxx, '-std=c++17', '-O2', '-static', '-municode', '-mwindows', NATIVE/'resource-window.cpp',
         ROOT/'host/bunker_view.cpp', '-lole32', '-luuid', '-lcomdlg32', '-lshell32', '-o', game/'resource-window.exe')
     if a.launcher:

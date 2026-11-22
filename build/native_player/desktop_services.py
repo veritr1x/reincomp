@@ -77,6 +77,8 @@ def main():
         return result.stderr.decode(errors='replace') if result.returncode else ''
     converters = {action: (lambda *args, name=action: convert(name, *args))
                   for action in ('decode', 'sound', 'model', 'motion', 'scenario')}
+    # Deck Builder asks the Archive for its native converters when serving art.
+    android_archive.android_converters = lambda: converters
     archive_root = data/'archive'
     archive_root.mkdir(exist_ok=True)
     # Archive looks under <data>/tools on Android. The desktop editors keep their

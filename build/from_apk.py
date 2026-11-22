@@ -150,14 +150,18 @@ def main():
     if not a.unpinned_server and sha256(server)!=pins()['server'][1]:
         ap.error('Bunker server hash differs from bunker.lock.json')
     pin = json.loads((ROOT/'bunker.lock.json').read_text())['bunker']
-    bunker = a.bunker or work/'bunker'
+    bunker = a.bunker or work/('bunker-'+pin['release'])
     if not bunker.is_dir():
         if a.no_download or a.bunker:
             ap.error('Supply the pinned Bunker checkout with --bunker')
-        step('Fetching Bunker source', ['git','clone','--branch',pin['release'],'--depth','1',pin['repository'],bunker])
+        step('Fetching Bunker source', ['git','clone','--config','core.autocrlf=false','--branch',pin['release'],'--depth','1',pin['repository'],bunker])
     bunker = bunker.resolve()
     if 'v'+(bunker/'VERSION').read_text().strip()!=pin['release']:
         ap.error('The Bunker checkout must match bunker.lock.json')
+    if not a.bunker or (bunker/'.git').exists():
+        revision = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=bunker, text=True).strip()
+        if revision != pin['commit']:
+            ap.error('The Bunker source revision must match bunker.lock.json')
     folder = a.out.resolve()/'reincomp'
     if folder.exists():
         ap.error(f'{folder} already exists. Use a new output directory to preserve that installation.')

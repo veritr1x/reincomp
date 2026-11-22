@@ -8,7 +8,7 @@ import sys
 HERE = Path(__file__).resolve().parent
 sys.path[:0] = [str(HERE), str(HERE/'native_player')]
 from generate_abi import generate
-from native_release import MASTER_HASH
+from native_release import MASTER_HASH, prepare_windows_pod_files
 from portable_host import build_go, build_native, dependencies, prepare_site, public_bunker, run
 from portable_inputs import PORTABLE, digest, prepare
 
@@ -59,6 +59,7 @@ def main():
     release = work/'release'
     dependencies(windows,release)
     build_go(bunker,work,a.go,release/'game')
+    prepare_windows_pod_files(release/'pods', bunker)
     build_native(a,work,bunker,release,abi)
     prepare_site(a,work,windows,bunker,release)
     run(a.node,HERE/'portable_web.cjs',site,a.apk,a.master,target,a.edge,a.jobs,PORTABLE['sha256'])

@@ -132,10 +132,6 @@ def compile_adapter(work, dest, cxx, flags, original, bunker, abi):
     run(dest.parent/'pods/python/python.exe', '-I', SOURCE/'header_emblem.py',
         dest/'WindowsPlayer_Data', bunker, work/'bunker_icon.h')
     adapted_module('bunker_button',{
-        '{-0.003f, -0.027f}, high[2] = {1.003f, 0.977f}':
-            '{0, 0}, high[2] = {1, 1}',
-        'float margin = 6 * scale;': 'float margin = 14 * scale;',
-        'if (want != gap)': 'if (fabsf(want - gap) > 0.015625f)',
         'free(type);': 'il2cpp_free(type);',
         'FIELD(action, f_method_ptr, void *) = (void *)tap;':
             'FIELD(action, f_method_ptr, void *) = desktop_bunker_tap_address();',
@@ -159,7 +155,7 @@ def compile_adapter(work, dest, cxx, flags, original, bunker, abi):
             '        desktop_refresh_header_layout(seen->row);',
         'pthread_t thread;\n    if (pthread_create(&thread, NULL, install, NULL)) return -1;\n    pthread_detach(thread);\n    return 0;':
             'return look_up();',
-    },'#include <math.h>\nextern void il2cpp_free(void *);\nextern void *desktop_bunker_tap_address(void);\n'
+    },'extern void il2cpp_free(void *);\nextern void *desktop_bunker_tap_address(void);\n'
        'extern void desktop_refresh_header_layout(void *row);\n'
        'extern int desktop_header_corners(void *transform, float out[4]);\n'
        'extern int desktop_header_row_visible(void *row);\n'

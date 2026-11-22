@@ -19,9 +19,8 @@ sys.path[:0] = [str(HERE), str(NATIVE)]
 import build as host_build
 import native_release
 from compile_player import compile_adapter, compile_fsr
-from portable_inputs import PORTABLE, download, digest
+from portable_inputs import BUNKER, PORTABLE, download, digest
 
-BUNKER_COMMIT = '8985f2b759c33ace6ffc7b5f040cfe8395f17150'
 PROTOC = ('protoc-31.1-win64.zip', '70381b116ab0d71cb6a5177d9b17c7c13415866603a0fd40d513dafe32d56c35')
 
 
@@ -44,12 +43,12 @@ def run(*cmd, **opts):
 
 
 def public_bunker(work):
-    bunker = work/'bunker'
+    bunker = work/('bunker-'+BUNKER['release'])
     if not bunker.exists():
-        run('git','-c','core.autocrlf=false','clone','--config','core.autocrlf=false','--branch','v1.12.14','--depth','1',
-            '--recurse-submodules','https://github.com/veritr1x/bunker.git',bunker)
+        run('git','-c','core.autocrlf=false','clone','--config','core.autocrlf=false','--branch',BUNKER['release'],'--depth','1',
+            '--recurse-submodules',BUNKER['repository'],bunker)
     revision = subprocess.check_output(['git','rev-parse','HEAD'],cwd=bunker,text=True).strip()
-    if revision != BUNKER_COMMIT:
+    if revision != BUNKER['commit']:
         raise ValueError('Bunker source revision differs from the release')
     return bunker
 
@@ -95,8 +94,6 @@ def dependencies(windows, release):
             dest.parent.mkdir(parents=True,exist_ok=True)
             with zip_file.open(name) as src, dest.open('wb') as out:
                 shutil.copyfileobj(src,out)
-    shutil.copyfile(NATIVE/'desktop-display.html',release/'pods/app/web/templates/desktop-display.html')
-    native_release.prepare_windows_pod_files(release/'pods/app')
 
 
 def build_native(a, work, bunker, release, abi):

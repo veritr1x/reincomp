@@ -6,10 +6,12 @@ import shutil
 import urllib.request
 from zipfile import ZipFile
 
-RELEASE = 'https://github.com/veritr1x/bunker/releases/download/v1.12.14/'
-KIT = ('bunker-windows-browser-1.12.14-r3.zip', 'dfb97b80fd837ba2a0b9a35c665250f23fb441197edcb486cb019935783594d5')
+ROOT = Path(__file__).resolve().parents[1]
+BUNKER = json.loads((ROOT/'bunker.lock.json').read_bytes())['bunker']
+RELEASE = f'{BUNKER["repository"]}/releases/download/{BUNKER["release"]}/'
+KIT = (BUNKER['browserKit']['file'], BUNKER['browserKit']['sha256'])
 NOTICES = ('bunker-notices-306a4695f28b.zip', '306a4695f28bf30b0dba2bdd3516d23051f18474ddfd52bd994d328730ef278d')
-PORTABLE = json.loads((Path(__file__).resolve().parents[1]/'release.lock.json').read_bytes())['portable']
+PORTABLE = json.loads((ROOT/'release.lock.json').read_bytes())['portable']
 
 
 def digest(path):
