@@ -103,7 +103,9 @@ def browser_job(args):
         _winapi.CloseHandle(job.value)
 
 
-def rebuild(root, output, version, manifest_hash, base=SITE, cancel=None, expected_exe=None):
+def rebuild(root, output, version, manifest_hash, base=SITE, cancel=None, expected_exe=None, launcher_origin=None):
+    if launcher_origin is not None and not re.fullmatch(r"http://127\.0\.0\.1:[0-9]{1,5}", launcher_origin):
+        raise ValueError("Invalid launcher origin")
     if not SHA.fullmatch(manifest_hash):
         raise ValueError("Invalid Windows runtime digest")
     runtime_bytes = fetch(base, "windows/runtime/runtime.json", CHUNK, manifest_hash)
@@ -143,6 +145,7 @@ try {
     memory.update({"": b'<script src="start.js"></script>', "build.mjs": worker,
                    "start.js": b"new Worker('./build.mjs',{type:'module'}).onerror=e=>fetch('failed',{method:'POST',body:e.message});"})
     finished = threading.Event()
+    worker_loaded = threading.Event()
     failure = []
 
     class Handler(http.server.BaseHTTPRequestHandler):
@@ -155,7 +158,7 @@ try {
             self.send_header("Content-Length", str(length))
             self.send_header("Cache-Control", "no-store")
             self.send_header("Content-Security-Policy", "default-src 'none'; script-src 'self' 'unsafe-eval'; "
-                             "worker-src 'self' blob:; connect-src 'self'; frame-ancestors 'none'")
+                             "worker-src 'self' blob:; connect-src 'self'; frame-ancestors " + (launcher_origin or "'none'"))
             self.end_headers()
 
         def route(self):
@@ -165,6 +168,8 @@ try {
 
         def do_GET(self):
             key = self.route()
+            if key == "build.mjs":
+                worker_loaded.set()
             if key not in inputs and key not in memory and key not in files and key not in notice_parts:
                 self.reply(404, 0)
                 return
@@ -225,16 +230,25 @@ try {
         authority = "127.0.0.1:" + str(server.server_port)
         threading.Thread(target=server.serve_forever, daemon=True).start()
         try:
-            with tempfile.TemporaryDirectory(prefix="bunker-update-edge-", ignore_cleanup_errors=True) as profile, browser_job([
-                edge_path(), "--headless=new", "--no-first-run", "--disable-extensions",
-                "--disable-background-networking", "--disable-sync", "--no-proxy-server",
-                "--host-resolver-rules=MAP * ~NOTFOUND, EXCLUDE 127.0.0.1", "--user-data-dir=" + profile,
-                "http://" + authority + prefix]) as browser_active:
-                deadline = time.monotonic() + 1800
+            url = "http://" + authority + prefix
+            with contextlib.ExitStack() as stack:
+                browser_active = None
+                if launcher_origin:
+                    print("UPDATE_PAGE " + url, flush=True)
+                else:
+                    # Standalone developer builds have no launcher window.
+                    profile = stack.enter_context(tempfile.TemporaryDirectory(prefix="bunker-update-edge-", ignore_cleanup_errors=True))
+                    browser_active = stack.enter_context(browser_job([
+                        edge_path(), "--headless=new", "--no-first-run", "--disable-extensions",
+                        "--disable-background-networking", "--disable-sync", "--no-proxy-server",
+                        "--host-resolver-rules=MAP * ~NOTFOUND, EXCLUDE 127.0.0.1", "--user-data-dir=" + profile, url]))
+                start = time.monotonic()
                 while not finished.wait(.5):
                     if cancel and cancel.is_set():
                         raise RuntimeError("Update canceled")
-                    if not browser_active() or time.monotonic() > deadline:
+                    if launcher_origin and not worker_loaded.is_set() and time.monotonic() - start > 90:
+                        raise RuntimeError("The launcher could not open the update page. Reopen the launcher and try again.")
+                    if (browser_active and not browser_active()) or time.monotonic() - start > 1800:
                         raise RuntimeError("The local update build did not finish")
                 if failure:
                     raise RuntimeError(failure[0])
@@ -277,7 +291,8 @@ if __name__ == "__main__":
                 os.read(0, 1)
                 cancel.set()
             threading.Thread(target=watch_launcher, daemon=True).start()
-            print("VERIFIED " + rebuild(root, Path(args[0]), args[1], args[2], cancel=cancel, expected_exe=args[3]), flush=True)
+            print("VERIFIED " + rebuild(root, Path(args[0]), args[1], args[2], cancel=cancel,
+                                        expected_exe=args[3], launcher_origin=args[4]), flush=True)
         elif mode == "apply":
             apply_update(Path(args[0]), Path(args[1]), args[2], int(args[3]), args[4:])
         else:

@@ -56,6 +56,7 @@ type resourceWindow struct {
 	busy, verified, deployed, services, running bool
 	deploy                                      chan struct{}
 	restart                                     chan struct{}
+	update                                      *launcherUpdate
 	startServices, stopServices                 chan struct{}
 	checkURL, checkToken                        string
 	assetRoot                                   string
@@ -127,7 +128,7 @@ func (w *resourceWindow) close() {
 
 // Only the local WebView receives this random URL. The file picker returns
 // the original path, so even a 20 GB resource dump stays on disk.
-func startLauncher(root, server, assets, master, dump string, ready, inGameOnly bool) (*resourceWindow, error) {
+func startLauncher(root, server, assets, master, dump string, ready, inGameOnly bool, resume *launcherUpdate) (*resourceWindow, error) {
 	if ready && !regularFile(master) {
 		master = filepath.Join(assets, "assets", "release", masterName)
 	}
@@ -168,11 +169,15 @@ func startLauncher(root, server, assets, master, dump string, ready, inGameOnly 
 	exe, _ := os.Executable()
 	portableUpdate := canUpdatePortable(root, exe)
 	var available windowsRelease
-	var updating bool
 	updateError := filepath.Join(root, "data", "update-error.txt")
 	if msg, e := os.ReadFile(updateError); e == nil {
 		w.status = "Update failed: " + string(msg)
 		os.Rename(updateError, filepath.Join(root, "data", "last-update-error.log"))
+	}
+	if resume != nil {
+		w.busy, w.services, w.running = true, true, true
+		w.update, available = resume, resume.release
+		w.status = "Waiting for Lunar Tear to exit before updating…"
 	}
 	w.startServices = make(chan struct{}, 1)
 	w.stopServices = make(chan struct{}, 1)
@@ -224,7 +229,7 @@ func startLauncher(root, server, assets, master, dump string, ready, inGameOnly 
 		}
 		w.mu.Unlock()
 	}
-	w.server = &http.Server{ReadHeaderTimeout: 5 * time.Second, Handler: http.HandlerFunc(func(out http.ResponseWriter, r *http.Request) {
+	w.server = &http.Server{Addr: addr, ReadHeaderTimeout: 5 * time.Second, Handler: http.HandlerFunc(func(out http.ResponseWriter, r *http.Request) {
 		if r.Host != addr {
 			http.NotFound(out, r)
 			return
@@ -344,9 +349,13 @@ func startLauncher(root, server, assets, master, dump string, ready, inGameOnly 
 			if s, err := os.Stat(save); err == nil {
 				size = s.Size()
 			}
+			var updatePage string
+			if w.update != nil {
+				updatePage = w.update.page
+			}
 			json.NewEncoder(out).Encode(map[string]any{"message": w.status, "ready": w.verified, "busy": w.busy, "deployed": w.deployed,
 				"services": w.services, "running": w.running, "saveBytes": size, "archiveBytes": archiveSize(root), "autoDeploy": !regularFile(manual),
-				"portableUpdate": portableUpdate, "updating": updating})
+				"portableUpdate": portableUpdate, "updating": w.update != nil, "updatePage": updatePage})
 		case "logs.zip":
 			serveLogArchive(out, r, root)
 		case "log":
@@ -382,31 +391,33 @@ func startLauncher(root, server, assets, master, dump string, ready, inGameOnly 
 			}
 			w.mu.Lock()
 			defer w.mu.Unlock()
-			if w.busy || (w.deployed && action != "stop") {
+			if w.busy || (w.deployed && action != "stop" && action != "install-update") {
 				http.Error(out, "Busy", 409)
 				return
 			}
 			switch action {
 			case "install-update":
-				if w.services || !portableUpdate || !available.installable() || !newerVersion(available.Version, version) {
-					http.Error(out, "Stop Lunar Tear and check for a newer Windows release first.", 409)
+				if !portableUpdate || !available.installable() || !newerVersion(available.Version, version) {
+					http.Error(out, "No newer compatible Windows release is available.", 409)
 					return
 				}
-				w.busy, updating = true, true
-				w.status = "Preparing Windows update…"
-				go func(release windowsRelease) {
-					progress := func(msg string) { w.mu.Lock(); w.status = msg; w.mu.Unlock() }
-					err := startPlayerUpdate(ctx, root, exe, release, progress)
-					w.mu.Lock()
-					defer w.mu.Unlock()
-					if err != nil {
-						w.status = err.Error()
-						w.busy, updating = false, false
-						return
+				mustStop := w.services || w.deployed
+				if mustStop && (!w.running || r.URL.Query().Get("stop") != "1") {
+					http.Error(out, "Confirm the shutdown before updating a running session.", 409)
+					return
+				}
+				w.busy = true
+				w.update = &launcherUpdate{release: available}
+				if mustStop {
+					w.update.serverDone = make(chan error, 1)
+					w.status = "Stopping Lunar Tear for the update…"
+					if w.deployed {
+						w.status = "Closing the game for the update…"
 					}
-					w.status = "Restarting into the updated player…"
-					close(w.restart)
-				}(available)
+					w.stopServices <- struct{}{}
+				} else {
+					go w.installUpdate(ctx, root, exe, w.update)
+				}
 			case "stop":
 				if !w.running {
 					http.Error(out, "Lunar Tear is not running.", 409)
@@ -597,6 +608,9 @@ func startLauncher(root, server, assets, master, dump string, ready, inGameOnly 
 	transferred = true
 	handle, _ := strconv.ParseUint(w.handle, 10, 64)
 	playerParent.Store(uintptr(handle))
+	if resume != nil {
+		go w.installUpdate(ctx, root, exe, resume)
+	}
 	return w, nil
 }
 

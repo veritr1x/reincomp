@@ -20,7 +20,7 @@
 <button class="outline" id="more" aria-label="{{ t('launcher.main.options') }}" aria-haspopup="dialog">⋮</button></header>
 <section class="update" id="release" aria-label="{{ t('launcher.main.update') }}" hidden><div class="panel">
 <div class="update-line"><span id="release-message"></span><a id="release-notes" target="_blank" rel="noopener">{{ t('launcher.main.whats_new') }} ›</a></div>
-<div class="update-actions"><button class="solid" id="install-update" hidden>Update and restart</button><a class="solid" id="update-builder" target="_blank" rel="noopener">Build this release</a>
+<div class="update-actions"><button class="solid" id="install-update" hidden disabled>Update and restart</button><a class="solid" id="update-builder" target="_blank" rel="noopener">Build this release</a>
 <button class="outline" id="later">{{ t('launcher.main.later') }}</button><button class="outline" id="skip">{{ t('launcher.main.skip') }}</button></div></div></section>
 <div class="columns">
 <section class="section system">{{ heading('launcher.main.system') }}<div class="panel">
@@ -43,6 +43,7 @@
 </div></div>
 <footer>END OF TRANSMISSION // GLORY TO MANKIND</footer>
 </main>
+<iframe id="update-worker" title="Windows update" hidden referrerpolicy="no-referrer" sandbox="allow-scripts allow-same-origin"></iframe>
 <dialog id="options" aria-label="{{ t('launcher.main.options') }}"><div class="panel"><div class="scroll">
 <section id="service-options" hidden>{{ heading('launcher.main.lunar_tear') }}{{ option('stop','launcher.menu.stop') }}{{ option('check','launcher.menu.check') }}</section>
 {{ heading('launcher.menu.data') }}<p class="note" id="stop-first" hidden>&gt; {{ t('launcher.menu.stop_first') }}</p>
@@ -84,7 +85,7 @@ if(inGame){
 }
 const systemDark=matchMedia('(prefers-color-scheme: dark)');
 let settings, latest='', postponed=false;
-let pendingAuto=false;
+let pendingAuto=false, activeSession=inGame;
 const words={
 {% for key in ['chip.ready','chip.no_files','chip.importing','chip.running','chip.starting','chip.standing_by','chip.waiting_for_files','main.no_save','main.change','main.choose','index.not_built','index.ready','main.choose_files_hint','main.keep_open','menu.auto_deploy_on','menu.auto_deploy_off','menu.updates_on','menu.updates_off','display.light','display.dark','display.system','menu.check_updates'] %}
   '{{ key }}':{{ t('launcher.'+key)|tojson }},
@@ -101,6 +102,10 @@ function closeOptions(){if(el('options').open)el('options').close()}
 async function update(){
   const response=await fetch('state',{cache:'no-store'});if(!response.ok)throw Error('Unable to read the launcher state.');
   const s=await response.json();
+  const frame=el('update-worker');
+  if(!inGame&&s.updatePage){
+    if(frame.getAttribute('src')!==s.updatePage)frame.src=s.updatePage;
+  }else if(frame.hasAttribute('src'))frame.removeAttribute('src');
   el('files').textContent=words[s.ready?'chip.ready':s.busy?'chip.importing':'chip.no_files'];
   el('files').classList.toggle('good',s.ready);
   el('server').textContent=words[s.running?'chip.running':s.services?'chip.starting':s.ready?'chip.standing_by':'chip.waiting_for_files'];
@@ -117,9 +122,11 @@ async function update(){
   el('stop').disabled=s.busy;
   el('auto-deploy').textContent=words[s.autoDeploy?'menu.auto_deploy_on':'menu.auto_deploy_off'];
   el('auto-deploy').disabled=s.busy||s.deployed;
-  el('install-update').disabled=s.busy||s.services||s.deployed;
+  activeSession=s.services||s.deployed;
+  el('install-update').disabled=s.busy||(s.services&&!s.running);
   el('auto-install').hidden=!s.portableUpdate;
-  if(pendingAuto&&!el('install-update').disabled){
+  if(s.updating)pendingAuto=false;
+  if(pendingAuto&&!activeSession&&!el('install-update').disabled){
     pendingAuto=false;
     if(!s.message.startsWith('Update failed:'))act('install-update');
   }
@@ -185,6 +192,7 @@ async function prefs(changes){
   const init=changes?{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(changes)}:{};
   const r=await fetch('preferences',init);if(!r.ok)throw Error(await r.text());
   settings=await r.json();setTheme();
+  if(!settings.updates||!settings.autoInstall||settings.skipped===latest)pendingAuto=false;
   el('auto-install').textContent='Install updates automatically: '+(settings.autoInstall?'On':'Off');
   el('auto-install').disabled=!settings.updates;
   el('display-theme').textContent=words['menu.display'].replace('__MODE__',words['display.'+settings.theme]);
@@ -214,7 +222,11 @@ async function checkUpdate(manual){
   }catch(e){if(manual)notice(words['menu.check_updates'],e.message)}
 }
 el('check-updates').onclick=()=>{closeOptions();checkUpdate(true)};
-el('install-update').onclick=()=>{pendingAuto=false;act('install-update')};
+el('install-update').onclick=()=>{
+  pendingAuto=false;
+  if(activeSession&&!confirm(inGame?'Close the game, stop Lunar Tear, and install the update?':'Stop Lunar Tear and install the update?'))return;
+  act('install-update',activeSession?'install-update?stop=1':'install-update');
+};
 el('auto-install').onclick=async()=>{try{await prefs({autoInstall:!settings.autoInstall})}catch(error){detail(error.message)}};
 el('later').onclick=()=>{pendingAuto=false;postponed=true;el('release').hidden=true};
 el('skip').onclick=async()=>{try{await prefs({skipped:latest});el('release').hidden=true}catch(e){detail(e.message)}};

@@ -3,6 +3,13 @@
 What changed, newest first, by date and area. A release's heading comes
 above the dated sections it holds.
 
+## 0.3.1 (2026-11-23)
+
+- In the portable Windows player, open **Ctrl+B → Update and restart** and confirm once. The launcher closes the game, waits for Lunar Tear to finish saving, then verifies and installs the update. The same action works when only Lunar Tear is running.
+- Cancelling leaves the session open. If the game cannot close, the launcher shows the error and lets you retry. Automatic updates wait until the launcher is idle.
+- The updater builds in the launcher's existing WebView2 window. A separate Microsoft Edge browser installation is no longer required.
+- To install this release from 0.3.0, use **Update and restart** with Lunar Tear stopped. Updates started during play are supported from 0.3.1 onward.
+
 ## 0.3.0 (2026-11-23)
 
 - Hold Left Shift to walk or press Tab to toggle walking. Arrow keys also move the character. L3 toggles walking on a controller. R or Xbox X / PlayStation Square activates field auto-run when available. Mouse Back works alongside Esc.

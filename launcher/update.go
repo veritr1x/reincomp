@@ -23,6 +23,7 @@ import (
 var updateHelper string
 
 var updateHash = regexp.MustCompile("^[a-f0-9]{64}$")
+var updatePageURL = regexp.MustCompile(`^http://127\.0\.0\.1:[0-9]{1,5}/[a-f0-9]{48}/$`)
 
 type windowsRelease struct {
 	Version, Bunker, Runtime, Executable string
@@ -121,7 +122,68 @@ func canUpdatePortable(root, exe string) bool {
 		regularFile(filepath.Join(root, "data", "game-sound.apk")) && regularFile(filepath.Join(root, "data", "original-master.bin.e"))
 }
 
-func startPlayerUpdate(ctx context.Context, root, exe string, release windowsRelease, progress func(string)) error {
+// During gameplay the window that accepted the update belongs to Unity.
+// Carry the checked release to the standalone launcher across that window's exit.
+type launcherUpdate struct {
+	release    windowsRelease
+	serverDone chan error
+	playerExit error
+	page       string
+}
+
+func (u *launcherUpdate) Error() string { return "return to the launcher to install the update" }
+func (u *launcherUpdate) Unwrap() error { return errReturnToLauncher }
+
+func (w *resourceWindow) stopped(reason, playerExit error) error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.update != nil {
+		w.update.playerExit = playerExit
+		return w.update
+	}
+	return reason
+}
+
+func (w *resourceWindow) installUpdate(ctx context.Context, root, exe string, update *launcherUpdate) {
+	var err error
+	if update.serverDone != nil {
+		select {
+		case err = <-update.serverDone:
+		case <-ctx.Done():
+			return
+		}
+		w.mu.Lock()
+		w.services, w.running = false, false
+		w.mu.Unlock()
+		if err != nil {
+			err = fmt.Errorf("Lunar Tear exited with an error: %w. See server.log", err)
+		}
+		if update.playerExit != nil {
+			err = errors.Join(fmt.Errorf("the game exited with an error: %w. See game.log", update.playerExit), err)
+		}
+	}
+	if err == nil && ctx.Err() == nil {
+		w.mu.Lock()
+		w.status = "Preparing Windows update…"
+		w.mu.Unlock()
+		err = w.startPlayerUpdate(ctx, root, exe, update)
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if ctx.Err() != nil {
+		return
+	}
+	if err != nil {
+		w.status = "Update failed: " + strings.TrimPrefix(err.Error(), "Update failed: ")
+		w.busy, w.update = false, nil
+		return
+	}
+	w.status = "Restarting into the updated player…"
+	close(w.restart)
+}
+
+func (w *resourceWindow) startPlayerUpdate(ctx context.Context, root, exe string, update *launcherUpdate) error {
+	release := update.release
 	if !canUpdatePortable(root, exe) || !newerVersion(release.Version, version) || !release.installable() {
 		return errors.New("No newer compatible Windows release is available.")
 	}
@@ -138,14 +200,14 @@ func startPlayerUpdate(ctx context.Context, root, exe string, release windowsRel
 	}()
 	python := filepath.Join(root, "pods", "python", "python.exe")
 	args := []string{"-I", "-B", "-u", "-X", "utf8", "-c", updateHelper}
-	cmd := exec.CommandContext(ctx, python, append(args, "build", root, candidate, release.Bunker, release.Runtime, release.Executable)...)
+	origin := "http://" + w.server.Addr
+	cmd := exec.CommandContext(ctx, python, append(args, "build", root, candidate, release.Bunker, release.Runtime, release.Executable, origin)...)
 	stop, err := cmd.StdinPipe()
 	if err != nil {
 		return err
 	}
 	defer stop.Close()
-	// Let Python shut down the isolated browser and remove its temporary
-	// profile if the player closes the launcher during a download.
+	// Closing the launcher cancels the loopback compiler and its downloads.
 	cmd.Cancel = stop.Close
 	cmd.WaitDelay = 10 * time.Second
 	hideHelperWindow(cmd)
@@ -164,8 +226,14 @@ func startPlayerUpdate(ctx context.Context, root, exe string, release windowsRel
 		line := scanner.Text()
 		if hash, ok := strings.CutPrefix(line, "VERIFIED "); ok && updateHash.MatchString(hash) {
 			digest = hash
+		} else if page, ok := strings.CutPrefix(line, "UPDATE_PAGE "); ok && updatePageURL.MatchString(page) {
+			w.mu.Lock()
+			update.page = page
+			w.mu.Unlock()
 		} else {
-			progress(line)
+			w.mu.Lock()
+			w.status = line
+			w.mu.Unlock()
 		}
 	}
 	if err = cmd.Wait(); err != nil {

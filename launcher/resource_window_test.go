@@ -53,7 +53,7 @@ func TestDirectGameHasRunningLauncher(t *testing.T) {
 	if err := os.WriteFile(master, nil, 0600); err != nil {
 		t.Fatal(err)
 	}
-	menu, err := startLauncher(root, "", root, master, "", true, true)
+	menu, err := startLauncher(root, "", root, master, "", true, true, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

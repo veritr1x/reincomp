@@ -124,7 +124,7 @@ func (s *playerSession) play(makePlayer func() (*exec.Cmd, error), menu *resourc
 			case err := <-exited:
 				select {
 				case <-stopServices:
-					return errReturnToLauncher
+					return menu.stopped(errReturnToLauncher, err)
 				default:
 					return err
 				}
@@ -151,7 +151,7 @@ func (s *playerSession) play(makePlayer func() (*exec.Cmd, error), menu *resourc
 				select {
 				case err := <-exited:
 					if req.result == nil {
-						return errReturnToLauncher
+						return menu.stopped(errReturnToLauncher, err)
 					}
 					req.result <- err
 					break playing
@@ -166,7 +166,12 @@ func (s *playerSession) play(makePlayer func() (*exec.Cmd, error), menu *resourc
 			} else {
 				menu.mu.Lock()
 				menu.busy = false
-				menu.status = "Could not stop Lunar Tear: " + stopErr.Error() + ". Try again."
+				if menu.update != nil {
+					menu.update = nil
+					menu.status = "Update failed: " + stopErr.Error() + ". Try again."
+				} else {
+					menu.status = "Could not stop Lunar Tear: " + stopErr.Error() + ". Try again."
+				}
 				menu.mu.Unlock()
 			}
 		}
@@ -175,7 +180,7 @@ func (s *playerSession) play(makePlayer func() (*exec.Cmd, error), menu *resourc
 		for {
 			select {
 			case <-stopServices:
-				return errReturnToLauncher
+				return menu.stopped(errReturnToLauncher, nil)
 			case <-s.windowClosed:
 				return nil
 			case req := <-s.requests:

@@ -53,9 +53,11 @@ imported save. The previous save is kept in `.bunker-player/data/server.before-i
 In the portable Windows player, **Options → Check for updates** checks the latest
 published reincomp release. **About** shows the player and bundled Bunker versions.
 **Update and restart** appears when the matching Windows package is published.
-Until then, **Build this release** opens the tagged build instructions. Enable
-**Install updates automatically** to check and install before gameplay.
-The updater rebuilds the release with the original APK and master data already
+Until then, **Build this release** opens the tagged build instructions.
+During play, select **Update and restart** in **Ctrl+B** and confirm. The launcher
+closes the game and waits for Lunar Tear to finish saving before installation.
+With **Install updates automatically** enabled, installation waits until the launcher is idle.
+The launcher uses its existing WebView2 runtime to rebuild the release with the original APK and master data already
 in the installation, verifies the executable against reincomp's tagged SHA-256,
 then restarts it in place. Imported resources, saves and settings stay in their
 existing folders. An offline startup can still enter the game.

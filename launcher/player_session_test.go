@@ -6,9 +6,18 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 )
+
+func calendarChild(dir string) func() (*exec.Cmd, error) {
+	return func() (*exec.Cmd, error) {
+		cmd := exec.Command(os.Args[0], "-test.run=^TestCalendarChild$")
+		cmd.Env = append(os.Environ(), "REINCOMP_CALENDAR_TEST_DIR="+dir)
+		return cmd, nil
+	}
+}
 
 func TestStopLunarTearClosesPlayerAndReturnsToLauncher(t *testing.T) {
 	dir := t.TempDir()
@@ -21,13 +30,7 @@ func TestStopLunarTearClosesPlayerAndReturnsToLauncher(t *testing.T) {
 	}
 	defer func() { closePlayerWindow = oldClose }()
 	done := make(chan error, 1)
-	go func() {
-		done <- session.play(func() (*exec.Cmd, error) {
-			cmd := exec.Command(os.Args[0], "-test.run=^TestCalendarChild$")
-			cmd.Env = append(os.Environ(), "REINCOMP_CALENDAR_TEST_DIR="+dir)
-			return cmd, nil
-		}, menu)
-	}()
+	go func() { done <- session.play(calendarChild(dir), menu) }()
 	select {
 	case <-started:
 		menu.stopServices <- struct{}{}
@@ -41,6 +44,58 @@ func TestStopLunarTearClosesPlayerAndReturnsToLauncher(t *testing.T) {
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("Stop did not finish the game session")
+	}
+}
+
+func TestFailedUpdateCanRetryWhileGameIsRunning(t *testing.T) {
+	dir := t.TempDir()
+	update := &launcherUpdate{release: windowsRelease{Version: "1.0.0"}}
+	menu := &resourceWindow{busy: true, update: update, stopServices: make(chan struct{}, 1)}
+	started := make(chan int, 1)
+	session := &playerSession{started: func(pid int) { started <- pid }}
+	oldClose := closePlayerWindow
+	attempts := 0
+	closePlayerWindow = func(pid int) bool {
+		attempts++
+		return attempts > 1 && os.WriteFile(filepath.Join(dir, strconv.Itoa(pid)), nil, 0600) == nil
+	}
+	defer func() { closePlayerWindow = oldClose }()
+	done := make(chan error, 1)
+	go func() { done <- session.play(calendarChild(dir), menu) }()
+	select {
+	case <-started:
+	case err := <-done:
+		t.Fatalf("could not start the player: %v", err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("player did not start")
+	}
+	menu.stopServices <- struct{}{}
+	for deadline := time.Now().Add(5 * time.Second); ; {
+		menu.mu.Lock()
+		pending, busy, status := menu.update, menu.busy, menu.status
+		menu.mu.Unlock()
+		if !busy {
+			if pending != nil || !strings.Contains(status, "game window is not ready to close") {
+				t.Fatalf("failed close left update %v, status %q", pending, status)
+			}
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("launcher stayed busy after the game refused to close")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	menu.mu.Lock()
+	menu.busy, menu.update = true, update
+	menu.mu.Unlock()
+	menu.stopServices <- struct{}{}
+	select {
+	case reason := <-done:
+		if !errors.Is(reason, errReturnToLauncher) || reason != update || update.playerExit != nil {
+			t.Fatalf("retry lost the update after closing the game: %v", reason)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("retry did not close the game")
 	}
 }
 
@@ -65,11 +120,6 @@ func TestCalendarChild(t *testing.T) {
 
 func TestPlayerRestartsAroundCalendarEdit(t *testing.T) {
 	dir := t.TempDir()
-	makePlayer := func() (*exec.Cmd, error) {
-		cmd := exec.Command(os.Args[0], "-test.run=^TestCalendarChild$")
-		cmd.Env = append(os.Environ(), "REINCOMP_CALENDAR_TEST_DIR="+dir)
-		return cmd, nil
-	}
 	oldClose := closePlayerWindow
 	closePlayerWindow = func(pid int) bool {
 		return os.WriteFile(filepath.Join(dir, strconv.Itoa(pid)), nil, 0600) == nil
@@ -77,7 +127,7 @@ func TestPlayerRestartsAroundCalendarEdit(t *testing.T) {
 	defer func() { closePlayerWindow = oldClose }()
 	s := &playerSession{requests: make(chan playerRequest), editorGone: make(chan struct{})}
 	done := make(chan error, 1)
-	go func() { done <- s.play(makePlayer, nil) }()
+	go func() { done <- s.play(calendarChild(dir), nil) }()
 	waitPlayer := func(previous string) string {
 		t.Helper()
 		for end := time.Now().Add(5 * time.Second); time.Now().Before(end); {

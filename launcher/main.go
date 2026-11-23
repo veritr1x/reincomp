@@ -175,7 +175,7 @@ func run(root, resourceDir, assets, fps, render string, prepareOnly, fullscreen,
 	if !readyFiles || desktop && (showLauncher || regularFile(filepath.Join(data, "manual-deploy"))) {
 		dump, master := resourceInputs(resourceDir, root)
 		if desktop && regularFile(filepath.Join(root, "game", "resource-window.exe")) {
-			setup, e = startLauncher(root, server, assets, master, dump, readyFiles, false)
+			setup, e = startLauncher(root, server, assets, master, dump, readyFiles, false, nil)
 			if errors.Is(e, context.Canceled) {
 				return nil
 			}
@@ -201,13 +201,15 @@ func run(root, resourceDir, assets, fps, render string, prepareOnly, fullscreen,
 			}
 		}
 		err := serveAndPlay(root, data, assets, game, server, view, native, apk, fps, render, desktop, fullscreen, setup)
-		// The in-game menu lives inside Unity. Once the game and the server
-		// have exited, restore a standalone launcher with its own file picker.
+		// The in-game menu lives inside Unity. Restore a standalone launcher
+		// to show update progress or allow file changes after a manual stop.
 		if errors.Is(err, errReturnToLauncher) {
+			var update *launcherUpdate
+			errors.As(err, &update)
 			if setup != nil {
 				setup.close()
 			}
-			setup, e = startLauncher(root, server, assets, "", "", resourcesReady(assets), false)
+			setup, e = startLauncher(root, server, assets, "", "", resourcesReady(assets), false, update)
 			if e != nil {
 				return e
 			}
@@ -231,7 +233,7 @@ func run(root, resourceDir, assets, fps, render string, prepareOnly, fullscreen,
 var errStoppedFromLauncher = errors.New("Lunar Tear stopped from the launcher")
 var errReturnToLauncher = errors.New("return to the launcher after stopping the game")
 
-func serveAndPlay(root, data, assets, game, server, view, native, apk, fps, render string, desktop, fullscreen bool, setup *resourceWindow) error {
+func serveAndPlay(root, data, assets, game, server, view, native, apk, fps, render string, desktop, fullscreen bool, setup *resourceWindow) (result error) {
 	// The Bunker's pages (Pod Programs) are served when the pods folder is there.
 	if err := installBundledNotices(root, assets); err != nil {
 		return err
@@ -274,7 +276,16 @@ func serveAndPlay(root, data, assets, game, server, view, native, apk, fps, rend
 	if e := serve.Start(); e != nil {
 		return fmt.Errorf("The server did not start: %v", e)
 	}
-	defer func() { hold.Close(); serve.Wait() }()
+	defer func() {
+		hold.Close()
+		if update, ok := result.(*launcherUpdate); ok {
+			// Reopen the launcher immediately so it can show which service
+			// is still stopping. The updater waits for the actual process exit.
+			go func() { update.serverDone <- serve.Wait() }()
+		} else {
+			serve.Wait()
+		}
+	}()
 	ready, control := make(chan string, 1), make(chan string, 1)
 	go func() {
 		lines := bufio.NewReader(out)
@@ -336,7 +347,7 @@ func serveAndPlay(root, data, assets, game, server, view, native, apk, fps, rend
 			case <-setup.done:
 				return nil
 			case <-setup.stopServices:
-				return errStoppedFromLauncher
+				return setup.stopped(errStoppedFromLauncher, nil)
 			case <-setup.deploy:
 				waiting = false
 			case request := <-session.requests:
@@ -347,7 +358,7 @@ func serveAndPlay(root, data, assets, game, server, view, native, apk, fps, rend
 
 	menu := setup
 	if desktop && menu == nil {
-		menu, e = startLauncher(root, server, assets, "", "", true, true)
+		menu, e = startLauncher(root, server, assets, "", "", true, true, nil)
 		if e != nil {
 			return e
 		}

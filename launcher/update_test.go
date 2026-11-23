@@ -3,11 +3,13 @@ package main
 import (
 	"context"
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 )
 
 type releaseTransport map[string]string
@@ -18,6 +20,39 @@ func (bodies releaseTransport) RoundTrip(r *http.Request) (*http.Response, error
 		return nil, fmt.Errorf("unavailable: %s", r.URL)
 	}
 	return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(body)), Header: make(http.Header)}, nil
+}
+
+func TestUpdateWaitsForLunarTearExit(t *testing.T) {
+	update := &launcherUpdate{release: windowsRelease{Version: "1.0.0"}, serverDone: make(chan error, 1)}
+	window := &resourceWindow{busy: true, services: true, running: true, update: update, restart: make(chan struct{})}
+	if window.stopped(errStoppedFromLauncher, nil) != update || window.stopped(errReturnToLauncher, errors.New("player test exit")) != update {
+		t.Fatal("lost the accepted release during shutdown")
+	}
+	done := make(chan struct{})
+	go func() {
+		window.installUpdate(context.Background(), "", "", update)
+		close(done)
+	}()
+	select {
+	case <-done:
+		t.Fatal("started the update before Lunar Tear exited")
+	case <-time.After(50 * time.Millisecond):
+	}
+	update.serverDone <- errors.New("test exit status")
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("update did not handle the server exit")
+	}
+	if window.busy || window.running || window.services || window.update != nil ||
+		!strings.Contains(window.status, "Lunar Tear exited with an error") || !strings.Contains(window.status, "game exited with an error") {
+		t.Fatalf("failed shutdown left the launcher in an invalid state: %q", window.status)
+	}
+	select {
+	case <-window.restart:
+		t.Fatal("restart after failed shutdown")
+	default:
+	}
 }
 
 func TestWindowsUpdateChannel(t *testing.T) {

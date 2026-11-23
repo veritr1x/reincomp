@@ -1,11 +1,58 @@
-"""Windows regression tests for the browser used to build a portable update."""
+"""Regression tests for building a portable update in the launcher or a standalone browser."""
+from concurrent.futures import ThreadPoolExecutor
+import hashlib
+import json
 from pathlib import Path
+import queue
 import sys
 import tempfile
+from threading import Event
 import time
 import unittest
+from unittest.mock import patch
+import urllib.request
+from urllib.parse import urlsplit
 
-from update_player import browser_job
+from update_player import browser_job, rebuild
+
+
+class LauncherWebViewTest(unittest.TestCase):
+    def test_existing_webview_builds_without_edge(self):
+        result = b"portable update"
+        digest = hashlib.sha256(result).hexdigest()
+        kit = json.dumps(dict(bunkerVersion="1.2.3", preparedRuntimeFormat=1, files={})).encode()
+        manifest = json.dumps(dict(sourceExeSHA256=digest, kitSHA256=hashlib.sha256(kit).hexdigest(), parts=[])).encode()
+        files = {"windows/runtime/runtime.json": manifest, "windows/kit.json": kit, "bundles/notices.json": b'{"parts":[]}'}
+        origin = "http://127.0.0.1:43210"
+        pages = queue.Queue()
+
+        def progress(line, **kwargs):
+            if line.startswith("UPDATE_PAGE "):
+                pages.put(line.removeprefix("UPDATE_PAGE "))
+
+        cancel = Event()
+        with tempfile.TemporaryDirectory() as tmp, ThreadPoolExecutor(max_workers=1) as pool, \
+                patch("update_player.edge_path", side_effect=AssertionError("looked for Edge")), \
+                patch("update_player.fetch", side_effect=lambda base, name, *args: files[name]), \
+                patch("builtins.print", side_effect=progress):
+            output = Path(tmp) / "player.exe"
+            build = pool.submit(rebuild, Path(tmp), output, "1.2.3", hashlib.sha256(manifest).hexdigest(),
+                                cancel=cancel, expected_exe=digest, launcher_origin=origin)
+            try:
+                page = pages.get(timeout=5)
+                with urllib.request.urlopen(page, timeout=5) as response:
+                    self.assertIn("frame-ancestors " + origin, response.headers["Content-Security-Policy"])
+                    self.assertIn(b"start.js", response.read())
+                with urllib.request.urlopen(page + "build.mjs", timeout=5) as response:
+                    self.assertIn(b"compileWindows", response.read())
+                request = urllib.request.Request(page + "result", data=result,
+                                                 headers={"Origin": "http://" + urlsplit(page).netloc})
+                with urllib.request.urlopen(request, timeout=5) as response:
+                    self.assertEqual(response.status, 200)
+                self.assertEqual(build.result(timeout=5), digest)
+                self.assertEqual(output.read_bytes(), result)
+            finally:
+                cancel.set()
 
 
 @unittest.skipUnless(sys.platform == "win32", "requires Windows job objects")

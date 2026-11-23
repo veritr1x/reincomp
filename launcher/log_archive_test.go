@@ -25,7 +25,7 @@ func TestInGameLogDownload(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	menu, err := startLauncher(root, "", root, filepath.Join(root, masterName), "", true, true)
+	menu, err := startLauncher(root, "", root, filepath.Join(root, masterName), "", true, true, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
