@@ -15,7 +15,7 @@
 // event (Unity's render thread, GL context current) the due frame is uploaded
 // into a GL_TEXTURE_2D whose name _GetTextureHandle reports, as the Java
 // player's non-OES path does. The movie finishes when the clock reaches its
-// duration. No audio track is played.
+// duration. Its PCM audio is decoded against the same playback clock.
 // Without a decoder a readable MP4 still runs its playback clock. Chapter
 // titles cue the next scene before the movie ends. For a missing or untimed
 // file, deliver Started and FinishedPlaying on successive updates.
@@ -44,6 +44,7 @@
 #include "jni_host.h"
 #include "module_registry.h"
 #include "video_decoder.h"
+#include "movie_audio.h"
 #ifndef _WIN32
 #include <dlfcn.h>
 #endif
@@ -80,7 +81,8 @@ class Service {
   using PathResolver = std::function<std::optional<std::filesystem::path>(const std::string &)>;
   static constexpr addr_t kMarkerBase = 0x7feb00000000ULL;
 
-  Service(jni::Host &java, PathResolver resolve) : java_(java), resolve_(std::move(resolve)) { Define(); }
+  Service(jni::Host &java, PathResolver resolve, bool audio = true)
+      : java_(java), resolve_(std::move(resolve)), audio_enabled_(audio) { Define(); }
   Service(const Service &) = delete;
   Service &operator=(const Service &) = delete;
 
@@ -132,6 +134,7 @@ class Service {
     std::string path;
     // Decoded video (null: no video track).
     std::shared_ptr<video::Decoder> decoder;
+    std::unique_ptr<video::MovieAudio> audio;
     Clock::time_point started{};  // wall time matching position_ms while playing
     uint32_t texture = 0;         // GL name, created on the render thread
     int32_t frames = 0;           // uploaded frames
@@ -244,9 +247,11 @@ class Service {
       const auto guest = Ascii(*path);
       std::optional<int64_t> duration;
       std::shared_ptr<video::Decoder> decoder;
+      std::unique_ptr<video::MovieAudio> audio;
       if (auto host = resolve_(guest)) {
         duration = Mp4DurationMs(*host);
         decoder = video::Open(*host);
+        if (audio_enabled_) audio = video::MovieAudio::Open(*host);
         if (decoder && decoder->duration_ms > 0) duration = decoder->duration_ms;
       }
       std::lock_guard lock(mutex_);
@@ -256,6 +261,7 @@ class Service {
       p->path = guest;
       p->opened = true;
       p->decoder = std::move(decoder);
+      p->audio = std::move(audio);
       p->timed = duration && *duration > 0;
       p->duration_ms = p->timed ? *duration : 1000;
       Log(*p, p->decoder ? "opened (decoding video)" : duration ? "opened (mvhd duration, no decoder)" : "opened (file not in app storage; 1 s)");
@@ -268,15 +274,17 @@ class Service {
       p.texture = texture;
     });
     mutate("Play", "()V", [this](Player &p, const Args &) {
-      if (!p.opened) return;
+      if (!p.opened || p.playing) return;
       if (p.finished) {
         p.position_ms = 0;
         if (p.decoder) p.decoder->Seek(0);
+        if (p.audio) p.audio->Seek(0);
       }
       p.playing = true;
       p.started = Clock::now();
       p.paused = p.finished = false;
       p.updates_playing = 0;
+      if (p.audio) p.audio->Play(true);
       Log(p, "play");
     });
     mutate("Pause", "()V", [](Player &p, const Args &) {
@@ -284,31 +292,43 @@ class Service {
       p.position_ms = p.Now();
       p.playing = false;
       p.paused = true;
+      if (p.audio) p.audio->Play(false);
     });
     mutate("Stop", "()V", [](Player &p, const Args &) {
       p.position_ms = p.Now();
       p.playing = p.paused = false;
+      if (p.audio) p.audio->Play(false);
     });
     auto seek = [](Player &p, const Args &a) {
       p.position_ms = std::clamp<int64_t>(int32_t(a[0]), 0, p.duration_ms);
       p.started = Clock::now();
       if (p.decoder) p.decoder->Seek(p.position_ms);
+      if (p.audio) { p.audio->Seek(p.position_ms); p.audio->Play(p.playing); }
       if (p.position_ms < p.duration_ms) p.finished = false;
     };
     mutate("Seek", "(I)V", seek);
     mutate("SeekFast", "(I)V", seek);
     mutate("Update", "()V", [this](Player &p, const Args &) {
+      if (p.audio && p.playing) {
+        float volume, pan;
+        std::memcpy(&volume, &p.volume, sizeof volume);
+        std::memcpy(&pan, &p.pan, sizeof pan);
+        p.audio->Update(p.Now(), p.muted || !std::isfinite(volume) ? 0.f : std::clamp(volume, 0.f, 1.f),
+                        std::isfinite(pan) ? std::clamp(pan, -1.f, 1.f) : 0.f);
+      }
       if (p.decoder || p.timed) {
         if (!p.playing || p.Now() < p.duration_ms) return;
         if (p.looping) {
           p.position_ms = 0;
           p.started = Clock::now();
           if (p.decoder) p.decoder->Seek(0);
+          if (p.audio) { p.audio->Seek(0); p.audio->Play(true); }
           return;
         }
         p.playing = false;
         p.finished = true;
         p.position_ms = p.duration_ms;
+        if (p.audio) p.audio->Play(false);
         Log(p, "finished");
         return;
       }
@@ -343,7 +363,8 @@ class Service {
     boolean("IsLooping", [](Player &p) { return p.looping; });
     boolean("IsMuted", [](Player &p) { return p.muted; });
     boolean("HasVideo", [](Player &p) { return bool(p.decoder); });
-    for (const char *name : {"IsSeeking", "IsBuffering", "HasAudio", "HasSubtitles", "HasTimedText",
+    boolean("HasAudio", [](Player &p) { return bool(p.audio); });
+    for (const char *name : {"IsSeeking", "IsBuffering", "HasSubtitles", "HasTimedText",
                              "GetDeinitialised", "Render", "StartExtractFrame"})
       boolean(name, [](Player &) { return false; });
     integer("GetPlayerIndex", [](Player &p) { return p.index; });
@@ -351,7 +372,8 @@ class Service {
     integer("GetHeight", [](Player &p) { return p.decoder ? int32_t(p.decoder->height) : 0; });
     integer("GetTextureHandle", [](Player &p) { return p.frames ? int32_t(p.texture) : 0; });
     integer("GetFrameCount", [](Player &p) { return p.frames; });
-    for (const char *name : {"GetLastErrorCode", "GetCurrentAudioTrackIndex", "GetNumberAudioTracks"})
+    integer("GetNumberAudioTracks", [](Player &p) { return int32_t(bool(p.audio)); });
+    for (const char *name : {"GetLastErrorCode", "GetCurrentAudioTrackIndex"})
       integer(name, [](Player &) { return int32_t{0}; });
     longer("GetCurrentTimeMs", [](Player &p) { return std::min(p.Now(), p.duration_ms); });
     longer("GetDurationMs", [](Player &p) { return p.duration_ms; });
@@ -509,6 +531,7 @@ class Service {
 
   jni::Host &java_;
   PathResolver resolve_;
+  bool audio_enabled_;
   std::mutex mutex_;
   std::map<int, std::shared_ptr<Player>> players_;
   int next_index_ = 0;

@@ -207,6 +207,20 @@ def build_archive_helper(go, source, work, game, env):
         NATIVE/'archive_media.go', NATIVE/'resource_archive.go', cwd=source, env=env)
 
 
+def build_player_entry(cxx, original, destination, work):
+    # Keep the verified Unity manifest, version information and icon groups.
+    # The existing branding step still applies the APK's icons afterwards.
+    resources = work/'player-resources.o'
+    windres = cxx.with_name(cxx.name.replace('g++', 'windres'))
+    run(windres, '-J', 'coff', '-O', 'coff', '-i', original, '-o', resources)
+    # The linker embeds the output filename in the GPU-selection export table.
+    entry = work/'player-entry.exe'
+    run(cxx, '-std=c++17', '-O2', '-static', '-municode', '-mwindows', '-Wl,--no-insert-timestamp',
+        NATIVE/'player-entry.cpp', resources, '-o', entry)
+    if entry.resolve() != destination.resolve():
+        shutil.copyfile(entry, destination)
+
+
 def prepare(a, folder, work, server, deps, pods, bunker, cxx):
     if digest(a.master) != MASTER_HASH:
         raise ValueError(f'Expected the original Global {MASTER} ({MASTER_HASH})')
@@ -288,6 +302,7 @@ def prepare(a, folder, work, server, deps, pods, bunker, cxx):
             raise ValueError(f'Need Unity 2019.4.29f1 Windows IL2CPP release {name}. Set --unity-player to its directory.')
         (game/destination).parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(player/name, game/destination)
+    build_player_entry(cxx, player/'WindowsPlayer.exe', game/'WindowsPlayer.exe', work)
     env = os.environ.copy()
     if a.no_download:
         env.update(GOPROXY='off', GOTOOLCHAIN='local')

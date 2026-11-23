@@ -22,6 +22,10 @@ Its launcher imports the assets and starts the game.
 If WebView2 is unavailable, use **Choose resource archive** or **Copy extracted
 folder** in the setup window. Select **Deploy** when the game files are ready.
 
+On Linux or Steam Deck, add the downloaded `Nier Reincarnation.exe` to Steam
+as a non-Steam game and select Proton under **Properties → Compatibility**.
+Keep the shortcut pointed at that same EXE after selecting **Deploy**.
+
 To build from source instead, see [BUILDING.md](BUILDING.md).
 
 ## Controls

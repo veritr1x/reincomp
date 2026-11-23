@@ -15,9 +15,8 @@ repo = bench.parent
 test = root / 'runtime-player'
 test.mkdir(exist_ok=True)
 original = root / 'host-probe'
-for name in ('UnityPlayer.dll', 'WindowsPlayer.exe'):
-    if not (test / name).exists():
-        shutil.copy2(original / name, test / name)
+if not (test/'UnityPlayer.dll').exists():
+    shutil.copy2(original/'UnityPlayer.dll', test/'UnityPlayer.dll')
 if not (test / 'WindowsPlayer_Data').exists():
     shutil.copytree(original / 'WindowsPlayer_Data', test / 'WindowsPlayer_Data')
 for first in sorted((test/'WindowsPlayer_Data').rglob('*.split0')):
@@ -35,6 +34,9 @@ for first in sorted((test/'WindowsPlayer_Data').rglob('*.split0')):
     partial.replace(joined)
 
 compiler = 'C:/mingw64/bin/g++.exe'
+sys.path.insert(0, str(repo/'build'))
+from native_release import build_player_entry
+build_player_entry(Path(compiler), original/'WindowsPlayer.exe', test/'WindowsPlayer.exe', root)
 def run(*args):
     subprocess.run(args, cwd=repo, check=True)
 
@@ -58,11 +60,16 @@ if 'adapter-only' not in sys.argv:
     obj = root / 'runtime-host.o'
     run(compiler, *flags, '-c', root / 'runtime-host.cpp', '-o', obj)
     bootstrap=root/'embedded-bootstrap.o'
-    dependencies=[repo/'host/game_bootstrap.cpp',repo/'host/game_collector_delivery.h',repo/'host/avpro_video.h',repo/'runtime/fast_tls.h']
+    dependencies=[repo/'host/game_bootstrap.cpp',repo/'host/game_collector_delivery.h',repo/'host/avpro_video.h',
+                  repo/'host/movie_audio.h',repo/'host/opensles_audio.h',repo/'runtime/elfload.h',repo/'runtime/fast_tls.h']
     if not bootstrap.exists() or any(p.stat().st_mtime>bootstrap.stat().st_mtime for p in dependencies):
         run(compiler,*flags,'-DREINCOMP_EMBEDDED_PLAYER','-c',dependencies[0],'-o',bootstrap)
     old,=[arg for arg in args if arg.endswith('/main-bridge-mutex/bootstrap.o"')]
     args[args.index(old)]=f'"{bootstrap.as_posix()}"'
+    loader=root/'elfload.o'
+    run(Path(compiler).with_name('gcc.exe'),'-O2','-c',repo/'runtime/elfload.c','-o',loader)
+    previous,=[arg for arg in args if arg.endswith('/elfload.o"')]
+    args[args.index(previous)]=f'"{loader.as_posix()}"'
     memory_runtime=root/'memory-runtime.o'
     runtime_deps=[repo/'runtime/runtime.cpp',*sorted((repo/'runtime').glob('*.h'))]
     if not memory_runtime.exists() or any(p.stat().st_mtime>memory_runtime.stat().st_mtime for p in runtime_deps):
@@ -81,6 +88,7 @@ if 'adapter-only' not in sys.argv:
     scroll_method = build_scroll(root, bench/'emu-client/data/native/libil2cpp.so')
     walkers = build_liveness(root, bench/'emu-client/data/native/libil2cpp.so')
     args[-2:] = ['"-shared"', '"-Wl,--exclude-all-symbols,--image-base,0x240000000"',
+        '"-Wl,--wrap=sub_836175ec"',
         '"-Wl,--wrap=_ZN6bunker7windows14ModuleRegistry4OpenEPKci,--wrap=_ZN6bunker7windows8Pthreads3RunEySt16initializer_listIyE,--wrap=_ZN6bunker7windows8Pthreads7InstallEv,--wrap=_ZN6recomp7Runtime9AddTracesEPKNS_5TraceEy,--wrap=_ZN6bunker7windows10SignalHost11BindCurrentEy,--wrap=_ZN6recomp7Runtime9AddImportEySt8functionIFvR5StateEE,--wrap=_ZN6recomp21PublishGuestOverridesEv"',
         f'"{obj.as_posix()}"', f'"{path_method.as_posix()}"', f'"{scroll_method.as_posix()}"', f'"{walkers.as_posix()}"', '"-o"', f'"{(test / "GuestRuntime.dll").as_posix()}"']
     rsp = root / 'runtime-link.rsp'

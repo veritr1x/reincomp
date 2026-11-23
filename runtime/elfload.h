@@ -27,6 +27,10 @@ int elf_load(const char *path, uintptr_t base, elf_resolver resolve, struct elf_
 // ELF behavior. This explicit variant changes relocation only; elf_symbol is
 // still the raw integrity lookup below, while ModuleRegistry models dlsym.
 int elf_load_bionic(const char *path, uintptr_t base, elf_resolver resolve, struct elf_image *image);
+#ifdef _WIN32
+// Commit a range the caller reserved at process startup for this exact image.
+int elf_load_bionic_reserved(const char *path, void *reservation, size_t span, elf_resolver resolve, struct elf_image *image);
+#endif
 // Raw ELF lookup: SHN_ABS returns st_value. Public Android dlsym resolution is
 // a separate ModuleRegistry policy and must not infer it from this helper.
 void *elf_symbol(const struct elf_image *image, const char *name);

@@ -300,6 +300,12 @@ func serveAndPlay(root, data, assets, game, server, view, native, apk, fps, rend
 			return e
 		}
 		defer session.close()
+		// Unity needs the converter even if the optional Pod Programs fail to start.
+		stopConverter, err := startBundleConverter(root, data)
+		if err != nil {
+			return fmt.Errorf("start Windows asset converter: %w", err)
+		}
+		defer stopConverter()
 	}
 	if pods != "" {
 		var address string
@@ -384,6 +390,10 @@ func serveAndPlay(root, data, assets, game, server, view, native, apk, fps, rend
 				return nil, err
 			}
 			cmd.Env = append(cmd.Env, "REINCOMP_LAUNCHER_URL="+menu.homeURL)
+			if !sound {
+				cmd.Args = append(cmd.Args, "-nosound")
+				cmd.Env = append(cmd.Env, "REINCOMP_MUTE_AUDIO=1")
+			}
 			if setup != nil {
 				cmd.Args = append(cmd.Args, "-parentHWND", setup.handle, "delayed")
 				cmd.Env = append(cmd.Env, "REINCOMP_WINDOW_PARENT="+setup.handle)
@@ -450,6 +460,44 @@ func installBundledNotices(root, assets string) error {
 		return err
 	}
 	return os.Rename(temp.Name(), dest)
+}
+
+func startBundleConverter(root, data string) (func(), error) {
+	cmd := exec.Command(filepath.Join(root, "pods", "python", "python.exe"), "-I", "-B", "-X", "utf8",
+		filepath.Join(root, "game", "desktop_bundles.py"), data)
+	hideHelperWindow(cmd)
+	log, err := os.Create(filepath.Join(data, "bundle-converter.log"))
+	if err != nil {
+		return nil, err
+	}
+	cmd.Stderr = log
+	input, err := cmd.StdinPipe()
+	if err != nil {
+		log.Close()
+		return nil, err
+	}
+	if err := cmd.Start(); err != nil {
+		input.Close()
+		log.Close()
+		return nil, err
+	}
+	done := make(chan struct{})
+	go func() {
+		if err := cmd.Wait(); err != nil {
+			fmt.Fprintln(log, err)
+		}
+		log.Close()
+		close(done)
+	}()
+	return func() {
+		input.Close()
+		select {
+		case <-done:
+		case <-time.After(5 * time.Second):
+			cmd.Process.Kill()
+			<-done
+		}
+	}, nil
 }
 
 // servePods starts the Bunker's pages (Pod Programs) beside the server and

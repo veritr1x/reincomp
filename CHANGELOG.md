@@ -3,6 +3,16 @@
 What changed, newest first, by date and area. A release's heading comes
 above the dated sections it holds.
 
+## 0.2.5 (2026-11-23)
+
+- Fixed a loading stall at 40% when Windows temporarily locks Bunker's catalog. The asset converter now keeps running if Pod Programs fails to start. A Windows test with an empty converter cache reached 100% and resumed the saved story scene.
+- Reduced the time to convert the first 800 prologue bundles from 2.57 to 2.03 seconds by preserving the original data in text-only bundles.
+- Fixed a Proton startup failure when Unity took an address range needed by the game runtime. The portable EXE can stay selected as the Steam shortcut after deployment.
+- Restored sound in cutscenes that have an audio track. Movie playback respects the launcher's mute setting.
+- Kept picturebook story text inside the illustrated area on ultrawide screens.
+
+To build the fixed Windows player with your own game files, follow the [portable build instructions](https://github.com/veritr1x/reincomp/blob/v0.2.5/BUILDING.md#build-the-portable-exe). The release downloads are the standalone launcher and the Windows recompiler toolchain.
+
 ## 0.2.4 (2026-11-23)
 
 - Chapter 1 weapon memories now play their opening movie and continue into dialogue and movement. The story also advances when a video decoder is unavailable.

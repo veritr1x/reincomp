@@ -55,7 +55,7 @@ static int relocate(struct elf_image *image, const Elf64_Rela *rela, size_t coun
     return 0;
 }
 
-static int elf_load_impl(const char *path, uintptr_t base, elf_resolver resolve, struct elf_image *image, int bias_absolute_symbols) {
+static int elf_load_impl(const char *path, uintptr_t base, elf_resolver resolve, struct elf_image *image, int bias_absolute_symbols, size_t reserved_span) {
     memset(image, 0, sizeof *image);
     const uint8_t *file = read_file(path);
     if (!file) return perror(path), -1;
@@ -73,7 +73,12 @@ static int elf_load_impl(const char *path, uintptr_t base, elf_resolver resolve,
     void *map;
 #ifdef _WIN32
     // The ARM64 image is data only. Executable x86 code is linked separately.
-    map = VirtualAlloc((void *)base, span, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
+    if (reserved_span && span != reserved_span) {
+        fprintf(stderr, "elfload: reserved range does not match ELF image span\n");
+        free((void *)file);
+        return -1;
+    }
+    map = VirtualAlloc((void *)base, span, reserved_span ? MEM_COMMIT : MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
     if (map != (void *)base) {
         fprintf(stderr, "elfload: VirtualAlloc at %#llx failed (%lu)\n", (unsigned long long)base, GetLastError());
         if (map) VirtualFree(map, 0, MEM_RELEASE);
@@ -119,12 +124,17 @@ static int elf_load_impl(const char *path, uintptr_t base, elf_resolver resolve,
 }
 
 int elf_load(const char *path, uintptr_t base, elf_resolver resolve, struct elf_image *image) {
-    return elf_load_impl(path, base, resolve, image, 0);
+    return elf_load_impl(path, base, resolve, image, 0, 0);
 }
 
 int elf_load_bionic(const char *path, uintptr_t base, elf_resolver resolve, struct elf_image *image) {
-    return elf_load_impl(path, base, resolve, image, 1);
+    return elf_load_impl(path, base, resolve, image, 1, 0);
 }
+#ifdef _WIN32
+int elf_load_bionic_reserved(const char *path, void *reservation, size_t span, elf_resolver resolve, struct elf_image *image) {
+    return elf_load_impl(path, (uintptr_t)reservation, resolve, image, 1, span);
+}
+#endif
 
 void *elf_symbol(const struct elf_image *image, const char *name) {
     const Elf64_Sym *syms = image->dynsym;

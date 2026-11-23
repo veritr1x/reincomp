@@ -114,6 +114,24 @@ static auto privateClient(){
 #include "native-pacing.h"
 #include "desktop-input.h"
 #include "fsr31-engine.h"
+static void picturebookSafeArea(State &s,void *original){
+    struct Rect {float x,y,width,height;};
+    auto area=reinterpret_cast<Rect *>(s.gpr.x0.qword);
+    invoke<void,P>(s,original);
+    if(!area || !desktop_input::width || !desktop_input::height)return;
+    const int width=desktop_input::width(),height=desktop_input::height();
+    // Picturebooks draw black pillars outside the mobile 19.5:9 canvas.
+    const float margin=(width-height*(19.5f/9.f))*.5f;
+    if(margin<=0 || s.gpr.x30.qword!=0x84d77fc4)return;
+    // Screen.get_safeArea's frame holds its managed caller. Only adjust
+    // CalculatorScreen.GetPictureBookSafeArea, which caps width at x=0.
+    uintptr_t caller=0;
+    if(!ReadProcessMemory(GetCurrentProcess(),reinterpret_cast<void *>(s.gpr.x29.qword+sizeof(uintptr_t)),
+                          &caller,sizeof(caller),nullptr) || caller!=0x82a12aa8)return;
+    const float right=std::min(area->x+area->width,width-margin);
+    area->x=std::max(area->x,margin);
+    area->width=std::max(0.f,right-area->x);
+}
 static thread_local float flyingMomDelta=-1.f;
 static std::filesystem::path storagePath(const std::wstring &name){
     const std::wstring prefix=L"/data/user/0/bunker/";
@@ -247,6 +265,7 @@ extern "C" __declspec(dllexport) Call BindEngineCall(const char *key,void *fn) {
         if(!std::strcmp(key,"UnityEngine.Screen::SetResolution") &&
            GetEnvironmentVariableW(L"REINCOMP_INTERACTIVE_WINDOW",nullptr,0))return [](State &,void *){};
         if(auto callback=desktop_input::bind(key,fn))return callback;
+        if(!std::strcmp(key,"UnityEngine.Screen::get_safeArea_Injected"))return picturebookSafeArea;
         if(!std::strcmp(key,"UnityEngine.Behaviour::get_isActiveAndEnabled"))return [](State &s,void *original){
             // The Exchange shop can finish loading a row icon after Unity has
             // destroyed its Graphic. SetVerticesDirty has nothing to schedule

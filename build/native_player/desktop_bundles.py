@@ -57,19 +57,56 @@ def convert_texture(texture):
     return True
 
 
+def unityfs_blocks(bundle, raw):
+    reader = EndianBinaryReader(raw, endian='>')
+    reader.read_string_to_null()
+    reader.read_u_int()
+    reader.read_string_to_null()
+    reader.read_string_to_null()
+    return bundle.read_fs(reader)
+
+
+def convert_text_bundle(bundle):
+    # A standalone TextAsset needs only a new build target. Keep its type
+    # trees, object table and data byte-for-byte instead of rebuilding them.
+    if len(bundle.files) != 1:
+        return None
+    name, asset = next(iter(bundle.files.items()))
+    if (not isinstance(asset, SerializedFile) or asset.header.version != 21
+            or asset.header.endian != '<' or asset._m_target_platform != 13
+            or {obj.type.name for obj in asset.objects.values()} != {'AssetBundle', 'TextAsset'}):
+        return None
+    source = asset.reader.bytes
+    version = asset.unity_version.encode('ascii') + b'\0'
+    # SerializedFile v21 has a 20-byte header followed by the engine version and target.
+    target = 20 + len(version)
+    if source[20:target + 4] != version + (13).to_bytes(4, 'little'):
+        return None
+    expected = source[:target] + (19).to_bytes(4, 'little') + source[target + 4:]
+    member = EndianBinaryReader(expected)
+    member.flags = asset.flags
+    bundle.files[name] = member
+    out = bundle.save(packer='lz4')
+    nodes, blocks = unityfs_blocks(bundle, out)
+    if len(nodes) != 1 or nodes[0].path != name or nodes[0].flags != member.flags:
+        raise ValueError('Converted text bundle member differs')
+    blocks.Position = nodes[0].offset
+    if blocks.read(nodes[0].size) != expected:
+        raise ValueError('Converted text bundle contents differ')
+    return out
+
+
 def convert_bundle(raw, crc=0):
     if not raw.startswith(b'UnityFS\0'):
         raise ValueError(f'Unexpected file header {raw[:12].hex()}')
     bundle = UnityPy.load(raw).file
     if crc:
-        reader = EndianBinaryReader(raw, endian='>')
-        reader.read_string_to_null()
-        reader.read_u_int()
-        reader.read_string_to_null()
-        reader.read_string_to_null()
-        _, blocks = bundle.read_fs(reader)
+        _, blocks = unityfs_blocks(bundle, raw)
         if zlib.crc32(blocks.bytes) != crc:
             raise ValueError('Game-supplied bundle CRC does not match the original stream')
+    text = convert_text_bundle(bundle)
+    if text is not None:
+        return text
     files = {}
     for name, asset in bundle.files.items():
         if not isinstance(asset, SerializedFile):

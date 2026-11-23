@@ -1,4 +1,4 @@
-"""Serve Bunker's editors, Archive and the Windows player's bundle conversions."""
+"""Serve Bunker's editors and Archive for the Windows player."""
 import hmac
 import json
 import logging
@@ -8,6 +8,7 @@ import re
 import subprocess
 import sys
 import threading
+import time
 from urllib.request import Request as HTTPRequest, urlopen
 
 import anyio
@@ -112,21 +113,24 @@ def main():
             return response
         return app
     android_runtime.create_app = app_with_archive
-    # Unity can need conversions while the editor is building its name tables.
-    # Give the converter its own interpreter so those jobs do not share the GIL.
-    worker = subprocess.Popen([sys.executable, '-I', '-B', '-X', 'utf8',
-                               str(Path(__file__).with_name('desktop_bundles.py')), str(data)],
-                              stdin=subprocess.PIPE, stdout=subprocess.DEVNULL,
-                              creationflags=subprocess.CREATE_NO_WINDOW)
+    prepare = android_runtime.prepare_data
+    catalog = argument('--tools')/'masterdata'
+    def prepare_catalog():
+        for attempt in range(3):
+            try:
+                return prepare()
+            except PermissionError as error:
+                # A Windows file observer can briefly lock the freshly written catalog.
+                if (attempt == 2 or getattr(error, 'winerror', None) not in (5, 32, 33)
+                        or error.filename != str(catalog.with_suffix('.pending'))
+                        or error.filename2 != str(catalog)):
+                    raise
+                logging.warning('Windows is still using the staging catalog. Retrying preparation.')
+                time.sleep(0.25 * (attempt + 1))
+    android_runtime.prepare_data = prepare_catalog
     try:
         desktop_runtime.main()
     finally:
-        worker.stdin.close()
-        try:
-            worker.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            worker.terminate()
-            worker.wait()
         android_archive.stop()
 
 if __name__ == '__main__':

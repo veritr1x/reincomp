@@ -149,7 +149,7 @@ def prepare_site(a, work, windows, bunker, release):
     game = release/'game'
     new = work/'player-kit'
     run(release/'pods/python/python.exe','-I',WEB/'prepare_player.py','--apk',a.apk,'--bunker',bunker,
-        '--release',release,'--unity',a.unity_player,'--launcher',work/'launcher.exe',
+        '--release',release,'--unity',a.unity_player,'--cxx',a.cxx,'--launcher',work/'launcher.exe',
         '--window',game/'resource-window.exe','--archive',game/'archive-media.exe',
         '--server',release/'server/bunker-server.exe','--emblem',work/'bunker_icon.h','--out',new)
     with read_parts(windows) as ref, read_parts(new) as rebuilt:

@@ -122,6 +122,10 @@ extern "C" bool NativePlayerSenderRoots(State *const *,size_t);
 #endif
 namespace {
 using namespace unity_image;
+// Claim the translated images before Proton's heaps grow into their fixed
+// address ranges. Physical pages are committed only after verifying the APK.
+void *const unityReservation=VirtualAlloc(reinterpret_cast<void *>(kUnityBase),kUnityImageSpan,MEM_RESERVE,PAGE_NOACCESS);
+void *const il2cppReservation=VirtualAlloc(reinterpret_cast<void *>(il2cpp_image::kIl2cppBase),il2cpp_image::kIl2cppSpan,MEM_RESERVE,PAGE_NOACCESS);
 const auto &kInitializers=unity_image::kConstructors;
 std::map<std::string,addr_t> resolved;
 size_t constructor_index;
@@ -707,6 +711,13 @@ int main(int argc,char **argv){
     // URLs inside the APK, whose contents the launcher extracts to apk-assets.
     const auto movie_assets = "jar:file://" + Utf8(context_config.source_dir) + "!/assets/";
     const auto movie_storage = Utf8(context_config.data_dir) + "/";
+#ifdef REINCOMP_EMBEDDED_PLAYER
+    // The embedded Android mixer is muted because the Windows player owns
+    // gameplay audio. Movie audio follows the desktop launcher's sound setting.
+    const bool movie_sound=!std::getenv("REINCOMP_MUTE_AUDIO");
+#else
+    const bool movie_sound=GameSound() || !mute_audio;
+#endif
     bunker::windows::avpro_video::Service avpro_video(java,[storage,movie_assets,movie_storage](const std::string &guest)->std::optional<fs::path>{
       const bool packaged = guest.compare(0,movie_assets.size(),movie_assets)==0;
       if(!packaged && guest.compare(0,movie_storage.size(),movie_storage)!=0)return std::nullopt;
@@ -715,7 +726,7 @@ int main(int argc,char **argv){
       if(relative.empty() || relative.has_root_path() || tail.find_first_of("\\:")!=std::string::npos)return std::nullopt;
       for(const auto &part:relative)if(part=="..")return std::nullopt;
       return (packaged ? storage.parent_path()/"apk-assets" : storage)/relative;
-    });
+    },movie_sound);
     stage="asset-pack wrapper setup";AndroidAssetPackWrapper asset_packs(java,{runtime_apk_sha256,"b2be67185a866f3489146d9864ca40d1de5c2668037f026609890afe12940689",true});
     stage="native providers setup";
     // Real policy/semaphores for explicitly bound threads. These cohorts are
@@ -1504,7 +1515,11 @@ int main(int argc,char **argv){
         else{Require(!import.object,"missing strong data import; fabricated storage is forbidden");address=0x7ffc00000000ULL+missing++*8;runtime.AddImport(address,[name,module_name](State &s){std::fprintf(stderr,"Game bootstrap: unsupported import module=%s name=%s PC=%#llx LR=%#llx x0=%#llx x1=%#llx stage=%s\n",module_name,name.c_str(),(unsigned long long)s.gpr.pc.qword,(unsigned long long)s.gpr.x30.qword,(unsigned long long)s.gpr.x0.qword,(unsigned long long)s.gpr.x1.qword,stage);std::fflush(stderr);std::abort();});}
         Require(resolved.emplace(name,address).second,"duplicate import inventory entry");
       }
-      Require(!elf_load_bionic(path.u8string().c_str(),base,Resolve,&target)&&target.span==span,"verified Bionic module data-image/span load failed");
+      void *reservation=base==kUnityBase ? unityReservation : il2cppReservation;
+      auto name=path.u8string();
+      int result=reservation ? elf_load_bionic_reserved(name.c_str(),reservation,span,Resolve,&target)
+                             : elf_load_bionic(name.c_str(),base,Resolve,&target);
+      Require(!result&&target.span==span,"verified Bionic module data-image/span load failed");
       std::fprintf(stderr,"Game bootstrap: mapped %s imports=%zu real/%zu weak-zero; cumulative failure markers=%zu; constructors remain lazy\n",module_name,provided,weak,missing);
     };
     elf_image image{},il2cpp_image_data{};

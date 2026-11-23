@@ -56,6 +56,9 @@ def prepare(args):
             path = args.unity/name
             if release.digest(path)!=digest: raise ValueError(f'Unexpected stock Unity {name}')
             members['game/'+dest] = path
+        entry = work/'player-entry.exe'
+        release.build_player_entry(args.cxx, members['game/WindowsPlayer.exe'], entry, work)
+        members['game/WindowsPlayer.exe'] = entry
         for name in ('resource-setup.html','resource-setup.css','resource_setup.py','package_assets.py','desktop_shader.py',
                      'desktop_bundles.py','desktop_display.py','desktop_services.py','header_emblem.py'):
             members['game/'+name] = NATIVE/name
@@ -104,4 +107,5 @@ if __name__=='__main__':
     for arg in ('apk','bunker','release','unity','launcher','window','archive','server','emblem','out'):
         cli.add_argument('--'+arg,type=Path,required=True)
     cli.add_argument('--adapter',type=Path,help='Rebuilt Windows GameAssembly adapter for this kit')
+    cli.add_argument('--cxx',type=Path,default=Path(shutil.which('g++') or 'g++'),help='MinGW-w64 C++ compiler')
     prepare(cli.parse_args())
