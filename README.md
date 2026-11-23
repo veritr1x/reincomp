@@ -22,13 +22,6 @@ Its launcher imports the assets and starts the game.
 If WebView2 is unavailable, use **Choose resource archive** or **Copy extracted
 folder** in the setup window. Select **Deploy** when the game files are ready.
 
-For native x86-64 Linux, choose **Linux** when the web builder offers the
-published runtime. Select the same APK and master data. Extract the downloaded
-TAR into a writable folder, place `resource_dump_android.7z` beside `Play.sh`,
-and run `./Play.sh`. First launch downloads and verifies the matching native
-runtime. An existing imported library also works with
-`./Play.sh --assets "/path/to/library"`. [Native Linux setup](docs/linux-web-builder.md).
-
 For Proton on Linux or Steam Deck, add the Windows download `Nier Reincarnation.exe` to Steam
 as a non-Steam game and select Proton under **Properties → Compatibility**.
 Keep the shortcut pointed at that same EXE after selecting **Deploy**.
@@ -36,6 +29,37 @@ See the [Proton gameplay checks](docs/proton.md) for the tested setup and how
 to verify keyboard movement in a field or storybook scene.
 
 To build from source instead, see [BUILDING.md](BUILDING.md).
+
+### Play the TAR on Linux
+
+On x86-64 Linux, choose **Linux** in [Bunker's web builder](https://veritr1x.github.io/bunker/)
+and select the Global 3.7.1 ARM64 APK and `20240404193219.bin.e`. The TAR includes
+the game files prepared from those inputs.
+
+Save `NieR-Reincarnation-Linux-x86_64.tar` and your resource dump
+`resource_dump_android.7z` in your Downloads folder. Open a terminal and run
+these commands for the first launch.
+
+```sh
+cd "$HOME/Downloads"
+tar -xf NieR-Reincarnation-Linux-x86_64.tar
+cd "NieR Reincarnation"
+./Play.sh --dump "$HOME/Downloads/resource_dump_android.7z"
+```
+
+The first launch downloads and verifies the runtime, imports the resources,
+and starts the game. If you already have an imported library, use
+`./Play.sh --assets "/path/to/library"` for the last command. Choose the
+folder containing `assets/revisions`.
+
+To play again, run these two commands.
+
+```sh
+cd "$HOME/Downloads/NieR Reincarnation"
+./Play.sh
+```
+
+For offline setup and system requirements, see [Native Linux setup](docs/linux-web-builder.md).
 
 ## Controls
 
