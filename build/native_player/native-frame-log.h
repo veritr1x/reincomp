@@ -448,10 +448,11 @@ static void observePlayerFrame(){
         LARGE_INTEGER counter,frequency;
         QueryPerformanceCounter(&counter);
         QueryPerformanceFrequency(&frequency);
-        std::fprintf(log,"qpcMs=%.4f mode=%d ",1000.0*counter.QuadPart/frequency.QuadPart,fullScreenMode());
+        const double qpcMs=1000.0*counter.QuadPart/frequency.QuadPart;
         auto missed=intervals.end()-std::lower_bound(intervals.begin(),intervals.end(),8.3);
-        std::fprintf(log,"frame=%d scene=%d size=%dx%d unityQuality=%d targetFps=%d actor=%s highest=%d loaded=%d renderInterval=%d intervals=%zu mean=%.3f p95=%.3f p99=%.3f max=%.3f ms mainCPU=%.3f ms/frame over8.3=%zu/%zu foreground=%u/%u\n",
-            id,handle,width(),height(),level(),target(),(state&1)?"3D":(state&2)?"2D":"none",bool(state&4),bool(state&8),renderInterval,n,mean,intervals[(95*n+99)/100-1],intervals[(99*n+99)/100-1],intervals.back(),spent/n,size_t(missed),n,foreground,focusSamples);
+        std::fprintf(log,"qpcMs=%.4f mode=%d frame=%d scene=%d size=%dx%d unityQuality=%d targetFps=%d actor=%s highest=%d loaded=%d renderInterval=%d intervals=%zu mean=%.3f p95=%.3f p99=%.3f max=%.3f ms mainCPU=%.3f ms/frame over8.3=%zu/%zu foreground=%u/%u\n",
+            qpcMs,fullScreenMode(),id,handle,width(),height(),level(),target(),(state&1)?"3D":(state&2)?"2D":"none",bool(state&4),bool(state&8),renderInterval,n,mean,intervals[(95*n+99)/100-1],intervals[(99*n+99)/100-1],intervals.back(),spent/n,size_t(missed),n,foreground,focusSamples);
+        frame_memory::record(log,id,qpcMs,invoke("il2cpp_gc_get_used_size"),invoke("il2cpp_gc_get_heap_size"));
         std::fflush(log);
     }
     intervals.clear();window=now;windowCpu=mainThreadMilliseconds();foreground=focusSamples=0;

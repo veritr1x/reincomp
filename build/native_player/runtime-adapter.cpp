@@ -6,6 +6,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include "frame-memory.h"
 #include "../../runtime/fast_tls.h"
 #include <map>
 #include <unordered_set>
@@ -107,6 +108,7 @@ R1(il2cpp_unity_liveness_calculation_from_statics,void,P)
 R0(il2cpp_class_get_userdata_offset,int32_t)
 R0(il2cpp_domain_get,P)
 extern "C" __declspec(dllexport) void il2cpp_shutdown(){
+    frame_memory::shutdown();
     if(auto stop=reinterpret_cast<void(*)()>(GetProcAddress(GetModuleHandleW(L"EngineCalls.dll"),"ShutdownDesktopGamepads")))stop();
     invoke("il2cpp_shutdown");
 }

@@ -172,7 +172,7 @@ func startLauncher(root, server, assets, master, dump string, ready, inGameOnly 
 	updateError := filepath.Join(root, "data", "update-error.txt")
 	if msg, e := os.ReadFile(updateError); e == nil {
 		w.status = "Update failed: " + string(msg)
-		os.Remove(updateError)
+		os.Rename(updateError, filepath.Join(root, "data", "last-update-error.log"))
 	}
 	w.startServices = make(chan struct{}, 1)
 	w.stopServices = make(chan struct{}, 1)
@@ -347,6 +347,8 @@ func startLauncher(root, server, assets, master, dump string, ready, inGameOnly 
 			json.NewEncoder(out).Encode(map[string]any{"message": w.status, "ready": w.verified, "busy": w.busy, "deployed": w.deployed,
 				"services": w.services, "running": w.running, "saveBytes": size, "archiveBytes": archiveSize(root), "autoDeploy": !regularFile(manual),
 				"portableUpdate": portableUpdate, "updating": updating})
+		case "logs.zip":
+			serveLogArchive(out, r, root)
 		case "log":
 			if r.Method != http.MethodGet {
 				http.Error(out, "Method", 405)
