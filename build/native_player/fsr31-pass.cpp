@@ -156,11 +156,12 @@ void __stdcall renderEvent(int,void *data){
             if(!logged){status("OpenGL error %u preceding the FSR event",prior);logged=true;}
         }
         auto& g=gl();
-        GLint w=0,h=0;
-        g.level(frame.sceneColor,0,GL_TEXTURE_WIDTH,&w);g.level(frame.sceneColor,0,GL_TEXTURE_HEIGHT,&h);
-        if(w!=int(frame.renderWidth) || h!=int(frame.renderHeight))throw std::runtime_error("Unity scene texture size mismatch");
+        const auto w=frame.renderWidth,h=frame.renderHeight;
         if(!active || active->width!=frame.renderWidth || active->height!=frame.renderHeight ||
            active->outW!=frame.width || active->outH!=frame.height){
+            GLint textureWidth=0,textureHeight=0;
+            g.level(frame.sceneColor,0,GL_TEXTURE_WIDTH,&textureWidth);g.level(frame.sceneColor,0,GL_TEXTURE_HEIGHT,&textureHeight);
+            if(textureWidth!=int(w) || textureHeight!=int(h))throw std::runtime_error("Unity scene texture size mismatch");
             delete active;active=nullptr;haveHistory=false;
             auto next=std::make_unique<Pass>();next->init(frame,w,h);active=next.release();
         }

@@ -11,6 +11,7 @@
 #include <filesystem>
 #include <map>
 #include <memory>
+#include <optional>
 #include <stdexcept>
 #include <string>
 
@@ -149,6 +150,19 @@ void restore() {
 void prepare(Object cam) {
     restore();
     if(failed.load(std::memory_order_relaxed) || !cam)return;
+    static const auto activeScene=icall<void(*)(int*)>("UnityEngine.SceneManagement.SceneManager::GetActiveScene_Injected");
+    static const auto sceneName=icall<Object(*)(int)>("UnityEngine.SceneManagement.Scene::GetNameInternal");
+    activeScene(&frame.scene);
+    static std::optional<int> lastScene;
+    static bool menu=false;
+    if(lastScene!=frame.scene){
+        lastScene=frame.scene;
+        // Mama's room and the out-of-game tabs share the "default" scene.
+        // Their text and banners are drawn by the perspective scene camera.
+        menu=text(sceneName(frame.scene))==L"default";
+        if(menu)status("Rendering menu scene at native resolution");
+    }
+    if(menu)return;
     static const auto target=icall<Object(*)(Object)>("UnityEngine.Camera::get_targetTexture");
     static const auto ortho=icall<uint8_t(*)(Object)>("UnityEngine.Camera::get_orthographic");
     static const auto stereo=icall<uint8_t(*)(Object)>("UnityEngine.Camera::get_stereoEnabled");
@@ -189,10 +203,8 @@ void prepare(Object cam) {
     static const auto farClip=icall<float(*)(Object)>("UnityEngine.Camera::get_farClipPlane");
     static const auto fov=icall<float(*)(Object)>("UnityEngine.Camera::get_fieldOfView");
     static const auto count=icall<int(*)()>("UnityEngine.Time::get_frameCount");
-    static const auto scene=icall<void(*)(int*)>("UnityEngine.SceneManagement.SceneManager::GetActiveScene_Injected");
     camera=cam;
     frame.index=count(); frame.width=width; frame.height=height; frame.camera=reinterpret_cast<uintptr_t>(cam);
-    scene(&frame.scene);
     Upscaler::renderSize(quality,width,height,frame.renderWidth,frame.renderHeight);
     std::memcpy(&originalScale,static_cast<char*>(asset)+0x48,sizeof(float));
     originalDepth=*(static_cast<uint8_t*>(asset)+0x38);

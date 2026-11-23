@@ -197,6 +197,10 @@ void Interop::submit(bool first) {
 
 void Interop::dispatch(float x, float y, float ms, float nearClip, float farClip, float fov, float sharp, bool reset) {
     if (!initialized_) throw std::logic_error("FSR is not initialized");
+    // Signal flushes Unity's pending GL writes. Let the GPU finish them
+    // while the CPU recycles and records this frame's Vulkan commands.
+    gl().signal(glSignals_[0],0,nullptr,4,textures_.data(),inputLayouts);
+    glCheck("release scene inputs to FSR");
     slot_=(slot_+1)%commands_.size();
     cmd_=commands_[slot_];
     vkCheck(vkWaitForFences(device_,1,&submitted_[slot_],VK_TRUE,5000000000ULL), "recycle FSR command buffer");
@@ -207,9 +211,6 @@ void Interop::dispatch(float x, float y, float ms, float nearClip, float farClip
     barriers(true,false);
     upscaler_.record(cmd_, {images_[0], images_[1], images_[2], images_[3], x,y,ms,nearClip,farClip,fov,sharp,reset});
     barriers(false,false);
-    gl().signal(glSignals_[0],0,nullptr,4,textures_.data(),inputLayouts);
-    glFlush();
-    glCheck("release scene inputs to FSR");
     submit(false);
 }
 

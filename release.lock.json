@@ -1,10 +1,11 @@
 {
   "portable": {
     "bunkerVersion": "1.12.22",
-    "sha256": "2a7638dd6b77b500a6647b51b65f15ef0d54ae18bc980592d24a1183e7968ff9",
-    "size": 1057830876,
+    "sha256": "7a37214bbb8cebcd3e0331a26f9d11aef88e41313259db6ca7c887185c9c0677",
+    "size": 1057832717,
     "playerMembers": {
       "game/EngineCalls.dll": "e2ce196944b4c8835f3496440b5d422bb52e5c74f57f5d0309572c0e829882e7",
+      "game/Fsr31.dll": "b8065f0a3d33416474c441714c793533f47674f0c53a6a1644e44216654d2992",
       "game/GameAssembly.dll": "4e87fe7d33448e41608d12c30efd6e8e68723757b0b28b015213d24044607217",
       "game/WindowsPlayer.exe": "1d2a5afd032eee54d4064719904365f003ed02db8eb75d8476dd55cd6385cafe",
       "game/archive-media.exe": "16b2edfdfd5347f1f8a2806490bc980c26dd692e0ac989cbdb5663fe4a968734",
