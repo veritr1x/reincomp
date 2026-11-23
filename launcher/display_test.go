@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -50,6 +51,24 @@ func TestBunkerDisplay(t *testing.T) {
 		d := desktopDisplay(tc.conf+"\nshadows=off\nbloom=off\nidle=on", tc.fps, tc.size, mode)
 		if d.fps != tc.wantFPS || d.size != tc.wantSize || d.textureSkip != tc.skip || d.effectsOff != 5 || !d.idle {
 			t.Errorf("settings %q, flags %q %q: got %+v", tc.conf, tc.fps, tc.size, d)
+		}
+	}
+}
+
+func TestBorderlessDisplay(t *testing.T) {
+	for _, value := range []string{"", "windowed", "borderless", "invalid"} {
+		display := desktopDisplay("window_mode="+value, "", "", func() (int, int, int) { return 1920, 1080, 60 })
+		if display.borderless != (value == "borderless") {
+			t.Fatalf("window mode %q parsed as borderless=%v", value, display.borderless)
+		}
+		cmd, err := desktopCommand("player.exe", ".", ".", display, display.borderless)
+		if err != nil {
+			t.Fatal(err)
+		}
+		args := strings.Join(cmd.Args, " ")
+		if strings.Contains(args, "-window-mode borderless") != display.borderless ||
+			strings.Contains(args, "-screen-fullscreen 1") != display.borderless {
+			t.Errorf("window mode %q produced %s", value, args)
 		}
 	}
 }

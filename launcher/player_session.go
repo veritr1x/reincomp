@@ -20,7 +20,7 @@ type playerSession struct {
 	requests     chan playerRequest
 	closed       chan struct{}
 	editorGone   chan struct{}
-	applyDisplay func(pid int) error
+	applyDisplay func(pid int, resize bool) error
 	started      func(pid int)
 	windowClosed <-chan struct{}
 }
@@ -28,11 +28,14 @@ type playerSession struct {
 type playerRequest struct {
 	stop    bool
 	display bool
+	resize  bool
 	result  chan error
 }
 
 var closePlayerWindow = func(pid int) bool { return false }
-var resizePlayerWindow = func(pid int, size string) error { return errors.New("the native player is unavailable") }
+var applyPlayerDisplay = func(pid int, size string, borderless, resize bool) error {
+	return errors.New("the native player is unavailable")
+}
 
 func openPlayerSession(token string) (*playerSession, error) {
 	listener, err := net.Listen("tcp4", "127.0.0.1:0")
@@ -50,7 +53,7 @@ func openPlayerSession(token string) (*playerSession, error) {
 			http.NotFound(w, r)
 			return
 		}
-		req := playerRequest{stop: r.URL.Path == "/stop", display: r.URL.Path == "/display", result: make(chan error, 1)}
+		req := playerRequest{stop: r.URL.Path == "/stop", display: r.URL.Path == "/display", resize: r.URL.Query().Get("resize") != "0", result: make(chan error, 1)}
 		// A disconnected browser does not own the game process. The local editor
 		// finishes the accepted stop/edit/start sequence on its own connection.
 		ctx, cancel := context.WithTimeout(r.Context(), 45*time.Second)
@@ -135,7 +138,7 @@ func (s *playerSession) play(makePlayer func() (*exec.Cmd, error), menu *resourc
 				// A launcher stop ends this session, including its server.
 			case req = <-s.requests:
 				if req.display {
-					req.result <- s.applyDisplay(cmd.Process.Pid)
+					req.result <- s.applyDisplay(cmd.Process.Pid, req.resize)
 					continue
 				}
 				if !req.stop {

@@ -106,7 +106,7 @@ def build_native(a, work, bunker, release, abi):
     with environment(SOURCE_DATE_EPOCH='1795206585'):
         run(a.cxx,*flags,'-shared','-static','-Wl,--image-base,0x387690000',NATIVE/'engine-calls.cpp',
             ROOT/'host/windows_shared_preferences.cpp','-lshlwapi','-lbcrypt','-ladvapi32','-lxinput9_1_0',
-            '-ldinput8','-ldxguid','-o',game/'EngineCalls.dll')
+            '-ldinput8','-ldxguid','-lgdi32','-lhid','-o',game/'EngineCalls.dll')
     with environment(SOURCE_DATE_EPOCH='1795206749'):
         compile_fsr(work,game,a.cxx,['-Wl,--image-base,0x1c6120000'],
                     'C__GitRepos_reincomp__fps_bench_windows_web_20261121_libvulkan_import.a')

@@ -32,6 +32,7 @@ def install(control, token):
             stored = dict(line.split("=", 1) for line in path.read_text().splitlines() if "=" in line)
         except FileNotFoundError:
             stored = {}
+        result["window_mode"] = "borderless" if stored.get("window_mode") == "borderless" else "windowed"
         for key, default, maximum in (("fsr_quality", 1, 4), ("fsr_sharpness", 20, 100)):
             try:
                 value = int(stored.get(key, default))
@@ -50,8 +51,13 @@ def install(control, token):
     @router.post("/display")
     def save(fps: str = Form(...), resolution: str = Form(...), textures: str = Form("full"),
              idle: str = Form("off"), shadows: str = Form("on"), reflections: str = Form("on"), bloom: str = Form("on"),
-             upscale: str = Form("off"), fsr_quality: int = Form(1, ge=0, le=4), fsr_sharpness: int = Form(20, ge=0, le=100)):
+             upscale: str = Form("off"), fsr_quality: int = Form(1, ge=0, le=4), fsr_sharpness: int = Form(20, ge=0, le=100),
+             window_mode: str = Form(None)):
         previous = settings()
+        if window_mode is None:
+            window_mode = previous["window_mode"]
+        if window_mode not in ("windowed", "borderless"):
+            return display.redirect(error="Choose a valid window mode.")
         path = display.conf_path()
         stage = None
         try:
@@ -61,6 +67,7 @@ def install(control, token):
                                    shadows=shadows, reflections=reflections, bloom=bloom, upscale=upscale)
             with stage.open("a") as target:
                 target.write(f"fsr_quality={fsr_quality}\nfsr_sharpness={fsr_sharpness}\n")
+                target.write(f"window_mode={window_mode}\n")
             os.replace(stage, path)
         except (ValueError, OSError) as exc:
             return display.redirect(error=str(exc))
@@ -68,15 +75,16 @@ def install(control, token):
             if stage is not None:
                 stage.unlink(missing_ok=True)
                 stage.with_name(stage.name+".tmp").unlink(missing_ok=True)
-        if previous["resolution"] != resolution and control:
-            request = ControlRequest(control + "/display", data=b"", headers={"X-Bunker-Token": token})
+        if control:
+            resize = int(previous["resolution"] != resolution)
+            request = ControlRequest(f"{control}/display?resize={resize}", data=b"", headers={"X-Bunker-Token": token})
             try:
-                with urlopen(request, timeout=5):
+                with urlopen(request, timeout=10):
                     pass
             except HTTPError as exc:
                 return display.redirect(error=exc.read(512).decode(errors="replace").strip())
             except OSError:
-                return display.redirect(error="Resolution saved for the next launch. The player did not respond.")
+                return display.redirect(error="Display settings saved for the next launch. The player did not respond.")
         return display.redirect(message=bunker_text.t("pods.runtime.saved", next=bunker_text.t("pods.runtime.deploy")))
 
     display.router = router

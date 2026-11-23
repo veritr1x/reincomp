@@ -12,6 +12,7 @@ static std::unique_ptr<bunker::windows::BunkerView> bunker;
 static std::atomic<HWND> attached;
 static std::atomic<HHOOK> setupHook;
 static std::atomic<uint32_t> pendingResolution;
+static std::atomic<uint64_t> pendingDisplay;
 static HWND launcherWindow(){
     static HWND window=[]{
         const auto *handle=_wgetenv(L"REINCOMP_WINDOW_PARENT");
@@ -49,6 +50,18 @@ static LRESULT CALLBACK events(HWND window,UINT message,WPARAM w,LPARAM l,UINT_P
     if(message==WM_APP+0x36e && w){
         if(w==0 || w>65535 || l<=0 || l>65535)return 0;
         pendingResolution.store((uint32_t(w)<<16)|uint32_t(l),std::memory_order_release);
+        return 1;
+    }
+    if(message==window_size::applyDisplay){
+        if(w>3 || !HIWORD(l) || !LOWORD(l))return 0;
+        if(auto parent=launcherWindow()){
+            if(!SendMessageW(parent,message,w,l))return 0;
+            // A borderless host always fills the monitor; the child can still
+            // accept a new render resolution when the user explicitly selects one.
+            if(w==3)pendingResolution.store(uint32_t(l));
+        }else{
+            pendingDisplay.store((uint64_t(w+1)<<32)|uint32_t(l));
+        }
         return 1;
     }
     if(message==WM_DEVICECHANGE || message==WM_INPUT_DEVICE_CHANGE){
@@ -158,6 +171,11 @@ extern "C" __declspec(dllexport) int QueryGamePage(const wchar_t *id,int query,w
     const auto &value=it->second.url;
     if(out&&capacity>int(value.size()))std::copy(value.c_str(),value.c_str()+value.size()+1,out);
     return static_cast<int>(value.size());
+}
+extern "C" __declspec(dllexport) uint32_t DesktopWebTargetAt(HWND window,POINT at,uint32_t *dashboard){
+    *dashboard=0;
+    if(!bunker::windows::BunkerView::HasControllerArea())return 0;
+    return bunker::windows::BunkerView::ControllerTarget(window,at.x,at.y,dashboard);
 }
 extern "C" __declspec(dllexport) uint32_t DesktopWebTarget(HWND window,POINT *at,uint32_t *dashboard){
     using bunker::windows::BunkerView;

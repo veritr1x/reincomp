@@ -75,8 +75,10 @@ void fit(HWND window) {
     else if (page) page->PageFrame(0, 0, r.right, r.bottom, r.right, r.bottom);
 }
 
-void switchMode(HWND window) {
-    if (fullscreen) {
+void setBorderless(HWND window,bool enabled) {
+    if (enabled==fullscreen) return;
+    fullscreen=enabled;
+    if (!enabled) {
         SetWindowLongPtrW(window, GWL_STYLE, WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN | WS_VISIBLE);
         SetWindowPlacement(window, &previous);
         SetWindowPos(window, nullptr, 0, 0, 0, 0, SWP_NOMOVE|SWP_NOSIZE|SWP_NOZORDER|SWP_FRAMECHANGED);
@@ -89,7 +91,6 @@ void switchMode(HWND window) {
         const RECT r = monitor.rcMonitor;
         SetWindowPos(window, HWND_TOP, r.left, r.top, r.right-r.left, r.bottom-r.top, SWP_FRAMECHANGED);
     }
-    fullscreen = !fullscreen;
 }
 
 void attach(HWND window) {
@@ -201,8 +202,19 @@ LRESULT CALLBACK events(HWND w,UINT message,WPARAM wp,LPARAM lp) {
         return 0;
     }
     case WM_SIZE: fit(w); return 0;
-    case WM_SYSKEYDOWN: if (wp!=VK_RETURN) break; [[fallthrough]];
-    case toggle: switchMode(w); return 0;
+    case window_size::applyDisplay: {
+        setBorderless(w,(wp&1)!=0);
+        if ((wp&2) && !fullscreen) {
+            RECT rect{0,0,HIWORD(lp),LOWORD(lp)};
+            if (!rect.right || !rect.bottom) return 0;
+            if (IsZoomed(w)) ShowWindow(w,SW_RESTORE);
+            if (!window_size::adjust(rect,GetWindowLongPtrW(w,GWL_STYLE),GetWindowLongPtrW(w,GWL_EXSTYLE),window_size::dpi(w))) return 0;
+            SetWindowPos(w,nullptr,0,0,rect.right-rect.left,rect.bottom-rect.top,SWP_NOMOVE|SWP_NOZORDER|SWP_NOACTIVATE);
+        }
+        return 1;
+    }
+    case WM_SYSKEYDOWN: if (wp!=VK_RETURN || (lp&(LPARAM(1)<<30))) break; [[fallthrough]];
+    case toggle: setBorderless(w,!fullscreen); return 0;
     case WM_CLOSE:
         if (child && IsWindow(child)) { PostMessageW(child,WM_CLOSE,0,0); return 0; }
         [[fallthrough]];
@@ -266,7 +278,7 @@ int WINAPI wWinMain(HINSTANCE instance,HINSTANCE,PWSTR,int) {
                 auto path=std::make_unique<std::wstring>(line.begin()+8,line.end());
                 if (PostMessageW(w,openProgram,0,reinterpret_cast<LPARAM>(path.get()))) path.release();
             }
-            else if (line=="fullscreen") PostMessageW(w,toggle,0,0);
+            else if (line=="borderless" || line=="windowed") PostMessageW(w,window_size::applyDisplay,line=="borderless",0);
             else if (line.rfind("player ",0)==0) PostMessageW(w,player,strtoul(line.c_str()+7,nullptr,10),0);
         }
         PostMessageW(w,finish,0,0);

@@ -50,7 +50,7 @@ def compile_player(work, dest, cxx, clang, toolchain, original, bunker, abi):
     run(cxx, '@'+str(response))
     run(sys.executable, SOURCE/'route-liveness-stop.py', dest/'GuestRuntime.dll', cxx.with_name('objdump.exe'))
     run(cxx, *flags, '-shared', '-static', SOURCE/'engine-calls.cpp', ROOT/'host/windows_shared_preferences.cpp',
-        '-lshlwapi', '-lbcrypt', '-ladvapi32', '-lxinput9_1_0', '-ldinput8', '-ldxguid', '-o', dest/'EngineCalls.dll')
+        '-lshlwapi', '-lbcrypt', '-ladvapi32', '-lxinput9_1_0', '-ldinput8', '-ldxguid', '-lgdi32', '-lhid', '-o', dest/'EngineCalls.dll')
     compile_adapter(work, dest, cxx, flags, original, bunker, abi)
     compile_fsr(work, dest, cxx)
 

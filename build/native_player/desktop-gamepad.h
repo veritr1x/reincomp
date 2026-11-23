@@ -4,6 +4,7 @@
 #include <xinput.h>
 #include <algorithm>
 #include <atomic>
+#include "dualsense-touchpad.h"
 
 namespace desktop_gamepad {
 // Sony's Windows HID mapping uses X/Y and Z/Rz for the two sticks.
@@ -20,14 +21,7 @@ inline XINPUT_GAMEPAD playStationState(const DIJOYSTATE &input){
     if(input.rgbButtons[2]&0x80)state.wButtons|=XINPUT_GAMEPAD_B;
     if(input.rgbButtons[3]&0x80)state.wButtons|=XINPUT_GAMEPAD_Y; // Triangle
     if(input.rgbButtons[9]&0x80)state.wButtons|=XINPUT_GAMEPAD_BACK; // Options opens Bunker like Xbox View
-    if(input.rgdwPOV[0]<36000){
-        static constexpr WORD hat[]={
-            XINPUT_GAMEPAD_DPAD_UP,XINPUT_GAMEPAD_DPAD_UP|XINPUT_GAMEPAD_DPAD_RIGHT,
-            XINPUT_GAMEPAD_DPAD_RIGHT,XINPUT_GAMEPAD_DPAD_RIGHT|XINPUT_GAMEPAD_DPAD_DOWN,
-            XINPUT_GAMEPAD_DPAD_DOWN,XINPUT_GAMEPAD_DPAD_DOWN|XINPUT_GAMEPAD_DPAD_LEFT,
-            XINPUT_GAMEPAD_DPAD_LEFT,XINPUT_GAMEPAD_DPAD_LEFT|XINPUT_GAMEPAD_DPAD_UP};
-        state.wButtons|=hat[((input.rgdwPOV[0]+2250)/4500)%8];
-    }
+    if(input.rgdwPOV[0]<36000)state.wButtons|=hatDirection(((input.rgdwPOV[0]+2250)/4500)%8);
     return state;
 }
 
@@ -59,6 +53,7 @@ static HWND cooperativeWindow(HWND game){
 }
 
 static void closeDevice(){
+    touchpad.close();
     if(device){device->Unacquire();device->Release();device=nullptr;}
 }
 static void shutdown(){
@@ -87,9 +82,11 @@ static BOOL CALLBACK openController(const DIDEVICEINSTANCEW *info,void *context)
         DIPROPRANGE range{{sizeof(DIPROPRANGE),sizeof(DIPROPHEADER),offset,DIPH_BYOFFSET},0,65535};
         if(FAILED(device->SetProperty(DIPROP_RANGE,&range.diph))){closeDevice();return DIENUM_CONTINUE;}
     }
+    const auto product=HIWORD(info->guidProduct.Data1);
+    if(product==0x0ce6 || product==0x0df2)touchpad.open(device);
     return DIENUM_STOP;
 }
-static bool readPlayStation(HWND window,XINPUT_GAMEPAD &state){
+static bool readPlayStation(HWND window,XINPUT_GAMEPAD &state,POINT &swipe,bool &touchpadClick){
     // Enumerate at first use and on hardware changes. Device discovery can
     // take longer than a frame and does not belong in the per-frame poll.
     if(devicesChanged.exchange(false) && !device){
@@ -99,6 +96,7 @@ static bool readPlayStation(HWND window,XINPUT_GAMEPAD &state){
             api->EnumDevices(DI8DEVCLASS_GAMECTRL,openController,owner,DIEDFL_ATTACHEDONLY);
     }
     if(!device)return false;
+    if(touchpad.poll(swipe,state,touchpadClick))return true;
     DIJOYSTATE input{};
     device->Poll();
     auto result=device->GetDeviceState(sizeof(input),&input);
@@ -113,6 +111,7 @@ static bool readPlayStation(HWND window,XINPUT_GAMEPAD &state){
     if(result==DIERR_OTHERAPPHASPRIO)return false;
     if(FAILED(result)){closeDevice();devicesChanged.store(true);return false;}
     state=playStationState(input);
+    touchpadClick=(input.rgbButtons[13]&0x80)!=0;
     return true;
 }
 }

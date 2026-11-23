@@ -31,9 +31,11 @@ To build from source instead, see [BUILDING.md](BUILDING.md).
 ## Controls
 
 - Mouse or touch: tap and drag.
-- Movement: WASD, left stick or D-pad. Right stick moves the pointer.
-- A / Cross taps, B / Circle goes back. Space, Y or Triangle skips.
+- Move with WASD, the left stick or the D-pad. Aim with the right stick or swipe the DualSense touchpad with one finger. The controller ring fades after one second and hides as soon as you use the mouse.
+- Press A, Cross or the DualSense touchpad to tap at the controller ring’s position. B or Circle goes back. Space, Y or Triangle skips.
 - Alt+Enter toggles fullscreen. Ctrl+B, Xbox View (Select/Back), or PlayStation Options opens the Bunker launcher. Press it again to return to the game.
+
+In reincomp, open **Bunker → Display → Window mode** and choose **Windowed** or **Borderless fullscreen**. Select **Save** to apply it now and use it on your next launch.
 
 ## Saves
 

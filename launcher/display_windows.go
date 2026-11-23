@@ -5,30 +5,41 @@ import (
 	"os/exec"
 	"strconv"
 	"syscall"
+	"time"
 	"unsafe"
 )
 
 func init() {
 	hideHelperWindow = func(cmd *exec.Cmd) { cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true} }
 	closePlayerWindow = closeUnityWindow
-	resizePlayerWindow = func(pid int, size string) error {
+	applyPlayerDisplay = func(pid int, size string, borderless, resize bool) error {
 		width, height, err := renderDimensions(size)
 		if err != nil {
 			return err
 		}
 		w, _ := strconv.Atoi(width)
 		h, _ := strconv.Atoi(height)
-		window := unityWindow(pid)
-		if window != 0 {
-			var accepted uintptr
-			// Wait only for the window procedure to queue Unity's main-thread change.
-			result, _, _ := syscall.NewLazyDLL("user32.dll").NewProc("SendMessageTimeoutW").Call(
-				window, 0x8000+0x36e, uintptr(w), uintptr(h), 2, 1500, uintptr(unsafe.Pointer(&accepted)))
-			if result != 0 && accepted == 1 {
-				return nil
+		var flags uintptr
+		if borderless {
+			flags |= 1
+		}
+		if resize {
+			flags |= 2
+		}
+		send := syscall.NewLazyDLL("user32.dll").NewProc("SendMessageTimeoutW")
+		// Bunker can accept a Save while Unity's splash HWND is visible but
+		// before the player has installed its display message handler.
+		for deadline := time.Now().Add(8 * time.Second); time.Now().Before(deadline); time.Sleep(100 * time.Millisecond) {
+			if window := unityWindow(pid); window != 0 {
+				var accepted uintptr
+				result, _, _ := send.Call(window, 0x8000+0x371, flags, uintptr(uint32(w)<<16|uint32(h)),
+					2, 400, uintptr(unsafe.Pointer(&accepted)))
+				if result != 0 && accepted == 1 {
+					return nil
+				}
 			}
 		}
-		return fmt.Errorf("saved %s for next launch; the running player did not acknowledge the resize", size)
+		return fmt.Errorf("display settings saved for next launch; the running player did not acknowledge the change")
 	}
 	displayMode = func() (int, int, int) {
 		user := syscall.NewLazyDLL("user32.dll")

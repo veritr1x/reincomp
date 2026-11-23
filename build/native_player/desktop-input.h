@@ -156,10 +156,12 @@ static void samplePointer(bool down,bool held,bool up,bool cancel,Point position
     pointer.sample(id,down,held,up,cancel,position,windowPress?motion(position):position,dt);
 }
 
-static bool controller(HWND window,XINPUT_GAMEPAD &result){
+static bool controller(HWND window,XINPUT_GAMEPAD &result,POINT &swipe,bool &touchpadClick){
     static DWORD index=XUSER_MAX_COUNT;
     static ULONGLONG nextSearch=0;
     XINPUT_STATE state{};
+    XINPUT_GAMEPAD sony{};
+    const bool playStation=desktop_gamepad::readPlayStation(window,sony,swipe,touchpadClick);
     if(index<XUSER_MAX_COUNT && XInputGetState(index,&state)==ERROR_SUCCESS){result=state.Gamepad;return true;}
     index=XUSER_MAX_COUNT;
     auto now=GetTickCount64();
@@ -169,27 +171,66 @@ static bool controller(HWND window,XINPUT_GAMEPAD &result){
             if(XInputGetState(i,&state)==ERROR_SUCCESS){index=i;result=state.Gamepad;return true;}
         }
     }
-    return desktop_gamepad::readPlayStation(window,result);
+    if(playStation)result=sony;
+    return playStation;
 }
-static Point controllerCursor(HWND window,Point axes,float dt,Point original,int w,int h){
-    RECT bounds{};
-    POINT at{};
-    if(!GetClientRect(window,&bounds) || !GetCursorPos(&at) || !ScreenToClient(window,&at) ||
-       bounds.right<1 || bounds.bottom<1)return original;
-    // Keep subpixel motion from a lightly deflected stick across frames.
-    static Point fraction{};
-    if(axes.x || axes.y){
-        const float scale=bounds.bottom*std::fmin(dt,0.05f);
-        const float dx=axes.x*scale+fraction.x,dy=-axes.y*scale+fraction.y;
-        const int ix=int(dx),iy=int(dy);
-        fraction={dx-ix,dy-iy};
-        at.x=std::clamp<LONG>(at.x+ix,0,bounds.right-1);
-        at.y=std::clamp<LONG>(at.y+iy,0,bounds.bottom-1);
-        POINT screen=at;
-        if(ClientToScreen(window,&screen))SetCursorPos(screen.x,screen.y);
+// The controller owns a position in the game client. Never feed it back into
+// Windows mouse input: Unity and WebView2 already handle the physical mouse.
+struct ControllerCursor {
+    HWND owner{};
+    Point normalized{};
+    POINT client{}, previousMouse{};
+    bool positioned=false, sampledMouse=false, showing=false, waitForStick=false;
+    ULONGLONG lastAim{};
+
+    Point update(HWND game,Point axes,POINT swipe,bool mouseInput,bool press,float dt,int w,int h,Point fallback){
+        if(game!=owner){
+            if(showing)controller_cursor::display(owner,{},0);
+            *this={};
+            owner=game;
+        }
+        RECT bounds{};
+        if(!game || !GetClientRect(game,&bounds) || bounds.right<1 || bounds.bottom<1)return fallback;
+        POINT screen{};
+        const bool located=GetCursorPos(&screen);
+        if(located){
+            mouseInput|=sampledMouse && (screen.x!=previousMouse.x || screen.y!=previousMouse.y);
+            previousMouse=screen;
+            sampledMouse=true;
+        }
+        const bool stick=axes.x || axes.y;
+        if(!stick)waitForStick=false;
+        else if(mouseInput)waitForStick=true;
+        const bool aiming=!mouseInput && ((stick && !waitForStick) || swipe.x || swipe.y);
+        const float cw=float(bounds.right),ch=float(bounds.bottom);
+        if(!positioned){
+            client=screen;
+            if(!located || !ScreenToClient(game,&client))client={bounds.right/2,bounds.bottom/2};
+            if(aiming && !PtInRect(&bounds,client))client={bounds.right/2,bounds.bottom/2};
+            normalized={client.x/cw,client.y/ch};
+            positioned=aiming || (press && PtInRect(&bounds,client));
+        }
+        const auto now=GetTickCount64();
+        if(aiming){
+            const float seconds=std::clamp(dt,0.f,.05f);
+            normalized.x+=((waitForStick?0.f:axes.x)*seconds+swipe.x/1080.f)*ch/cw;
+            normalized.y+=-(waitForStick?0.f:axes.y)*seconds+swipe.y/1080.f;
+            lastAim=now;
+        }
+        if(positioned){
+            normalized.x=std::clamp(normalized.x,0.f,(cw-1)/cw);
+            normalized.y=std::clamp(normalized.y,0.f,(ch-1)/ch);
+            client={std::lround(normalized.x*cw),std::lround(normalized.y*ch)};
+        }
+        if(aiming || showing){
+            const auto elapsed=now-lastAim;
+            const BYTE alpha=mouseInput || elapsed>=1000?0:elapsed<800?255:BYTE((1000-elapsed)*255/200);
+            showing=controller_cursor::display(game,client,alpha);
+        }
+        return {client.x*w/cw,(bounds.bottom-1-client.y)*h/ch};
     }
-    return {float(at.x)*w/bounds.right,float(bounds.bottom-1-at.y)*h/bounds.bottom};
-}
+};
+static ControllerCursor controllerCursor;
 // Keep a press with its original page when the cursor crosses its border
 // or the page closes before the player releases the button.
 struct BrowserPad {
@@ -200,10 +241,10 @@ struct BrowserPad {
     float fraction=0;
 
     template<class Send>
-    bool route(HWND owner,bool connected,XINPUT_GAMEPAD &pad,float dt,bunker::web_controller::HitTest hit,Send send){
+    bool route(HWND owner,bool connected,XINPUT_GAMEPAD &pad,POINT at,float dt,bunker::web_controller::HitTest hit,Send send){
         using namespace bunker::web_controller;
-        POINT at{};uint32_t dashboard=0;
-        const uint32_t target=connected&&hit?hit(owner,&at,&dashboard):0;
+        uint32_t dashboard=0;
+        const uint32_t target=connected&&hit?hit(owner,at,&dashboard):0;
         const bool a=(pad.wButtons&XINPUT_GAMEPAD_A)!=0,b=(pad.wButtons&XINPUT_GAMEPAD_B)!=0;
         if(contact&&(!connected||window!=owner)){
             send(window,contact,Cancel,last,0);contact=0;
@@ -275,21 +316,23 @@ static void advance(){
     mousePosition(mouse);
     Point pos{mouse[0],mouse[1]};
     bool button=mouseHeld(0)!=0;
+    float wheel[2]{};
+    if(mouseScroll)mouseScroll(wheel);
+    const bool mouseAction=button || mouseDown(0) || mouseUp(0) ||
+                           mouseHeld(1) || mouseDown(1) || mouseUp(1) ||
+                           mouseHeld(2) || mouseDown(2) || mouseUp(2) || wheel[0] || wheel[1];
     if(sparseMouse){
-        static Point last{-1,-1};
+        static Point lastHover{-1,-1};
         static int oldWidth=0,oldHeight=0;
         static bool wasFocused=false;
-        static ULONGLONG refresh=0;
-        float wheel[2]{};
-        if(mouseScroll)mouseScroll(wheel);
+        static ULONGLONG lastCheck=0;
         auto now=GetTickCount64();
-        needMouse=pos.x!=last.x || pos.y!=last.y || w!=oldWidth || h!=oldHeight ||
-                  focused!=wasFocused || wheel[0] || wheel[1] ||
-                  button || mouseDown(0) || mouseUp(0) ||
-                  mouseHeld(1) || mouseDown(1) || mouseUp(1) ||
-                  mouseHeld(2) || mouseDown(2) || mouseUp(2) || now>=refresh;
-        if(needMouse)refresh=now+75;
-        last=pos;
+        const bool moved=pos.x!=lastHover.x || pos.y!=lastHover.y;
+        // Windows draws the pointer continuously. Only throttle translated
+        // UI hover raycasts; presses, drags, scrolls and releases are immediate.
+        needMouse=w!=oldWidth || h!=oldHeight || focused!=wasFocused || mouseAction ||
+                  now-lastCheck>=(moved?33u:75u);
+        if(needMouse){lastCheck=now;lastHover=pos;}
         oldWidth=w;oldHeight=h;wasFocused=focused;
     }
     // Unity mirrors the primary physical touch as a mouse on some drivers.
@@ -323,7 +366,11 @@ static void advance(){
     }
 
     XINPUT_GAMEPAD pad{};
-    const bool padConnected=focused && controller(window,pad);
+    POINT swipe{};
+    bool touchpadClick=false;
+    if(!focused)desktop_gamepad::touchpad.lastPoll=0;
+    const bool padConnected=focused && controller(window,pad,swipe,touchpadClick);
+    if(touchpadClick)pad.wButtons|=XINPUT_GAMEPAD_A;
     // Bunker owns keyboard focus while open, so handle its toggle on both
     // sides of the WebView. Require a release after reconnect or refocus.
     static bool launcherButtonReady=false;
@@ -337,12 +384,17 @@ static void advance(){
     }
     launcherButtonReady=padConnected && !launcherButtonDown;
     auto aim=thumb(pad.sThumbRX,pad.sThumbRY,XINPUT_GAMEPAD_RIGHT_THUMB_DEADZONE);
-    if(aim.x || aim.y)needMouse=true;
-    if(padConnected && (aim.x || aim.y || (pad.wButtons&XINPUT_GAMEPAD_A) || padPointer.held))
-        pos=controllerCursor(window,aim,dt,pos,w,h);
+    pos=controllerCursor.update(padConnected?window:nullptr,aim,swipe,mouseAction || realCount,
+                                (pad.wButtons&XINPUT_GAMEPAD_A)!=0,dt,w,h,pos);
+    if(tracePointer && (swipe.x || swipe.y)){
+        if(auto log=std::fopen("desktop-input.log","a")){
+            std::fprintf(log,"frame=%d touchpad delta=%ld,%ld position=%.1f,%.1f\n",current,swipe.x,swipe.y,pos.x,pos.y);
+            std::fclose(log);
+        }
+    }
     static const auto hit=reinterpret_cast<bunker::web_controller::HitTest>(
-        GetProcAddress(GetModuleHandleW(L"GameAssembly.dll"),"DesktopWebTarget"));
-    const bool dashboard=browserPad.route(window,padConnected,pad,dt,hit,bunker::web_controller::post);
+        GetProcAddress(GetModuleHandleW(L"GameAssembly.dll"),"DesktopWebTargetAt"));
+    const bool dashboard=browserPad.route(window,padConnected,pad,controllerCursor.client,dt,hit,bunker::web_controller::post);
     lastBack=padConnected && padBack;
     padBack=(pad.wButtons&XINPUT_GAMEPAD_B)!=0;
     static bool outsidePress=false;

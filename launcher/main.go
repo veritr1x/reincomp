@@ -380,12 +380,13 @@ func serveAndPlay(root, data, assets, game, server, view, native, apk, fps, rend
 				return nil, err
 			}
 			maximized := false
-			if setup == nil && render == "" && !fullscreen {
+			borderless := fullscreen || display.borderless
+			if setup == nil && render == "" && !borderless {
 				if size, max := previousWindowSize(data); size != "" {
 					display.size, maximized = size, max
 				}
 			}
-			cmd, err = desktopCommand(game, root, data, display, fullscreen && setup == nil)
+			cmd, err = desktopCommand(game, root, data, display, borderless && setup == nil)
 			if err != nil {
 				return nil, err
 			}
@@ -395,6 +396,11 @@ func serveAndPlay(root, data, assets, game, server, view, native, apk, fps, rend
 				cmd.Env = append(cmd.Env, "REINCOMP_MUTE_AUDIO=1")
 			}
 			if setup != nil {
+				if borderless {
+					setup.send("borderless")
+				} else {
+					setup.send("windowed")
+				}
 				cmd.Args = append(cmd.Args, "-parentHWND", setup.handle, "delayed")
 				cmd.Env = append(cmd.Env, "REINCOMP_WINDOW_PARENT="+setup.handle)
 			} else if maximized {
@@ -406,18 +412,15 @@ func serveAndPlay(root, data, assets, game, server, view, native, apk, fps, rend
 	}
 	if session != nil {
 		if setup != nil {
-			if fullscreen {
-				setup.send("fullscreen")
-			}
 			session.started = func(pid int) { setup.send("player " + strconv.Itoa(pid)) }
 			session.windowClosed = setup.done
 		}
-		session.applyDisplay = func(pid int) error {
+		session.applyDisplay = func(pid int, resize bool) error {
 			display, err := savedDisplay(data, fps, render)
 			if err != nil {
 				return err
 			}
-			return resizePlayerWindow(pid, display.size)
+			return applyPlayerDisplay(pid, display.size, display.borderless, resize)
 		}
 		e = session.play(makePlayer, menu)
 		if errors.Is(e, errReturnToLauncher) {

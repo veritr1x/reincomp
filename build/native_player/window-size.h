@@ -4,7 +4,16 @@
 #include <fstream>
 
 namespace window_size {
+// Display request: bit 0 is borderless, bit 1 requests a resolution change.
+// LPARAM packs the requested width in the high word and height in the low word.
+inline constexpr UINT applyDisplay=WM_APP+0x371;
 struct Size { int width{}, height{}, maximized{}; };
+
+inline UINT dpi(HWND window) {
+    static const auto get=reinterpret_cast<UINT(WINAPI *)(HWND)>(
+        GetProcAddress(GetModuleHandleW(L"user32"),"GetDpiForWindow"));
+    return get?get(window):96;
+}
 
 inline BOOL adjust(RECT &rect, DWORD style, DWORD exStyle, UINT dpi) {
     static const auto adjustForDpi=reinterpret_cast<BOOL(WINAPI *)(RECT *,DWORD,BOOL,DWORD,UINT)>(
@@ -31,9 +40,7 @@ inline void save(HWND window, const std::filesystem::path &data) {
     if (maximized || IsIconic(window)) {
         RECT frame{};
         const auto exStyle=static_cast<DWORD>(GetWindowLongPtrW(window,GWL_EXSTYLE));
-        static const auto dpiForWindow=reinterpret_cast<UINT(WINAPI *)(HWND)>(
-            GetProcAddress(GetModuleHandleW(L"user32"),"GetDpiForWindow"));
-        if (!adjust(frame,style&~(WS_MAXIMIZE|WS_MINIMIZE),exStyle,dpiForWindow?dpiForWindow(window):96)) return;
+        if (!adjust(frame,style&~(WS_MAXIMIZE|WS_MINIMIZE),exStyle,dpi(window))) return;
         const auto normal=placement.rcNormalPosition;
         client.right=normal.right-normal.left-(frame.right-frame.left);
         client.bottom=normal.bottom-normal.top-(frame.bottom-frame.top);

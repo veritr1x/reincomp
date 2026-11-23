@@ -1,4 +1,4 @@
-// Compile with MinGW: g++ -std=c++17 -O2 desktop-input.cpp -ldinput8 -ldxguid -o desktop-input.exe
+// Compile with MinGW: g++ -std=c++17 -O2 desktop-input.cpp -ldinput8 -ldxguid -lhid -o desktop-input.exe
 #include <windows.h>
 #include <xinput.h>
 #include <algorithm>
@@ -47,6 +47,16 @@ static DWORD mockState(DWORD user,XINPUT_STATE *out){
 static DWORD owner(HWND,DWORD *pid){*pid=focus?GetCurrentProcessId():0;return 1;}
 static HWND childWindow(HWND parent,HWND,LPCWSTR,LPCWSTR){return parent==HWND(2)?HWND(1):nullptr;}
 static ULONGLONG clockMs=100;
+namespace controller_cursor {
+static BYTE alpha;
+static POINT at;
+static int draws;
+static bool display(HWND window,POINT client,BYTE opacity){
+    assert(window==HWND(1));
+    ++draws;alpha=opacity;at=client;
+    return opacity!=0;
+}
+}
 static int launcherToggles=0;
 static BOOL postInputMessage(HWND window,UINT message,WPARAM w,LPARAM l){
     assert(window==HWND(1) && message==bunker::web_controller::ToggleLauncher && !w && !l);
@@ -56,8 +66,11 @@ static BOOL postInputMessage(HWND window,UINT message,WPARAM w,LPARAM l){
 namespace desktop_gamepad {
 static bool sonyConnected=false;
 static DIJOYSTATE sony{};
-static bool readRecordedPad(HWND,XINPUT_GAMEPAD &state){
+static POINT recordedSwipe{};
+static bool readRecordedPad(HWND,XINPUT_GAMEPAD &state,POINT &swipe,bool &click){
     if(!sonyConnected)return false;
+    swipe=recordedSwipe;recordedSwipe={};
+    click=(sony.rgbButtons[13]&0x80)!=0;
     state=playStationState(sony);return true;
 }
 }
@@ -92,6 +105,36 @@ static bool readRecordedPad(HWND,XINPUT_GAMEPAD &state){
 #undef PostMessageW
 
 static int tick,h=720,w=1280,physical=0;
+static void checkDualSenseReports(){
+    for(bool bluetooth:{false,true}){
+        desktop_gamepad::DualSenseReport touch;
+        BYTE report[78]{};
+        report[0]=bluetooth?0x31:1;
+        auto p=report+(bluetooth?2:1);
+        DWORD size=bluetooth?78:64;
+        POINT delta{};
+        p[7]=0xe2;p[8]=0x20;
+        p[32]=4;p[33]=50;p[34]=0x40;p[35]=1;p[36]=0x80;
+        assert(touch.sample(report,size,delta) && !delta.x && !delta.y);
+        assert(touch.pad.wButtons==(XINPUT_GAMEPAD_DPAD_RIGHT|XINPUT_GAMEPAD_A|XINPUT_GAMEPAD_B|XINPUT_GAMEPAD_Y|XINPUT_GAMEPAD_BACK));
+        p[33]=90;p[34]=0x80;
+        assert(touch.sample(report,size,delta) && delta.x==40 && delta.y==4);
+        assert(!touch.takeClick(false)); // sliding a finger never presses the pad
+        p[9]=2;assert(touch.sample(report,size,delta));
+        p[9]=0;assert(touch.sample(report,size,delta));
+        assert(touch.takeClick(false) && !touch.takeClick(false)); // both edges between frames
+        p[9]=2;assert(touch.sample(report,size,delta));
+        assert(touch.takeClick(false) && touch.takeClick(false)); // hold without another report
+        assert(!touch.takeClick(true) && !touch.takeClick(false)); // held across refocus
+        p[9]=0;assert(touch.sample(report,size,delta) && !touch.takeClick(false));
+        p[32]=0x80;p[36]=6;p[37]=170;
+        assert(touch.sample(report,size,delta) && delta.x==40); // new contact, second slot
+        p[37]=150;assert(touch.sample(report,size,delta) && delta.x==20);
+        p[32]=7;assert(touch.sample(report,size,delta) && touch.finger==-1);
+        p[32]=0x80;assert(touch.sample(report,size,delta) && delta.x==20);
+        assert(!touch.sample(report,10,delta)); // Bluetooth simple report has no touch data
+    }
+}
 static float x=51,y=84;
 static bool down,held,up;
 static std::array<bool,128> keys{};
@@ -108,11 +151,11 @@ static void checkBrowserController(){
     static uint32_t target,dashboard;
     struct Delivered {uint32_t view; web::Action action; POINT point; int scroll;};
     std::vector<Delivered> events;
-    auto hit=+[](HWND,POINT *p,uint32_t *overlay){*p=at;*overlay=dashboard;return target;};
+    auto hit=+[](HWND,POINT p,uint32_t *overlay){assert(p.x==at.x && p.y==at.y);*overlay=dashboard;return target;};
     auto post=[&](HWND,uint32_t v,web::Action m,POINT p,int dy){events.push_back({v,m,p,dy});};
     auto sample=[&](WORD buttons,bool connected=true){
         XINPUT_GAMEPAD input{};input.wButtons=buttons;
-        browser.route(HWND(1),connected,input,.02f,hit,post);
+        browser.route(HWND(1),connected,input,at,.02f,hit,post);
         return input.wButtons;
     };
     target=10;at={40,50};assert(sample(XINPUT_GAMEPAD_A)==0);
@@ -135,6 +178,7 @@ static void checkBrowserController(){
 int main(){
     _wputenv_s(L"REINCOMP_WINDOW_PARENT",L"2");
     checkBrowserController();
+    checkDualSenseReports();
     using namespace desktop_input;
     using namespace bunker::desktop_touch;
     frame=[] {return tick;};width=[] {return w;};height=[] {return h;};deltaTime=[] {return .01f;};
@@ -239,11 +283,33 @@ int main(){
     keyboardFocus=HWND(3); // The game is foreground with keyboard focus in its WebView.
     pad.wButtons=XINPUT_GAMEPAD_BACK;next();assert(launcherToggles==2);
     keyboardFocus=HWND(1);pad.wButtons=0;next();
-    pad.sThumbRX=32767;next();assert(warps==1 && cursor.x>260);
+    pad.sThumbRX=32767;next();assert(warps==0 && cursor.x==260);
+    assert(controller_cursor::alpha==255);
+    const auto aimed=controller_cursor::at;
+    assert(aimed.x>cursor.x-100 && aimed.y==cursor.y-55);
     pad.sThumbRX=0;pad.wButtons=XINPUT_GAMEPAD_A|XINPUT_GAMEPAD_Y;
-    assert(next()==1 && skipRequested && read(0).position.x==(cursor.x-100)*2 && warps==1);
+    assert(next()==1 && skipRequested && read(0).position.x==aimed.x*2 && warps==0);
     skipRequested=false;next();assert(!skipRequested && read(0).phase==Stationary);
-    pad.wButtons=0;next();assert(read(0).phase==Ended && warps==1);next();
+    pad.wButtons=0;next();assert(read(0).phase==Ended && warps==0);next();
+    pad.sThumbRX=1000;clockMs+=870;next();
+    assert(controller_cursor::alpha>0 && controller_cursor::alpha<255 && warps==0);
+    clockMs+=250;next();assert(!controller_cursor::alpha);
+    pad.sThumbRX=32767;next();assert(controller_cursor::alpha==255);
+    const auto saved=controller_cursor::at;
+    ++cursor.x;next();assert(!controller_cursor::alpha);
+    const int hidden=controller_cursor::draws;
+    int hoverChecks=0;
+    for(int i=0;i<100;++i){
+        ++cursor.x;++x;assert(next()==0);hoverChecks+=needMouse;
+    }
+    assert(hoverChecks==25 && controller_cursor::draws==hidden && warps==0);
+    held=down=true;assert(next()==1 && read(0).phase==Began && needMouse);
+    down=false;up=true;held=false;assert(next()==1 && read(0).phase==Ended && needMouse);
+    up=false;pad.sThumbRX=0;next();
+    pad.wButtons=XINPUT_GAMEPAD_A;assert(next()==1 && read(0).position.x==saved.x*2);
+    pad.wButtons=0;next();pad.sThumbRX=32767;next();assert(controller_cursor::alpha==255);
+    focus=false;next();assert(!controller_cursor::alpha);
+    focus=true;pad.sThumbRX=0;next();
     POINT inside=cursor;cursor.x=42;pad.wButtons=XINPUT_GAMEPAD_A;assert(next()==0);
     cursor=inside;assert(next()==0);pad.wButtons=0;next();
     w=800;h=600;keys['a']=true;assert(next()==1 && read(0).position.x==400 && read(0).position.y==300);
@@ -264,7 +330,22 @@ int main(){
     sonyConnected=true;sony.rgbButtons[1]=sony.rgbButtons[2]=0;sony.rgdwPOV[0]=4500;
     assert(next()==1 && read(0).phase==Began);
     assert(next()==1 && read(0).delta.x>0 && read(0).delta.y>0);
+    POINT beforeSwipe=cursor;
+    recordedSwipe={90,-60};next();
+    assert(cursor.x==beforeSwipe.x && cursor.y==beforeSwipe.y && controller_cursor::alpha==255);
+    const auto swiped=controller_cursor::at;
+    assert(swiped.x==beforeSwipe.x-100+30 && swiped.y==beforeSwipe.y-55-20 && !padPointer.visible);
+    sony.rgdwPOV[0]=0xffffffff;next();assert(next()==0);
+    // A physical pad click remains available alongside a virtual XInput pad.
+    connected=true;pad={};clockMs+=1100;
+    sony.rgbButtons[13]=0x80;
+    assert(next()==1 && read(0).phase==Began && read(0).position.x==swiped.x*w/640.f);
+    pad.wButtons=XINPUT_GAMEPAD_A;assert(next()==1 && read(0).phase==Stationary);
+    sony.rgbButtons[13]=0;assert(next()==1 && read(0).phase==Stationary);
+    pad.wButtons=0;assert(next()==1 && read(0).phase==Ended);assert(next()==0);
+    connected=false;
     sony.lX=0;sony.lY=65535;sony.lZ=65535;sony.lRz=0;
+    next();assert(controller_cursor::alpha==255);
     const auto axes=playStationState(sony);
     assert(axes.sThumbLX==-32768 && axes.sThumbLY==-32768 && axes.sThumbRX==32767 && axes.sThumbRY==32767);
     sony.rgbButtons[3]=0x80;next();assert(skipRequested && (playStationState(sony).wButtons&XINPUT_GAMEPAD_Y));
@@ -273,7 +354,7 @@ int main(){
     sony.rgbButtons[9]=0x80;next();next();assert(launcherToggles==3 && !skipRequested);
     sonyConnected=false;next();sonyConnected=true;next();assert(launcherToggles==3);
     sony.rgbButtons[9]=0;next();sony.rgbButtons[9]=0x80;next();assert(launcherToggles==4);
-    sonyConnected=false;next();next();
+    sonyConnected=false;next();next();assert(!controller_cursor::alpha && warps==0);
     w=1600;h=900;next();
     keys['d']=true;
     assert(next()==1 && read(0).phase==Began);

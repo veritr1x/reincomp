@@ -13,6 +13,7 @@
 <form action="/display" method="post">
   <h2 class="bracket-header" data-toc>{{ t("pods.display.resolution") }}</h2>
   <div class="panel">
+    {{ choice("window_mode", "Window mode", [("windowed", "Windowed"), ("borderless", "Borderless fullscreen")]) }}
     {{ choice("resolution", "pods.display.resolution", resolutions) }}
     {% if upscalers|length > 1 %}
     {{ choice("upscale", "pods.display.upscaling", upscalers) }}
@@ -43,7 +44,7 @@
       })();
     </script>
     {% endif %}
-    <p>Resolution changes when you save. Other settings apply on the next launch.</p>
+    <p>Window mode and resolution apply when you save. Other settings apply on the next launch.</p>
   </div>
   <h2 class="bracket-header" data-toc>{{ t("pods.display.frame_rate") }}</h2>
   <div class="panel">

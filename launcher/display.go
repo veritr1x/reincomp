@@ -16,6 +16,7 @@ type displaySettings struct {
 	fps, size, textureSkip string
 	effectsOff             int
 	idle                   bool
+	borderless             bool
 	fsr31                  bool
 	fsrQuality, sharpness  int
 }
@@ -72,7 +73,7 @@ func desktopDisplay(conf, fps, size string, mode func() (int, int, int)) display
 		return value
 	}
 	return displaySettings{fps: fps, size: size, textureSkip: map[string]string{"half": "1", "quarter": "2"}[settings["textures"]],
-		effectsOff: effectsOff, idle: settings["idle"] == "on", fsr31: settings["upscale"] == "fsr31",
+		effectsOff: effectsOff, idle: settings["idle"] == "on", borderless: settings["window_mode"] == "borderless", fsr31: settings["upscale"] == "fsr31",
 		fsrQuality: integer("fsr_quality", 1, 4), sharpness: integer("fsr_sharpness", 20, 100)}
 }
 
@@ -139,6 +140,7 @@ func desktopCommand(game, root, data string, display displaySettings, fullscreen
 		}
 	}
 	if fullscreen {
+		cmd.Args = append(cmd.Args, "-window-mode", "borderless")
 		cmd.Env = append(cmd.Env, "REINCOMP_NATIVE_FULLSCREEN=1")
 	}
 	if display.fsr31 {

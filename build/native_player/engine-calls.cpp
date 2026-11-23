@@ -25,6 +25,7 @@
 #include <vector>
 #include "desktop-touch.h"
 #include "desktop-gamepad.h"
+#include "controller-cursor.h"
 #include "unity-object.h"
 #include "../../host/keyboard_touch.h"
 #include "../../host/web_controller.h"

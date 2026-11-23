@@ -89,4 +89,4 @@ entries.sort()
 print('Windows engine calls with unambiguous scalar ABI',len(entries),'distinct signatures',len({s for _,_,s in entries}),flush=True)
 subprocess.run(['C:/mingw64/bin/g++.exe','-O2','-std=c++17','-static','-shared','-DADDRESS_SIZE_BITS=64',
                 '-I'+str(repo/'third_party/remill-include'),root/'engine-calls.cpp',repo/'host/windows_shared_preferences.cpp',
-                '-lshlwapi','-lbcrypt','-ladvapi32','-lxinput9_1_0','-ldinput8','-ldxguid','-o',root/'runtime-player/EngineCalls.dll'],check=True)
+                '-lshlwapi','-lbcrypt','-ladvapi32','-lxinput9_1_0','-ldinput8','-ldxguid','-lgdi32','-lhid','-o',root/'runtime-player/EngineCalls.dll'],check=True)
