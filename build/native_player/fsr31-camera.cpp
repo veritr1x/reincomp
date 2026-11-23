@@ -60,10 +60,86 @@ struct Surface {
     uint32_t handle{},name{};
 };
 Surface targets[3];
+uint32_t generation=0;
+// Each wrapper belongs to one set of render textures. Keep both the managed
+// references and the Unity texture alive across Resources.UnloadUnusedAssets.
+struct ExternalOutput {
+    Object texture{},properties{};
+    uint32_t textureHandle{},propertiesHandle{},name{};
+    bool attempted=false;
+
+    void retire() {
+        if(texture){
+            static const auto destroy=icall<void(*)(Object,float)>("UnityEngine.Object::Destroy");
+            destroy(texture,0.f);
+        }
+        static const auto free=exported<void(*)(uint32_t)>("il2cpp_gchandle_free");
+        if(propertiesHandle)free(propertiesHandle);
+        if(textureHandle)free(textureHandle);
+        *this={};
+    }
+    Object bind(uint32_t next,int width,int height) {
+        if(!next)return nullptr;
+        if(attempted)return name==next ? properties : nullptr;
+        attempted=true;
+        static const auto domain=exported<Object(*)()>("il2cpp_domain_get");
+        static const auto assembly=exported<Object(*)(Object,const char*)>("il2cpp_domain_assembly_open");
+        static const auto image=exported<Object(*)(Object)>("il2cpp_assembly_get_image");
+        static const auto cls=exported<Object(*)(Object,const char*,const char*)>("il2cpp_class_from_name");
+        static const auto method=exported<Object(*)(Object,const char*,int)>("il2cpp_class_get_method_from_name");
+        static const auto invoke=exported<Object(*)(Object,Object,Object*,Object*)>("il2cpp_runtime_invoke");
+        static const auto allocate=exported<Object(*)(Object)>("il2cpp_object_new");
+        static const auto keep=exported<uint32_t(*)(Object,bool)>("il2cpp_gchandle_new");
+        static const auto flags=icall<void(*)(Object,int)>("UnityEngine.Object::set_hideFlags");
+        static const auto native=icall<void*(*)(Object)>("UnityEngine.Texture::GetNativeTexturePtr");
+        static const auto set=icall<void(*)(Object,int,Object)>("UnityEngine.MaterialPropertyBlock::SetTextureImpl");
+        static const auto core=assembly(domain(),"UnityEngine.CoreModule");
+        static const auto types=core?image(core):nullptr;
+        static const auto textureClass=types?cls(types,"UnityEngine","Texture2D"):nullptr;
+        static const auto blockClass=types?cls(types,"UnityEngine","MaterialPropertyBlock"):nullptr;
+        static const auto create=textureClass?method(textureClass,"CreateExternalTexture",6):nullptr;
+        static const auto construct=blockClass?method(blockClass,".ctor",0):nullptr;
+        if(!create || !construct)throw std::runtime_error("missing external texture or draw property constructor");
+        int rgbaHalf=17;
+        bool mipmaps=false,linear=true;
+        uintptr_t glName=next;
+        Object error=nullptr,args[]{&width,&height,&rgbaHalf,&mipmaps,&linear,&glName};
+        texture=invoke(create,nullptr,args,&error);
+        if(error || !texture)throw std::runtime_error("could not wrap the FSR output");
+        textureHandle=keep(texture,false);
+        flags(texture,32); // HideFlags.DontUnloadUnusedAsset
+        if(uintptr_t(native(texture))!=next)throw std::runtime_error("external FSR texture name mismatch");
+        properties=allocate(blockClass);
+        if(!properties)throw std::runtime_error("could not allocate final draw properties");
+        propertiesHandle=keep(properties,false);
+        invoke(construct,properties,nullptr,&error);
+        if(error)throw std::runtime_error("could not initialize final draw properties");
+        set(properties,property(L"_BlitTex"),texture);
+        set(properties,property(L"_MainTex"),texture);
+        name=next;
+        status("Direct FSR output ready: %dx%d",width,height);
+        return properties;
+    }
+} externalOutput;
 std::array<uint32_t,4> dimensions{};
+bool resizing(uint32_t width,uint32_t height) {
+    static std::array<uint32_t,2> pending{};
+    static ULONGLONG since=0;
+    if(!generation || (dimensions[2]==width && dimensions[3]==height)){
+        pending={};
+        return false;
+    }
+    const std::array<uint32_t,2> size{width,height};
+    const auto now=GetTickCount64();
+    if(size!=pending){pending=size;since=now;}
+    // Render natively while a drag is changing the client size. Recreating
+    // the Vulkan device for every intermediate WM_SIZE stalls the render queue.
+    return now-since<160;
+}
 void prepareTargets(const SceneFrame& data) {
     std::array<uint32_t,4> next={data.renderWidth,data.renderHeight,data.width,data.height};
     if(next==dimensions)return;
+    externalOutput.retire();
     static const auto create=icall<Object(*)(const Descriptor*)>("UnityEngine.RenderTexture::GetTemporary_Internal_Injected");
     static const auto release=icall<void(*)(Object)>("UnityEngine.RenderTexture::ReleaseTemporary");
     static const auto idOffset=icall<int(*)()>("UnityEngine.Object::GetOffsetOfInstanceIDInCPlusPlusObject")();
@@ -90,11 +166,16 @@ void prepareTargets(const SceneFrame& data) {
         if(!t.name)throw std::runtime_error("Unity did not expose the OpenGL texture for target "+std::to_string(i));
     }
     dimensions=next;
+    ++generation;
 }
 std::atomic<bool> failed{};
 Object camera{}, command{};
 Target source{};
 SceneFrame frame{};
+// Unity records the event and draws into the same command buffer. Finish the
+// choice of output while recording, before ExecuteCommandBuffer submits it.
+SceneFrame *recording{};
+bool needsCopiedOutput=false;
 Matrix originalProjection{};
 float originalCameraRect[4]{};
 bool internalRect=false;
@@ -145,7 +226,7 @@ void restore() {
         *(static_cast<uint8_t*>(asset)+0x38)=originalDepth;
         modified=false;
     }
-    camera=nullptr;command=nullptr;
+    camera=nullptr;command=nullptr;recording=nullptr;
 }
 void prepare(Object cam) {
     restore();
@@ -190,6 +271,7 @@ void prepare(Object cam) {
     static const auto screenH=icall<int(*)()>("UnityEngine.Screen::get_height");
     int width=w(cam),height=h(cam);
     if(width<=0 || height<=0 || width!=screenW() || height!=screenH())return;
+    if(resizing(width,height))return;
     static const auto getRect=icall<void(*)(Object,float*)>("UnityEngine.Camera::get_rect_Injected");
     getRect(cam,originalCameraRect);
     if(std::abs(originalCameraRect[0])>1.e-5f || std::abs(originalCameraRect[1])>1.e-5f ||
@@ -270,12 +352,16 @@ extern "C" __declspec(dllexport) const Target* FsrSetTexture(Object cmd,int id,c
         static const int depth=property(L"_CameraDepthTexture");
         Target depthTarget{};depthTarget.type=-4;depthTarget.name=depth;
         prepareTargets(frame);
+        frame.generation=generation;
         frame.sceneColor=targets[0].name;frame.sceneDepth=targets[1].name;frame.destination=targets[2].name;
         const Vec2 scale{1,1},offset{0,0};
         auto copy=[&](const Target& a,const Target& b){recordBlit(cmd,&a,&b,nullptr,-1,&scale,&offset,0,0);};
         copy(source,targets[0].target);
         copy(depthTarget,targets[1].target);
-        issue(cmd,renderEvent,Composite,new SceneFrame(frame));
+        auto pending=std::make_unique<SceneFrame>(frame);
+        issue(cmd,renderEvent,Composite,pending.get());
+        recording=pending.release();
+        needsCopiedOutput=false;
         command=cmd;
         return &targets[2].target;
     }catch(const std::exception& error){disable(error.what());return target;}
@@ -294,12 +380,41 @@ extern "C" __declspec(dllexport) const Target* FsrBlitSource(Object cmd,const Ta
     if(cmd==command && camera && target && target->type==source.type && target->name==source.name &&
        target->instance==source.instance && !failed.load(std::memory_order_relaxed)){
         FsrFinalViewport(cmd);
+        needsCopiedOutput=true;
+        if(recording)recording->copyOutput=true;
         return &targets[2].target;
     }
     return target;
 }
+extern "C" __declspec(dllexport) Object FsrDrawProperties(Object cmd,Object block) {
+    if(!camera || cmd!=command || !recording)return block;
+    if(!block && !failed.load(std::memory_order_relaxed)){
+        try {
+            const auto name=sharedOutput(recording->generation);
+            if(auto properties=externalOutput.bind(name,recording->width,recording->height)){
+                recording->directOutput=name;
+                recording->copyOutput=needsCopiedOutput;
+                return properties;
+            }
+        }catch(const std::exception& error){status("FSR using copied output: %s",error.what());}
+    }
+    needsCopiedOutput=true;
+    recording->copyOutput=true;
+    return block;
+}
 extern "C" __declspec(dllexport) void FsrExecute(Object cmd) {
     // A submit also closes the camera scope when a renderer skips its final blit.
     if(camera && (!cmd || cmd==command))restore();
+    static bool retired=false;
+    if(!cmd && failed.load(std::memory_order_acquire) && !retired){
+        // The last submitted buffer may contain draws using the shared image.
+        // Retire it on the render thread after those draws, including fallback.
+        retired=true;
+        try {
+            static const auto issue=icall<void(*)(decltype(&releasePass),int)>("UnityEngine.GL::GLIssuePluginEvent");
+            externalOutput.retire();
+            issue(releasePass,0);
+        }catch(const std::exception& error){status("Could not retire FSR output: %s",error.what());}
+    }
 }
 }

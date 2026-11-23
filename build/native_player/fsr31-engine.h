@@ -6,11 +6,13 @@ using SetTexture = P(*)(P,int,P);
 using BlitSource = P(*)(P,P);
 using Execute = void(*)(P);
 using FinalViewport = void(*)(P);
+using DrawProperties = P(*)(P,P);
 static BeforeCull beforeCull;
 static SetTexture setTexture;
 static BlitSource blitSource;
 static Execute execute;
 static FinalViewport finalViewport;
+static DrawProperties drawProperties;
 static Call bind(const char *key) {
     static const bool ready = [] {
         if (!std::getenv("REINCOMP_FSR31")) return false;
@@ -24,6 +26,7 @@ static Call bind(const char *key) {
         blitSource=reinterpret_cast<BlitSource>(GetProcAddress(library,"FsrBlitSource"));
         execute=reinterpret_cast<Execute>(GetProcAddress(library,"FsrExecute"));
         finalViewport=reinterpret_cast<FinalViewport>(GetProcAddress(library,"FsrFinalViewport"));
+        drawProperties=reinterpret_cast<DrawProperties>(GetProcAddress(library,"FsrDrawProperties"));
         return beforeCull && setTexture && blitSource && execute && finalViewport;
     }();
     if (!ready) return nullptr;
@@ -44,8 +47,12 @@ static Call bind(const char *key) {
         s.gpr.x1.qword=original;
     };
     if (!std::strcmp(key,"UnityEngine.Rendering.CommandBuffer::Internal_DrawMesh_Injected")) return [](State& s,void *fn){
-        finalViewport(reinterpret_cast<P>(s.gpr.x0.qword));
+        auto cmd=reinterpret_cast<P>(s.gpr.x0.qword);
+        finalViewport(cmd);
+        auto block=s.gpr.x6.qword;
+        if(drawProperties)s.gpr.x6.qword=uintptr_t(drawProperties(cmd,reinterpret_cast<P>(block)));
         invoke<void,P,P,P,P,int32_t,int32_t,P>(s,fn);
+        s.gpr.x6.qword=block;
     };
     if (!std::strcmp(key,"UnityEngine.Rendering.ScriptableRenderContext::ExecuteCommandBuffer_Internal_Injected")) return [](State& s, void *fn) {
         execute(reinterpret_cast<P>(s.gpr.x1.qword));
