@@ -3,6 +3,11 @@
 What changed, newest first, by date and area. A release's heading comes
 above the dated sections it holds.
 
+## 0.2.8 (2026-11-23)
+
+- Verified keyboard movement in a 3D field after deployment and relaunch, and in a 2D storybook under GE-Proton. The repository includes the movement checker and steps to repeat both tests.
+- Windows builds now include Bunker 1.12.22.
+
 ## 0.2.7 (2026-11-23)
 
 - Fixed mouse pointer visibility and Ctrl+B input in borderless fullscreen. The game keeps the desktop resolution and restores its previous window size when you switch back to windowed mode.

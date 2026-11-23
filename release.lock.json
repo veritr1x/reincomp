@@ -1,7 +1,7 @@
 {
   "portable": {
-    "bunkerVersion": "1.12.21",
-    "sha256": "f16784d2e476879aab73fa51405e52a9f4991dec9c625c8d5602533990016888",
+    "bunkerVersion": "1.12.22",
+    "sha256": "84f3974b9f931de304e8e69a487621a6238c027be89c0979f55113a67170aaea",
     "size": 1057820304,
     "playerMembers": {
       "game/EngineCalls.dll": "3493b7408c0e2ee8a4d62a42f9483a85c313341942621db97195b4cedec2e9e4",
@@ -18,8 +18,8 @@
       "game/resource-setup.html": "ea759481c7b406a5717cb550ba3d459051824777e3a0c0ce0c62849292b6560a",
       "game/resource-window.exe": "271a7cc5a7044978351ae4df472812de3462f658b639fa44b67196451992906e",
       "game/resource_setup.py": "321c36089656be29e08a879eb2332bcb9039db84890b4ef5391dce68b76abbd3",
-      "launcher.exe": "5a1f0a58d38e698be94946ab9dba6d0d41378a1da483877d8c1285d7648a6049",
-      "pods/VERSION": "554b0d67fcd3738e767c9a8fb805a5c080ce5358c7eef57846247c1b93a54125",
+      "launcher.exe": "1cc23e8548b6e0e2a1948e7231849f167abba87deb1c104eb932b30f2472b5c9",
+      "pods/VERSION": "5b8c973f22b0dc69ace88eef018d1c426691091594238ca751347f4a08d987dc",
       "pods/app/archive/static/archive.css": "8f20523fbb327ba8502e4c83b676b105c23160e404244fd001107be4288bc7ad",
       "pods/app/archive/templates/base.html": "6ebb5bb56648c3cce2fdcb9152d08ce0f66246d5357aafdf609e17c001903fd0",
       "pods/app/desktop_runtime.py": "516bd98b06fa2829267acab2b366de7f78c220bb6c6cbd7d08e6f4cdcd43020d",
@@ -27,7 +27,7 @@
       "pods/app/web/templates/base.html": "8d38659b40fd80eb578b2b834b597683b9147f532ca3cc7b4587bb7213ec3aca",
       "pods/app/web/templates/desktop-display.html": "3b1773fd541f0c9f0f741f29fe471ccc265098cf800b9768bd184d36c671f295",
       "pods/app/web/templates/patcher.html": "06a2fd8d41198b286b3ce2ad022fdda9ebb1751e2aa15bf393890b4e7e27012f",
-      "server/bunker-server.exe": "f07b9bfc6f60a41ecb83440daeef83a7b1c6a41b90b57eb8ddb7b724c14d4504"
+      "server/bunker-server.exe": "7bad0bdc21f3e6772972259869cea4175554e22380b40209b1f4acb8bc8a035d"
     },
     "hostObjects": {
       "elfload.o": "fdf5f845833ba3cf9556fa7f40ff88106ec00946eacef87d5b9150a8f2ebdd93",
