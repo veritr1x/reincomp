@@ -3,6 +3,13 @@
 What changed, newest first, by date and area. A release's heading comes
 above the dated sections it holds.
 
+## 0.2.6 (2026-11-23)
+
+- **Check for updates** now checks reincomp releases. **About** shows the Windows player version and the bundled Bunker version separately. The updater verifies the rebuilt player against the checksum in the tagged reincomp release.
+- The right stick and DualSense touchpad move a visible cursor that fades when idle. Press the touchpad, Cross or Xbox A to tap at the cursor. Moving the mouse returns control to the system pointer.
+- Bunker's Windows display settings include borderless fullscreen and restore the previous window size when returning to windowed mode.
+- Windows builds include Bunker 1.12.21.
+
 ## 0.2.5 (2026-11-23)
 
 - Fixed a loading stall at 40% when Windows temporarily locks Bunker's catalog. The asset converter now keeps running if Pod Programs fails to start. A Windows test with an empty converter cache reached 100% and resumed the saved story scene.

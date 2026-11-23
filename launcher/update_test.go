@@ -1,29 +1,60 @@
 package main
 
 import (
-	"os"
-	"path/filepath"
+	"context"
+	"crypto/sha256"
+	"fmt"
+	"io"
+	"net/http"
+	"strings"
 	"testing"
 )
 
-func TestInstalledWindowsRelease(t *testing.T) {
-	root := t.TempDir()
-	for _, folder := range []string{"pods", "game"} {
-		if err := os.Mkdir(filepath.Join(root, folder), 0755); err != nil {
-			t.Fatal(err)
+type releaseTransport map[string]string
+
+func (bodies releaseTransport) RoundTrip(r *http.Request) (*http.Response, error) {
+	body, ok := bodies[r.URL.String()]
+	if !ok {
+		return nil, fmt.Errorf("unavailable: %s", r.URL)
+	}
+	return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(body)), Header: make(http.Header)}, nil
+}
+
+func TestWindowsUpdateChannel(t *testing.T) {
+	const api = "https://api.github.com/repos/veritr1x/reincomp/releases/latest"
+	const feed = "https://veritr1x.github.io/bunker/version.json"
+	const manifest = "https://veritr1x.github.io/bunker/windows/runtime/runtime.json"
+	const lock = "https://raw.githubusercontent.com/veritr1x/reincomp/v0.2.6/release.lock.json"
+	exe := strings.Repeat("a", 64)
+	runtime := `{"sourceExeSHA256":"` + exe + `"}`
+	sha := fmt.Sprintf("%x", sha256.Sum256([]byte(runtime)))
+	bodies := releaseTransport{api: `{"tag_name":"v0.2.6"}`, manifest: runtime,
+		lock: `{"portable":{"bunkerVersion":"1.12.21","sha256":"` + exe + `"}}`}
+	client := &http.Client{Transport: bodies}
+	check := func(current string, install bool) {
+		t.Helper()
+		r, err := checkWindowsRelease(context.Background(), current, client)
+		if err != nil || r.Version != "0.2.6" || r.installable() != install {
+			t.Fatalf("current %s, release %+v, error %v", current, r, err)
 		}
 	}
-	if err := os.WriteFile(filepath.Join(root, "pods", "VERSION"), []byte("Bunker 1.12.14\n"), 0644); err != nil {
-		t.Fatal(err)
+	bodies[feed] = `{"version":"1.12.20","windows":true,"windowsRuntime":"` + sha + `"}`
+	check("0.2.5", false) // Legacy Bunker-only feed.
+	bodies[feed] = `{"version":"1.12.21","reincompVersion":"0.2.6","windows":true,"windowsRuntime":"` + sha + `"}`
+	check("0.2.5", true)
+	check("0.2.6", false)
+	check("0.2.7", false)
+	bodies[lock] = strings.Replace(bodies[lock], exe, strings.Repeat("b", 64), 1)
+	check("0.2.5", false)
+	bodies[manifest] += " "
+	check("0.2.5", false)
+	delete(bodies, feed)
+	check("0.2.5", false)
+	bodies[api] = `{"tag_name":"v0.2.7","prerelease":true}`
+	if _, err := checkWindowsRelease(context.Background(), "0.2.5", client); err == nil {
+		t.Fatal("accepted a prerelease")
 	}
-	if got := installedWindowsVersion(root); got != "1.12.15" {
-		t.Fatal(got)
-	}
-	if err := os.WriteFile(filepath.Join(root, "game", "windows-version.txt"), []byte("1.12.19\n"), 0644); err != nil {
-		t.Fatal(err)
-	}
-	current := installedWindowsVersion(root)
-	if current != "1.12.19" || !newerVersion("1.12.100", current) || newerVersion("1.12.19", current) || newerVersion("1.12.9", current) || newerVersion("invalid", current) {
-		t.Fatal("Unexpected update eligibility for", current)
+	if !newerVersion("0.2.10", "0.2.6") || newerVersion("0.2.5", "0.2.6") || newerVersion("invalid", "0.2.6") {
+		t.Fatal("invalid ordering")
 	}
 }

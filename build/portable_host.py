@@ -170,5 +170,6 @@ def prepare_site(a, work, windows, bunker, release):
     manifest = windows/'kit.json'
     index = json.loads(manifest.read_bytes())
     index['bunkerVersion'] = PORTABLE['bunkerVersion']
+    index['reincompVersion'] = (ROOT/'launcher/VERSION').read_text().strip()
     index['files'] = {name:digest(windows/name) for name in index['files']}
     manifest.write_text(json.dumps(index,sort_keys=True),encoding='utf-8')

@@ -50,11 +50,13 @@ server stopped. Under **Options → Import save backup**, select your Bunker
 backup ZIP or the emulator's `game.db`. Select **Deploy** to resume with the
 imported save. The previous save is kept in `.bunker-player/data/server.before-import`.
 
-In the portable Windows player, **Options → Check for updates** offers
-**Update and restart** when a newer Windows release is available. Enable
+In the portable Windows player, **Options → Check for updates** checks the latest
+published reincomp release. **About** shows the player and bundled Bunker versions.
+**Update and restart** appears when the matching Windows package is published.
+Until then, **Build this release** opens the tagged build instructions. Enable
 **Install updates automatically** to check and install before gameplay.
 The updater rebuilds the release with the original APK and master data already
-in the installation, verifies the executable against Bunker's published SHA-256,
+in the installation, verifies the executable against reincomp's tagged SHA-256,
 then restarts it in place. Imported resources, saves and settings stay in their
 existing folders. An offline startup can still enter the game.
 
@@ -97,7 +99,7 @@ supplied original in `data/original-master.bin.e` for the Pod Programs editors.
 
 ```sh
 cd launcher
-CGO_ENABLED=0 go build -trimpath -ldflags "-s -w -X main.version=<version>" -o reincomp.exe .
+CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o reincomp.exe .
 ```
 
 ## Scripted scene runs

@@ -19,6 +19,7 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
+	_ "embed"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -34,7 +35,10 @@ import (
 	"time"
 )
 
-var version = "dev"
+//go:embed VERSION
+var embeddedVersion string
+
+var version = strings.TrimSpace(embeddedVersion)
 
 // The game APK this port was made from.
 const gameAPK = "9ded0797ee607b6892b531ba3a02f4c4510774f5fe098ccada78ccff881c9209"
@@ -165,7 +169,7 @@ func run(root, resourceDir, assets, fps, render string, prepareOnly, fullscreen,
 			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 			release, err := latestWindowsRelease(ctx)
 			cancel()
-			showLauncher = err == nil && release.Version != prefs.Skipped && newerVersion(release.Version, installedWindowsVersion(root))
+			showLauncher = err == nil && release.installable() && release.Version != prefs.Skipped && newerVersion(release.Version, version)
 		}
 	}
 	if !readyFiles || desktop && (showLauncher || regularFile(filepath.Join(data, "manual-deploy"))) {

@@ -20,7 +20,7 @@
 <button class="outline" id="more" aria-label="{{ t('launcher.main.options') }}" aria-haspopup="dialog">⋮</button></header>
 <section class="update" id="release" aria-label="{{ t('launcher.main.update') }}" hidden><div class="panel">
 <div class="update-line"><span id="release-message"></span><a id="release-notes" target="_blank" rel="noopener">{{ t('launcher.main.whats_new') }} ›</a></div>
-<div class="update-actions"><button class="solid" id="install-update" hidden>Update and restart</button><a class="solid" id="update-builder" href="https://veritr1x.github.io/bunker/" target="_blank" rel="noopener">{{ t('launcher.main.web_builder') }}</a>
+<div class="update-actions"><button class="solid" id="install-update" hidden>Update and restart</button><a class="solid" id="update-builder" target="_blank" rel="noopener">Build this release</a>
 <button class="outline" id="later">{{ t('launcher.main.later') }}</button><button class="outline" id="skip">{{ t('launcher.main.skip') }}</button></div></div></section>
 <div class="columns">
 <section class="section system">{{ heading('launcher.main.system') }}<div class="panel">
@@ -71,7 +71,7 @@
 <dialog id="info-dialog" aria-labelledby="info-title"><div class="panel"><div class="scroll"><h2 id="info-title"></h2><p id="info-text"></p>{{ close_button() }}</div></div></dialog>
 <dialog id="log-dialog"><div class="panel"><div class="scroll"><h2>{{ t('launcher.menu.log') }}</h2><pre></pre>{{ close_button() }}</div></div></dialog>
 <dialog id="help-dialog"><div class="panel"><div class="scroll"><h2>{{ t("launcher.menu.help") }}</h2><p>{{ t("launcher.help.server") }}</p><p>Press Ctrl+B, Xbox View (Select/Back), or PlayStation Options during play to open the Bunker launcher. Press it again to return to the game.</p><a href="https://github.com/veritr1x/bunker#readme" target="_blank" rel="noopener">{{ t("launcher.menu.help") }}</a> {{ close_button() }}</div></div></dialog>
-<dialog id="about-dialog"><div class="panel"><div class="scroll"><h2>Bunker</h2><p>{{ t("launcher.about.version",version=version) }} · Windows</p><p>{{ t("launcher.about.created",author="veritr1x",site="github.com/veritr1x/bunker") }}</p>
+<dialog id="about-dialog"><div class="panel"><div class="scroll"><h2>re[in]comp {{ reincomp }}</h2><p>Bunker {{ version }} · Windows</p><p>{{ t("launcher.about.created",author="veritr1x",site="github.com/veritr1x/bunker") }}</p>
 <h3>{{ t("launcher.about.credits") }}</h3>{% for name in ["credit_lunar_tear","credit_lunar_scripts","credit_lunar_base","credit_patcher","credit_threejs"] %}<p>{{ t("launcher.about."+name) }}</p>{% endfor %}<p>{{ t("launcher.about.disclaimer") }}</p>{{ close_button() }}</div></div></dialog>
 <script>
 const el=id=>document.getElementById(id);
@@ -92,7 +92,7 @@ const words={
   'size.kb':{{ t('launcher.size.kb',n='__N__')|tojson }},
   'size.mb':{{ t('launcher.size.mb',n='__N__')|tojson }},
   'menu.display':{{ t('launcher.menu.display',mode='__MODE__')|tojson }},
-  'main.update_available':{{ t('launcher.main.update_available',version='__VERSION__')|tojson }}
+  'main.update_available':'re[in]comp __VERSION__ is available.'
 };
 const number=new Intl.NumberFormat(document.documentElement.lang||'en',{maximumFractionDigits:1});
 function detail(text){el('message').textContent=text;el('message').hidden=!text}
@@ -199,14 +199,16 @@ async function checkUpdate(manual){
     const r=await fetch('update');if(!r.ok)throw Error(await r.text());
     const {version,current,available,portable}=await r.json();
     if(!available){
-      el('release').hidden=true;if(manual)notice(words['menu.check_updates'],'Bunker '+current+' is up to date.');return;
+      pendingAuto=false;el('release').hidden=true;if(manual)notice(words['menu.check_updates'],'re[in]comp '+current+' is up to date.');return;
     }
     latest=version;
     el('install-update').hidden=!portable;
     el('update-builder').hidden=portable;
     if(manual){postponed=false;if(settings.skipped)await prefs({skipped:''})}
     el('release-message').textContent=words['main.update_available'].replace('__VERSION__',version);
-    el('release-notes').href='https://github.com/veritr1x/bunker/releases/tag/v'+encodeURIComponent(version);
+    const tag='v'+encodeURIComponent(version);
+    el('release-notes').href='https://github.com/veritr1x/reincomp/releases/tag/'+tag;
+    el('update-builder').href='https://github.com/veritr1x/reincomp/blob/'+tag+'/BUILDING.md#build-the-portable-exe';
     el('release').hidden=postponed||settings.skipped===latest;
     pendingAuto=portable&&!manual&&!el('release').hidden&&settings.autoInstall;
   }catch(e){if(manual)notice(words['menu.check_updates'],e.message)}

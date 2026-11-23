@@ -1,8 +1,8 @@
 {
   "portable": {
-    "bunkerVersion": "1.12.19",
-    "sha256": "94c92faf4cb935d1a7d0692c77eb845885fa2e2d091a1edcc01e026e4c5a0db2",
-    "size": 1057770760,
+    "bunkerVersion": "1.12.21",
+    "sha256": "976fd342e66f5b57d94b0f84c78cda738ca135365ed78abcb67c18412e92c001",
+    "size": 1057779824,
     "playerMembers": {
       "game/EngineCalls.dll": "3493b7408c0e2ee8a4d62a42f9483a85c313341942621db97195b4cedec2e9e4",
       "game/GameAssembly.dll": "25832992fe7369866a8e5748dd1e1b2600cde2da052ffbcf4694a0d7bc553837",
@@ -15,17 +15,19 @@
       "game/package_assets.py": "985eddf6f559caf278a3e51d571d6263d9ec5938e7c959ff848a70c2ce5759bc",
       "game/portable-emblem.json": "5a6df4140d8a038e8f9c728dfb7e2b78eeab365e104da818c201252aaa2cf9c6",
       "game/resource-setup.css": "9e053656b6aa02b705eb89fc5f1b54b13e77f633cbd86777cacc8912273b242a",
-      "game/resource-setup.html": "7c656e12baa0d429b3fc5ab067a77b80118d011143a7eb82d2bdac3681cb54b4",
+      "game/resource-setup.html": "ea759481c7b406a5717cb550ba3d459051824777e3a0c0ce0c62849292b6560a",
       "game/resource-window.exe": "f545dd2109bd9f722f7e5e580e4dca544d434b7f75a4dea985be6d3170c4c9b5",
-      "launcher.exe": "0a865c339ac7f3b8237eae7536f128e956813587af0b27da3b7ba681373f9c93",
-      "pods/VERSION": "76eff75482e785ae09b1d94af014cf099cdbb04416a4629a1840100b02f76153",
+      "game/resource_setup.py": "321c36089656be29e08a879eb2332bcb9039db84890b4ef5391dce68b76abbd3",
+      "launcher.exe": "b58401e525a3c3cd695adf667ae3295a14a70e4c94c9419c01a9a4c975a72d04",
+      "pods/VERSION": "554b0d67fcd3738e767c9a8fb805a5c080ce5358c7eef57846247c1b93a54125",
       "pods/app/archive/static/archive.css": "8f20523fbb327ba8502e4c83b676b105c23160e404244fd001107be4288bc7ad",
       "pods/app/archive/templates/base.html": "6ebb5bb56648c3cce2fdcb9152d08ce0f66246d5357aafdf609e17c001903fd0",
       "pods/app/desktop_runtime.py": "516bd98b06fa2829267acab2b366de7f78c220bb6c6cbd7d08e6f4cdcd43020d",
-      "pods/app/web/static/css/automata.css": "deff39f2c6f4c308a9d44e59c649e844740ab3b0bb6e32c316f0a911e0d8386c",
+      "pods/app/web/static/css/automata.css": "5f8c7fe7f2a69d6131f902442238589d320a060e9e884e36362233e5323cf10c",
       "pods/app/web/templates/base.html": "8d38659b40fd80eb578b2b834b597683b9147f532ca3cc7b4587bb7213ec3aca",
       "pods/app/web/templates/desktop-display.html": "0fdbc11f29586f36238369456e2a7561fe95959a561b9758af559b1fbd5e1e75",
-      "server/bunker-server.exe": "6b8524c0a6c816369d9be5a39b257a7c6579a7e65e7d52e61bd243c991ab9b89"
+      "pods/app/web/templates/patcher.html": "06a2fd8d41198b286b3ce2ad022fdda9ebb1751e2aa15bf393890b4e7e27012f",
+      "server/bunker-server.exe": "f07b9bfc6f60a41ecb83440daeef83a7b1c6a41b90b57eb8ddb7b724c14d4504"
     },
     "hostObjects": {
       "elfload.o": "fdf5f845833ba3cf9556fa7f40ff88106ec00946eacef87d5b9150a8f2ebdd93",

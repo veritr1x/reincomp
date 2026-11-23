@@ -52,8 +52,9 @@ jobs:
           cache: false
       - run: |
           cd launcher
+          if [[ "$GITHUB_REF_TYPE" == tag ]]; then test "v$(cat VERSION)" = "$GITHUB_REF_NAME"; fi
           GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -trimpath \
-            -ldflags "-s -w -X main.version=${GITHUB_REF_NAME#v}" -o ../out/reincomp.exe .
+            -ldflags "-s -w" -o ../out/reincomp.exe .
       - uses: actions/upload-artifact@v4
         with:
           name: launcher

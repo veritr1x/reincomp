@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"context"
+	"crypto/sha256"
 	_ "embed"
 	"encoding/json"
 	"errors"
@@ -24,9 +25,11 @@ var updateHelper string
 var updateHash = regexp.MustCompile("^[a-f0-9]{64}$")
 
 type windowsRelease struct {
-	Version string `json:"version"`
-	Windows bool   `json:"windows"`
-	Runtime string `json:"windowsRuntime"`
+	Version, Bunker, Runtime, Executable string
+}
+
+func (r windowsRelease) installable() bool {
+	return releaseTag.MatchString(r.Bunker) && updateHash.MatchString(r.Runtime) && updateHash.MatchString(r.Executable)
 }
 
 func newerVersion(next, current string) bool {
@@ -47,37 +50,68 @@ func newerVersion(next, current string) bool {
 	return false
 }
 
-func installedWindowsVersion(root string) string {
-	if raw, err := os.ReadFile(filepath.Join(root, "game", "windows-version.txt")); err == nil {
-		if v := strings.TrimSpace(string(raw)); releaseTag.MatchString(v) {
-			return strings.TrimPrefix(v, "v")
-		}
-	}
-	// Older kits carry the mobile SDK version, which can precede the
-	// Windows release that used it. This updater first shipped after 1.12.15.
-	raw, _ := os.ReadFile(filepath.Join(root, "pods", "VERSION"))
-	v := strings.TrimPrefix(strings.TrimSpace(string(raw)), "Bunker ")
-	if newerVersion(v, "1.12.15") {
-		return v
-	}
-	return "1.12.15"
+func latestWindowsRelease(ctx context.Context) (windowsRelease, error) {
+	return checkWindowsRelease(ctx, version, &http.Client{Timeout: 5 * time.Second})
 }
 
-func latestWindowsRelease(ctx context.Context) (windowsRelease, error) {
-	var release windowsRelease
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://veritr1x.github.io/bunker/version.json", nil)
+func readReleaseJSON(ctx context.Context, client *http.Client, url string, value any, digest string) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
-		return release, err
+		return err
 	}
-	client := http.Client{Timeout: 5 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
-		return release, err
+		return err
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode != 200 || json.NewDecoder(io.LimitReader(resp.Body, 65536)).Decode(&release) != nil ||
-		!release.Windows || !releaseTag.MatchString(release.Version) || !updateHash.MatchString(release.Runtime) {
-		return windowsRelease{}, errors.New("The published Windows update information is unavailable.")
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("Release information returned HTTP %d", resp.StatusCode)
+	}
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 256<<10))
+	if err != nil {
+		return err
+	}
+	if digest != "" && fmt.Sprintf("%x", sha256.Sum256(body)) != digest {
+		return errors.New("Windows runtime manifest checksum mismatch")
+	}
+	return json.Unmarshal(body, value)
+}
+
+func checkWindowsRelease(ctx context.Context, current string, client *http.Client) (windowsRelease, error) {
+	var github struct {
+		Tag               string `json:"tag_name"`
+		Draft, Prerelease bool
+	}
+	if err := readReleaseJSON(ctx, client, "https://api.github.com/repos/veritr1x/reincomp/releases/latest", &github, ""); err != nil {
+		return windowsRelease{}, err
+	}
+	if !strings.HasPrefix(github.Tag, "v") || !releaseTag.MatchString(github.Tag) || github.Draft || github.Prerelease {
+		return windowsRelease{}, errors.New("Invalid reincomp release")
+	}
+	release := windowsRelease{Version: strings.TrimPrefix(github.Tag, "v")}
+	if !newerVersion(release.Version, current) {
+		return release, nil
+	}
+	// The Pages publisher and GitHub release can go live at different times.
+	// Keep the release notes available while a matching rebuild is unavailable.
+	var feed struct {
+		Version, ReincompVersion, WindowsRuntime string
+		Windows                                  bool
+	}
+	if err := readReleaseJSON(ctx, client, "https://veritr1x.github.io/bunker/version.json", &feed, ""); err != nil ||
+		!feed.Windows || feed.ReincompVersion != release.Version || !updateHash.MatchString(feed.WindowsRuntime) {
+		return release, nil
+	}
+	var lock struct {
+		Portable struct{ BunkerVersion, SHA256 string }
+	}
+	if err := readReleaseJSON(ctx, client, "https://raw.githubusercontent.com/veritr1x/reincomp/"+github.Tag+"/release.lock.json", &lock, ""); err != nil ||
+		!releaseTag.MatchString(feed.Version) || feed.Version != lock.Portable.BunkerVersion || !updateHash.MatchString(lock.Portable.SHA256) {
+		return release, nil
+	}
+	var manifest struct{ SourceExeSHA256 string }
+	if err := readReleaseJSON(ctx, client, "https://veritr1x.github.io/bunker/windows/runtime/runtime.json", &manifest, feed.WindowsRuntime); err == nil && manifest.SourceExeSHA256 == lock.Portable.SHA256 {
+		release.Bunker, release.Runtime, release.Executable = feed.Version, feed.WindowsRuntime, lock.Portable.SHA256
 	}
 	return release, nil
 }
@@ -88,7 +122,7 @@ func canUpdatePortable(root, exe string) bool {
 }
 
 func startPlayerUpdate(ctx context.Context, root, exe string, release windowsRelease, progress func(string)) error {
-	if !canUpdatePortable(root, exe) || !newerVersion(release.Version, installedWindowsVersion(root)) || !updateHash.MatchString(release.Runtime) {
+	if !canUpdatePortable(root, exe) || !newerVersion(release.Version, version) || !release.installable() {
 		return errors.New("No newer compatible Windows release is available.")
 	}
 	stage, err := os.MkdirTemp(filepath.Dir(exe), ".bunker-update-")
@@ -104,7 +138,7 @@ func startPlayerUpdate(ctx context.Context, root, exe string, release windowsRel
 	}()
 	python := filepath.Join(root, "pods", "python", "python.exe")
 	args := []string{"-I", "-B", "-u", "-X", "utf8", "-c", updateHelper}
-	cmd := exec.CommandContext(ctx, python, append(args, "build", root, candidate, release.Version, release.Runtime)...)
+	cmd := exec.CommandContext(ctx, python, append(args, "build", root, candidate, release.Bunker, release.Runtime, release.Executable)...)
 	stop, err := cmd.StdinPipe()
 	if err != nil {
 		return err
@@ -140,7 +174,7 @@ func startPlayerUpdate(ctx context.Context, root, exe string, release windowsRel
 	if err = scanner.Err(); err != nil {
 		return err
 	}
-	if digest == "" {
+	if digest != release.Executable {
 		return errors.New("The update did not pass verification.")
 	}
 	if err = ctx.Err(); err != nil {

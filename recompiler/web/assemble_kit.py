@@ -57,7 +57,8 @@ def assemble(a):
         put(a.pyodide/name,'pyodide/'+name)
         if files['pyodide/'+name]!=entry['sha256']:raise ValueError('Unexpected Pyodide package '+name)
     version = (a.bunker / 'VERSION').read_text().strip()
-    (a.out/'kit.json').write_text(json.dumps({'format':1,'preparedRuntimeFormat':1,'bunkerVersion':version,'files':files},sort_keys=True))
+    reincomp = (ROOT/'launcher/VERSION').read_text().strip()
+    (a.out/'kit.json').write_text(json.dumps({'format':1,'preparedRuntimeFormat':1,'bunkerVersion':version,'reincompVersion':reincomp,'files':files},sort_keys=True))
     if a.archive:
         with ZipFile(a.archive,'x',compression=ZIP_DEFLATED,compresslevel=5) as bundle:
             for name in sorted(['kit.json', *files]):

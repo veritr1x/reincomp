@@ -103,12 +103,14 @@ def browser_job(args):
         _winapi.CloseHandle(job.value)
 
 
-def rebuild(root, output, version, manifest_hash, base=SITE, cancel=None):
+def rebuild(root, output, version, manifest_hash, base=SITE, cancel=None, expected_exe=None):
     if not SHA.fullmatch(manifest_hash):
         raise ValueError("Invalid Windows runtime digest")
     runtime_bytes = fetch(base, "windows/runtime/runtime.json", CHUNK, manifest_hash)
     runtime = json.loads(runtime_bytes)
     expected = runtime["sourceExeSHA256"]
+    if expected_exe is not None and expected != expected_exe:
+        raise ValueError("The Windows runtime does not match the published reincomp player")
     if not SHA.fullmatch(expected) or not SHA.fullmatch(runtime["kitSHA256"]):
         raise ValueError("Invalid Windows release manifest")
     kit_bytes = fetch(base, "windows/kit.json", CHUNK, runtime["kitSHA256"])
@@ -275,7 +277,7 @@ if __name__ == "__main__":
                 os.read(0, 1)
                 cancel.set()
             threading.Thread(target=watch_launcher, daemon=True).start()
-            print("VERIFIED " + rebuild(root, Path(args[0]), args[1], args[2], cancel=cancel), flush=True)
+            print("VERIFIED " + rebuild(root, Path(args[0]), args[1], args[2], cancel=cancel, expected_exe=args[3]), flush=True)
         elif mode == "apply":
             apply_update(Path(args[0]), Path(args[1]), args[2], int(args[3]), args[4:])
         else:

@@ -132,6 +132,9 @@ def compile_adapter(work, dest, cxx, flags, original, bunker, abi):
     run(dest.parent/'pods/python/python.exe', '-I', SOURCE/'header_emblem.py',
         dest/'WindowsPlayer_Data', bunker, work/'bunker_icon.h')
     adapted_module('bunker_button',{
+        # EngineCalls handles Windows controller input on the desktop frame.
+        '    bunker_pad_prepare(resolve);\n': '',
+        '    bunker_pad_install();\n': '',
         'free(type);': 'il2cpp_free(type);',
         'FIELD(action, f_method_ptr, void *) = (void *)tap;':
             'FIELD(action, f_method_ptr, void *) = desktop_bunker_tap_address();',

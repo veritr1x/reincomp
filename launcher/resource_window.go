@@ -136,7 +136,7 @@ func startLauncher(root, server, assets, master, dump string, ready, inGameOnly 
 	}
 	// A direct game launch needs the template only if the player opens Ctrl+B.
 	resourcePage := sync.OnceValues(func() ([]byte, error) {
-		render := exec.Command(filepath.Join(root, "pods", "python", "python.exe"), "-I", "-X", "utf8", filepath.Join(root, "game", "resource_setup.py"), root, assets)
+		render := exec.Command(filepath.Join(root, "pods", "python", "python.exe"), "-I", "-X", "utf8", filepath.Join(root, "game", "resource_setup.py"), root, assets, version)
 		hideHelperWindow(render)
 		return render.Output()
 	})
@@ -167,7 +167,6 @@ func startLauncher(root, server, assets, master, dump string, ready, inGameOnly 
 	w.restart = make(chan struct{})
 	exe, _ := os.Executable()
 	portableUpdate := canUpdatePortable(root, exe)
-	currentVersion := installedWindowsVersion(root)
 	var available windowsRelease
 	var updating bool
 	updateError := filepath.Join(root, "data", "update-error.txt")
@@ -320,7 +319,7 @@ func startLauncher(root, server, assets, master, dump string, ready, inGameOnly 
 			available = release
 			w.mu.Unlock()
 			out.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(out).Encode(map[string]any{"version": release.Version, "current": currentVersion, "available": newerVersion(release.Version, currentVersion), "portable": portableUpdate})
+			json.NewEncoder(out).Encode(map[string]any{"version": release.Version, "current": version, "available": newerVersion(release.Version, version), "portable": portableUpdate && release.installable()})
 		case "":
 			if r.Method != http.MethodGet {
 				http.Error(out, "Method", 405)
@@ -387,7 +386,7 @@ func startLauncher(root, server, assets, master, dump string, ready, inGameOnly 
 			}
 			switch action {
 			case "install-update":
-				if w.services || !portableUpdate || !newerVersion(available.Version, currentVersion) {
+				if w.services || !portableUpdate || !available.installable() || !newerVersion(available.Version, version) {
 					http.Error(out, "Stop Lunar Tear and check for a newer Windows release first.", 409)
 					return
 				}
