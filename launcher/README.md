@@ -89,6 +89,7 @@ Every other APK entry is copied as stored. No code changes.
 - `-assets <folder>`: the imported game files the server serves (default `data/assets`).
 - `-fps <n|game>` and `-render <WxH>` override the saved Bunker Display frame rate and resolution. A fresh Windows installation starts with a 144 FPS target in a 1600×900 window. Display applies texture size, shadows, reflections, bloom and idle drawing on the next launch. With idle drawing enabled, Bunker reduces drawing to about 30 FPS after two seconds without touch outside battles. Turn it off to keep the selected frame rate in still menus.
 - `-fullscreen` starts the Windows player in borderless fullscreen. Alt+Enter toggles it during play. In windowed mode, drag the border to resize.
+- In Bunker’s Display settings, **Exclusive fullscreen** uses the closest supported monitor resolution. Opening Bunker or switching apps temporarily restores the desktop display mode. Alt+Enter returns the game to its previous window size.
 - `-prepare`: prepare the game files, then stop.
 - `-export-save <file.zip>`, `-import-save <file>`: back up or restore the save, then stop.
 

@@ -12,7 +12,8 @@ static std::unique_ptr<bunker::windows::BunkerView> bunker;
 static std::atomic<HWND> attached;
 static std::atomic<HHOOK> setupHook;
 static std::atomic<uint32_t> pendingResolution;
-static std::atomic<uint64_t> pendingDisplay;
+using window_size::Mode;
+static window_size::Fullscreen fullscreen;
 static HWND launcherWindow(){
     static HWND window=[]{
         const auto *handle=_wgetenv(L"REINCOMP_WINDOW_PARENT");
@@ -21,8 +22,26 @@ static HWND launcherWindow(){
     return window;
 }
 
+static bool setMode(HWND window,Mode mode,LPARAM size=0){
+    if(mode!=Mode::Windowed && fullscreen.mode==Mode::Windowed){
+        if(const auto *data=_wgetenv(L"REINCOMP_PLAYER_DATA"))window_size::save(window,data);
+    }
+    return fullscreen.set(window,mode,size);
+}
+
 static LRESULT CALLBACK events(HWND window,UINT message,WPARAM w,LPARAM l,UINT_PTR id,DWORD_PTR){
-    if ((message==WM_EXITSIZEMOVE || message==WM_CLOSE) && !launcherWindow()){
+    if(message==WM_WINDOWPOSCHANGING && fullscreen.mode!=Mode::Windowed){
+        const auto result=DefSubclassProc(window,message,w,l);
+        fullscreen.constrain(window,*reinterpret_cast<WINDOWPOS *>(l));
+        return result;
+    }
+    if(message==WM_SETCURSOR && reinterpret_cast<HWND>(w)==window && LOWORD(l)==HTCLIENT){
+        // Use the user's Windows pointer over the game. Let WebView2 and the
+        // non-client frame choose their own link, text and resize cursors.
+        static const HCURSOR arrow=LoadCursor(nullptr,IDC_ARROW);
+        if(arrow){SetCursor(arrow);return TRUE;}
+    }
+    if ((message==WM_EXITSIZEMOVE || message==WM_CLOSE) && fullscreen.mode==Mode::Windowed && !launcherWindow()){
         if (const auto *data=_wgetenv(L"REINCOMP_PLAYER_DATA")) window_size::save(window,data);
     }
     if(message==WM_APP+0x370){
@@ -43,8 +62,11 @@ static LRESULT CALLBACK events(HWND window,UINT message,WPARAM w,LPARAM l,UINT_P
             SetFocus(window);
         return 0;
     }
-    if(message==WM_SYSKEYDOWN && w==VK_RETURN && (GetWindowLongPtrW(window,GWL_STYLE)&WS_CHILD)){
-        if(!(l&(LPARAM(1)<<30)))PostMessageW(GetParent(window),WM_APP+104,0,0);
+    if ((message==WM_SYSKEYDOWN || message==WM_SYSKEYUP) && w==VK_RETURN && (l&(LPARAM(1)<<29))){
+        if(message==WM_SYSKEYDOWN && !(l&(LPARAM(1)<<30))){
+            if(auto parent=launcherWindow())PostMessageW(parent,WM_APP+104,0,0);
+            else setMode(window,fullscreen.toggle(),fullscreen.exclusiveSize);
+        }
         return 0;
     }
     if(message==WM_APP+0x36e && w){
@@ -53,14 +75,17 @@ static LRESULT CALLBACK events(HWND window,UINT message,WPARAM w,LPARAM l,UINT_P
         return 1;
     }
     if(message==window_size::applyDisplay){
-        if(w>3 || !HIWORD(l) || !LOWORD(l))return 0;
+        const auto mode=Mode(w&~WPARAM(2));
+        if(w>6 || (mode!=Mode::Windowed && mode!=Mode::Borderless && mode!=Mode::Exclusive))return 0;
+        if((w&2) && !(mode==Mode::Exclusive && !l) && (!HIWORD(l) || !LOWORD(l)))return 0;
         if(auto parent=launcherWindow()){
-            if(!SendMessageW(parent,message,w,l))return 0;
+            if(!PostMessageW(parent,message,w,l))return 0;
             // A borderless host always fills the monitor; the child can still
             // accept a new render resolution when the user explicitly selects one.
             if(w==3)pendingResolution.store(uint32_t(l));
         }else{
-            pendingDisplay.store((uint64_t(w+1)<<32)|uint32_t(l));
+            if(!setMode(window,mode,mode==Mode::Exclusive?l:0))return -1;
+            if((w&2) && mode==Mode::Windowed)window_size::resizeClient(window,HIWORD(l),LOWORD(l));
         }
         return 1;
     }
@@ -68,7 +93,15 @@ static LRESULT CALLBACK events(HWND window,UINT message,WPARAM w,LPARAM l,UINT_P
         if(auto changed=reinterpret_cast<void(*)()>(GetProcAddress(GetModuleHandleW(L"EngineCalls.dll"),"DesktopGamepadsChanged")))changed();
     }
     if(message==game_pages::dispatch){game_pages::consume(window,bunker&&bunker->IsVisible());return 0;}
-    if(message==WM_APP+0x36d){game_pages::overlay(w!=0);return 0;}
+    if(message==WM_APP+0x36d){
+        game_pages::overlay(w!=0);
+        if(auto parent=launcherWindow())PostMessageW(parent,window_size::coverDisplay,w,0);
+        else {fullscreen.covered=w!=0;PostMessageW(window,window_size::refreshDisplay,0,0);}
+        return 0;
+    }
+    if(message==WM_ACTIVATE && fullscreen.mode==Mode::Exclusive)
+        PostMessageW(window,window_size::refreshDisplay,LOWORD(w)==WA_INACTIVE,0);
+    if(message==window_size::refreshDisplay){fullscreen.present(window,!w && GetForegroundWindow()==window);return 0;}
     if(message==WM_SIZE || message==WM_ACTIVATE || (message>=bunker::web_controller::Press && message<=bunker::web_controller::Back)){
         for(auto &[name,page]:game_pages::pages)if(page.view->Message(window,message,w,l))return 0;
     }
@@ -87,10 +120,12 @@ static LRESULT CALLBACK events(HWND window,UINT message,WPARAM w,LPARAM l,UINT_P
         }
     }
     if(message==WM_NCDESTROY){
+        fullscreen.release();
         RemoveWindowSubclass(window,events,id);
         game_pages::pages.clear();
         bunker.reset();
         attached=nullptr;
+        fullscreen={};
     }
     return handled?0:DefSubclassProc(window,message,w,l);
 }
@@ -98,8 +133,17 @@ static void attach(HWND window){
     if(!SetWindowSubclass(window,events,1,0))return;
     if (launcherWindow())
         PostMessageW(window,WM_APP+0x370,0,0);
-    else if (_wgetenv(L"REINCOMP_WINDOW_MAXIMIZED"))
-        PostMessageW(window,WM_SYSCOMMAND,SC_MAXIMIZE,0);
+    else {
+        if (_wgetenv(L"REINCOMP_WINDOW_MAXIMIZED"))
+            PostMessageW(window,WM_SYSCOMMAND,SC_MAXIMIZE,0);
+        if (_wgetenv(L"REINCOMP_NATIVE_FULLSCREEN"))
+            PostMessageW(window,window_size::applyDisplay,1,0);
+    }
+    if(const auto *size=_wgetenv(L"REINCOMP_EXCLUSIVE_SIZE")){
+        int width=0,height=0;
+        if(!wcscmp(size,L"native") || swscanf(size,L"%dx%d",&width,&height)==2)
+            PostMessageW(window,window_size::applyDisplay,UINT(Mode::Exclusive),MAKELPARAM(height,width));
+    }
     attached=window;
     SetWindowTextW(window,L"Nier Reincarnation");
     for(int small:{0,1}){

@@ -9,11 +9,17 @@
 </div>
 {% endmacro %}
 {% block content %}
+<style>
+  .setting select option {
+    background-color: var(--panel);
+    color: var(--fg-dark);
+  }
+</style>
 <h1 data-side>{{ t("pods.display.title") }}</h1>
 <form action="/display" method="post">
   <h2 class="bracket-header" data-toc>{{ t("pods.display.resolution") }}</h2>
   <div class="panel">
-    {{ choice("window_mode", "Window mode", [("windowed", "Windowed"), ("borderless", "Borderless fullscreen")]) }}
+    {{ choice("window_mode", "Window mode", window_modes) }}
     {{ choice("resolution", "pods.display.resolution", resolutions) }}
     {% if upscalers|length > 1 %}
     {{ choice("upscale", "pods.display.upscaling", upscalers) }}

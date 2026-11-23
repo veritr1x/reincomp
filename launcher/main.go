@@ -384,13 +384,16 @@ func serveAndPlay(root, data, assets, game, server, view, native, apk, fps, rend
 				return nil, err
 			}
 			maximized := false
-			borderless := fullscreen || display.borderless
-			if setup == nil && render == "" && !borderless {
+			if fullscreen {
+				display.windowMode = "borderless"
+			}
+			windowSize := display.size
+			if setup == nil && render == "" {
 				if size, max := previousWindowSize(data); size != "" {
-					display.size, maximized = size, max
+					windowSize, maximized = size, max
 				}
 			}
-			cmd, err = desktopCommand(game, root, data, display, borderless && setup == nil)
+			cmd, err = desktopCommand(game, root, data, display, windowSize)
 			if err != nil {
 				return nil, err
 			}
@@ -400,7 +403,7 @@ func serveAndPlay(root, data, assets, game, server, view, native, apk, fps, rend
 				cmd.Env = append(cmd.Env, "REINCOMP_MUTE_AUDIO=1")
 			}
 			if setup != nil {
-				if borderless {
+				if display.windowMode == "borderless" {
 					setup.send("borderless")
 				} else {
 					setup.send("windowed")
@@ -424,7 +427,7 @@ func serveAndPlay(root, data, assets, game, server, view, native, apk, fps, rend
 			if err != nil {
 				return err
 			}
-			return applyPlayerDisplay(pid, display.size, display.borderless, resize)
+			return applyPlayerDisplay(pid, display, resize)
 		}
 		e = session.play(makePlayer, menu)
 		if errors.Is(e, errReturnToLauncher) {

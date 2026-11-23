@@ -16,7 +16,8 @@ type displaySettings struct {
 	fps, size, textureSkip string
 	effectsOff             int
 	idle                   bool
-	borderless             bool
+	windowMode             string
+	nativeResolution       bool
 	fsr31                  bool
 	fsrQuality, sharpness  int
 }
@@ -28,6 +29,11 @@ func desktopDisplay(conf, fps, size string, mode func() (int, int, int)) display
 			settings[strings.TrimSpace(k)] = strings.TrimSpace(v)
 		}
 	}
+	windowMode := settings["window_mode"]
+	if windowMode != "borderless" && windowMode != "exclusive" {
+		windowMode = "windowed"
+	}
+	nativeResolution := size == "" && settings["resolution"] == "native"
 	var width, height, hz int
 	if (fps == "" && settings["fps"] == "max") || (size == "" && settings["resolution"] != "" && settings["resolution"] != "default") {
 		width, height, hz = mode()
@@ -73,7 +79,7 @@ func desktopDisplay(conf, fps, size string, mode func() (int, int, int)) display
 		return value
 	}
 	return displaySettings{fps: fps, size: size, textureSkip: map[string]string{"half": "1", "quarter": "2"}[settings["textures"]],
-		effectsOff: effectsOff, idle: settings["idle"] == "on", borderless: settings["window_mode"] == "borderless", fsr31: settings["upscale"] == "fsr31",
+		effectsOff: effectsOff, idle: settings["idle"] == "on", windowMode: windowMode, nativeResolution: nativeResolution, fsr31: settings["upscale"] == "fsr31",
 		fsrQuality: integer("fsr_quality", 1, 4), sharpness: integer("fsr_sharpness", 20, 100)}
 }
 
@@ -105,16 +111,12 @@ func savedDisplay(data, fps, render string) (displaySettings, error) {
 	return desktopDisplay(string(conf), fps, render, displayMode), nil
 }
 
-func desktopCommand(game, root, data string, display displaySettings, fullscreen bool) (*exec.Cmd, error) {
-	width, height, err := renderDimensions(display.size)
+func desktopCommand(game, root, data string, display displaySettings, windowSize string) (*exec.Cmd, error) {
+	width, height, err := renderDimensions(windowSize)
 	if err != nil {
 		return nil, err
 	}
-	mode := "0"
-	if fullscreen {
-		mode = "1"
-	}
-	cmd := exec.Command(game, "-force-glcore45", "-screen-width", width, "-screen-height", height, "-screen-fullscreen", mode,
+	cmd := exec.Command(game, "-force-glcore45", "-screen-width", width, "-screen-height", height, "-screen-fullscreen", "0",
 		"-logFile", filepath.Join(data, "player.log"))
 	cmd.Env = append(os.Environ(), "REINCOMP_NATIVE_CHECKPOINT=1", "REINCOMP_DESKTOP_BUNDLES=1",
 		"REINCOMP_INTERACTIVE_WINDOW=1", "REINCOMP_WINDOW_WIDTH="+width, "REINCOMP_WINDOW_HEIGHT="+height,
@@ -139,9 +141,15 @@ func desktopCommand(game, root, data string, display displaySettings, fullscreen
 			cmd.Env = append(cmd.Env, "REINCOMP_NATIVE_PRESENT_RATE="+display.fps)
 		}
 	}
-	if fullscreen {
-		cmd.Args = append(cmd.Args, "-window-mode", "borderless")
+	if display.windowMode == "borderless" {
 		cmd.Env = append(cmd.Env, "REINCOMP_NATIVE_FULLSCREEN=1")
+	}
+	if display.windowMode == "exclusive" {
+		size := display.size
+		if display.nativeResolution {
+			size = "native"
+		}
+		cmd.Env = append(cmd.Env, "REINCOMP_EXCLUSIVE_SIZE="+size)
 	}
 	if display.fsr31 {
 		cmd.Env = append(cmd.Env, "REINCOMP_FSR31=1", "REINCOMP_FSR_QUALITY="+strconv.Itoa(display.fsrQuality),

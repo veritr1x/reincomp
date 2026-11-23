@@ -24,8 +24,8 @@ std::unique_ptr<BunkerView> page, dashboard;
 std::filesystem::path install;
 HWND child{};
 DWORD playerPid{};
-WINDOWPLACEMENT previous{sizeof(WINDOWPLACEMENT)};
-bool fullscreen{};
+using window_size::Mode;
+window_size::Fullscreen fullscreen;
 HWND setupHint{}, archiveButton{}, folderButton{}, deployButton{}, setupStatus{};
 
 void layoutSetup(HWND window) {
@@ -75,22 +75,9 @@ void fit(HWND window) {
     else if (page) page->PageFrame(0, 0, r.right, r.bottom, r.right, r.bottom);
 }
 
-void setBorderless(HWND window,bool enabled) {
-    if (enabled==fullscreen) return;
-    fullscreen=enabled;
-    if (!enabled) {
-        SetWindowLongPtrW(window, GWL_STYLE, WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN | WS_VISIBLE);
-        SetWindowPlacement(window, &previous);
-        SetWindowPos(window, nullptr, 0, 0, 0, 0, SWP_NOMOVE|SWP_NOSIZE|SWP_NOZORDER|SWP_FRAMECHANGED);
-    } else {
-        window_size::save(window,install/"data");
-        MONITORINFO monitor{sizeof(monitor)};
-        GetWindowPlacement(window, &previous);
-        GetMonitorInfoW(MonitorFromWindow(window, MONITOR_DEFAULTTONEAREST), &monitor);
-        SetWindowLongPtrW(window, GWL_STYLE, WS_POPUP | WS_CLIPCHILDREN | WS_VISIBLE);
-        const RECT r = monitor.rcMonitor;
-        SetWindowPos(window, HWND_TOP, r.left, r.top, r.right-r.left, r.bottom-r.top, SWP_FRAMECHANGED);
-    }
+bool setMode(HWND window,Mode mode,LPARAM size=0) {
+    if (mode!=Mode::Windowed && fullscreen.mode==Mode::Windowed) window_size::save(window,install/"data");
+    return fullscreen.set(window,mode,size);
 }
 
 void attach(HWND window) {
@@ -120,10 +107,15 @@ void attach(HWND window) {
 }
 
 LRESULT CALLBACK events(HWND w,UINT message,WPARAM wp,LPARAM lp) {
-    if (!fullscreen && (message==WM_EXITSIZEMOVE || message==WM_CLOSE || message==finish))
+    if (fullscreen.mode==Mode::Windowed && (message==WM_EXITSIZEMOVE || message==WM_CLOSE || message==finish))
         window_size::save(w,install/"data");
     if (dashboard && dashboard->Message(w,message,wp,lp)) return 0;
     switch (message) {
+    case WM_WINDOWPOSCHANGING: {
+        const auto result=DefWindowProcW(w,message,wp,lp);
+        fullscreen.constrain(w,*reinterpret_cast<WINDOWPOS *>(lp));
+        return result;
+    }
     case showSetup: showNativeSetup(w); return 0;
     case updateSetup: {
         std::unique_ptr<std::wstring> status(reinterpret_cast<std::wstring *>(lp));
@@ -195,7 +187,7 @@ LRESULT CALLBACK events(HWND w,UINT message,WPARAM wp,LPARAM lp) {
     case WM_EXITSIZEMOVE:
     case WM_SETFOCUS: if (child) PostMessageW(child,WM_APP+0x36f,0,0); break;
     case WM_DPICHANGED: {
-        if (!fullscreen) {
+        if (fullscreen.mode==Mode::Windowed) {
             const auto *target=reinterpret_cast<const RECT *>(lp);
             SetWindowPos(w,nullptr,target->left,target->top,target->right-target->left,target->bottom-target->top,SWP_NOZORDER|SWP_NOACTIVATE);
         }
@@ -203,23 +195,26 @@ LRESULT CALLBACK events(HWND w,UINT message,WPARAM wp,LPARAM lp) {
     }
     case WM_SIZE: fit(w); return 0;
     case window_size::applyDisplay: {
-        setBorderless(w,(wp&1)!=0);
-        if ((wp&2) && !fullscreen) {
-            RECT rect{0,0,HIWORD(lp),LOWORD(lp)};
-            if (!rect.right || !rect.bottom) return 0;
-            if (IsZoomed(w)) ShowWindow(w,SW_RESTORE);
-            if (!window_size::adjust(rect,GetWindowLongPtrW(w,GWL_STYLE),GetWindowLongPtrW(w,GWL_EXSTYLE),window_size::dpi(w))) return 0;
-            SetWindowPos(w,nullptr,0,0,rect.right-rect.left,rect.bottom-rect.top,SWP_NOMOVE|SWP_NOZORDER|SWP_NOACTIVATE);
-        }
+        const auto mode=Mode(wp&~WPARAM(2));
+        if (mode!=Mode::Windowed && mode!=Mode::Borderless && mode!=Mode::Exclusive) return 0;
+        if (!setMode(w,mode,mode==Mode::Exclusive?lp:0)) return -1;
+        if ((wp&2) && mode==Mode::Windowed) window_size::resizeClient(w,HIWORD(lp),LOWORD(lp));
         return 1;
     }
     case WM_SYSKEYDOWN: if (wp!=VK_RETURN || (lp&(LPARAM(1)<<30))) break; [[fallthrough]];
-    case toggle: setBorderless(w,!fullscreen); return 0;
+    case toggle: setMode(w,fullscreen.toggle(),fullscreen.exclusiveSize); return 0;
+    case WM_ACTIVATE:
+        if (fullscreen.mode==Mode::Exclusive) PostMessageW(w,window_size::refreshDisplay,LOWORD(wp)==WA_INACTIVE,0);
+        break;
+    case window_size::coverDisplay:
+        fullscreen.covered=wp!=0;
+        PostMessageW(w,window_size::refreshDisplay,0,0);return 0;
+    case window_size::refreshDisplay: fullscreen.present(w,!wp && GetForegroundWindow()==w);return 0;
     case WM_CLOSE:
         if (child && IsWindow(child)) { PostMessageW(child,WM_CLOSE,0,0); return 0; }
         [[fallthrough]];
     case finish: DestroyWindow(w); return 0;
-    case WM_DESTROY: dashboard.reset(); page.reset(); PostQuitMessage(0); return 0;
+    case WM_DESTROY: fullscreen.release(); dashboard.reset(); page.reset(); PostQuitMessage(0); return 0;
     }
     return DefWindowProcW(w,message,wp,lp);
 }

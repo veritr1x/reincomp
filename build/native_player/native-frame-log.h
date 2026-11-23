@@ -271,32 +271,6 @@ static void observePlayerFrame(){
         if(width()!=int(size>>16) || height()!=int(size&0xffff))
             setSize(int(size>>16),int(size&0xffff),fullScreenMode(),0);
     }
-    // Standalone Unity owns the outer HWND. Its display API switches the
-    // compositor mode on the game thread and keeps the game and WebViews aligned.
-    static bool restoreMaximized=false;
-    if(restoreMaximized && fullScreenMode()==3){
-        PostMessageW(player_window::attached.load(),WM_SYSCOMMAND,SC_MAXIMIZE,0);
-        restoreMaximized=false;
-    }
-    if(const auto request=player_window::pendingDisplay.exchange(0)){
-        const unsigned flags=unsigned(request>>32)-1;
-        const bool resize=(flags&2)!=0;
-        const int mode=(flags&1)?1:3;
-        const auto window=player_window::attached.load();
-        int w=int((request>>16)&0xffff),h=int(request&0xffff);
-        const int current=fullScreenMode();
-        if(current!=mode || resize){
-            restoreMaximized=false;
-            if(const auto data=_wgetenv(L"REINCOMP_PLAYER_DATA")){
-                if(current==3 && mode==1)window_size::save(window,data);
-                if(current!=3 && mode==3 && !resize){
-                    const auto saved=window_size::read(data);
-                    if(saved.width){w=saved.width;h=saved.height;restoreMaximized=saved.maximized!=0;}
-                }
-            }
-            setSize(w,h,mode,0);
-        }
-    }
     game_pages::frame(width(),height());
     static auto desktopInput=reinterpret_cast<void(*)()>(GetProcAddress(GetModuleHandleW(L"EngineCalls.dll"),"AdvanceDesktopInput"));
     if(desktopInput)desktopInput();
@@ -323,8 +297,8 @@ static void observePlayerFrame(){
         }
     }
     if(checkpoint && (lastFrame<0 || id%120==0)){
-        const int desiredMode=borderless?1:3;
-        if(!interactive || lastFrame<0){
+        const int desiredMode=(!interactive && borderless)?1:3;
+        if(!interactive || (lastFrame<0 && player_window::launcherWindow())){
             const char *w=std::getenv("REINCOMP_WINDOW_WIDTH"),*h=std::getenv("REINCOMP_WINDOW_HEIGHT");
             RECT client{};
             const auto parent=player_window::launcherWindow();

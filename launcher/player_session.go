@@ -33,7 +33,7 @@ type playerRequest struct {
 }
 
 var closePlayerWindow = func(pid int) bool { return false }
-var applyPlayerDisplay = func(pid int, size string, borderless, resize bool) error {
+var applyPlayerDisplay = func(pid int, display displaySettings, resize bool) error {
 	return errors.New("the native player is unavailable")
 }
 

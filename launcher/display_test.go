@@ -55,19 +55,27 @@ func TestBunkerDisplay(t *testing.T) {
 	}
 }
 
-func TestBorderlessDisplay(t *testing.T) {
-	for _, value := range []string{"", "windowed", "borderless", "invalid"} {
-		display := desktopDisplay("window_mode="+value, "", "", func() (int, int, int) { return 1920, 1080, 60 })
-		if display.borderless != (value == "borderless") {
-			t.Fatalf("window mode %q parsed as borderless=%v", value, display.borderless)
+func TestDesktopWindowModes(t *testing.T) {
+	t.Setenv("REINCOMP_NATIVE_FULLSCREEN", "")
+	t.Setenv("REINCOMP_EXCLUSIVE_SIZE", "")
+	for _, value := range []string{"", "windowed", "borderless", "exclusive", "invalid"} {
+		display := desktopDisplay("resolution=native\nwindow_mode="+value, "", "", func() (int, int, int) { return 1920, 1080, 60 })
+		want := value
+		if value == "" || value == "invalid" {
+			want = "windowed"
 		}
-		cmd, err := desktopCommand("player.exe", ".", ".", display, display.borderless)
+		if display.windowMode != want {
+			t.Fatalf("window mode %q parsed as %q", value, display.windowMode)
+		}
+		cmd, err := desktopCommand("player.exe", ".", ".", display, "1200x700")
 		if err != nil {
 			t.Fatal(err)
 		}
 		args := strings.Join(cmd.Args, " ")
-		if strings.Contains(args, "-window-mode borderless") != display.borderless ||
-			strings.Contains(args, "-screen-fullscreen 1") != display.borderless {
+		env := strings.Join(cmd.Env, "\n")
+		if !strings.Contains(args, "-screen-fullscreen 0") || !strings.Contains(args, "-screen-width 1200") ||
+			strings.Contains(env, "REINCOMP_EXCLUSIVE_SIZE=native") != (value == "exclusive") ||
+			strings.Contains(env, "REINCOMP_NATIVE_FULLSCREEN=1") != (value == "borderless") {
 			t.Errorf("window mode %q produced %s", value, args)
 		}
 	}

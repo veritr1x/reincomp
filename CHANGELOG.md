@@ -3,6 +3,12 @@
 What changed, newest first, by date and area. A release's heading comes
 above the dated sections it holds.
 
+## 0.2.7 (2026-11-23)
+
+- Fixed mouse pointer visibility and Ctrl+B input in borderless fullscreen. The game keeps the desktop resolution and restores its previous window size when you switch back to windowed mode.
+- Added **Exclusive fullscreen** to **Display → Window mode**. It uses the selected display resolution and restores the desktop mode when you switch away or open Bunker.
+- Display dropdowns follow the Bunker theme. In dark mode, unselected options use cream text on a dark background.
+
 ## 0.2.6 (2026-11-23)
 
 - **Check for updates** now checks reincomp releases. **About** shows the Windows player version and the bundled Bunker version separately. The updater verifies the rebuilt player against the checksum in the tagged reincomp release.

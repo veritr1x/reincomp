@@ -12,16 +12,22 @@ import (
 func init() {
 	hideHelperWindow = func(cmd *exec.Cmd) { cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true} }
 	closePlayerWindow = closeUnityWindow
-	applyPlayerDisplay = func(pid int, size string, borderless, resize bool) error {
-		width, height, err := renderDimensions(size)
+	applyPlayerDisplay = func(pid int, display displaySettings, resize bool) error {
+		width, height, err := renderDimensions(display.size)
 		if err != nil {
 			return err
 		}
 		w, _ := strconv.Atoi(width)
 		h, _ := strconv.Atoi(height)
 		var flags uintptr
-		if borderless {
+		switch display.windowMode {
+		case "borderless":
 			flags |= 1
+		case "exclusive":
+			flags |= 4
+			if display.nativeResolution {
+				w, h = 0, 0
+			}
 		}
 		if resize {
 			flags |= 2
@@ -36,6 +42,9 @@ func init() {
 					2, 400, uintptr(unsafe.Pointer(&accepted)))
 				if result != 0 && accepted == 1 {
 					return nil
+				}
+				if result != 0 && accepted == ^uintptr(0) {
+					return fmt.Errorf("Windows could not apply the requested monitor mode")
 				}
 			}
 		}

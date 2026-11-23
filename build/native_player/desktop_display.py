@@ -7,6 +7,8 @@ from urllib.request import Request as ControlRequest, urlopen
 
 from fastapi import APIRouter, Form, Request
 
+WINDOW_MODES = {"windowed": "Windowed", "borderless": "Borderless fullscreen", "exclusive": "Exclusive fullscreen"}
+
 
 def install(control, token):
     # desktop_runtime configures the Pod data directory before importing page modules.
@@ -32,7 +34,8 @@ def install(control, token):
             stored = dict(line.split("=", 1) for line in path.read_text().splitlines() if "=" in line)
         except FileNotFoundError:
             stored = {}
-        result["window_mode"] = "borderless" if stored.get("window_mode") == "borderless" else "windowed"
+        mode = stored.get("window_mode")
+        result["window_mode"] = mode if mode in WINDOW_MODES else "windowed"
         for key, default, maximum in (("fsr_quality", 1, 4), ("fsr_sharpness", 20, 100)):
             try:
                 value = int(stored.get(key, default))
@@ -45,7 +48,7 @@ def install(control, token):
     def view(request: Request, message: str = "", error: str = ""):
         return display.templates.TemplateResponse(request, "desktop-display.html", {
             "active": "display", "settings": settings(), "fps": display.FPS, "upscalers": display.UPSCALE,
-            "resolutions": display.RESOLUTIONS, "textures": display.TEXTURES, "idle": display.IDLE,
+            "window_modes": WINDOW_MODES.items(), "resolutions": display.RESOLUTIONS, "textures": display.TEXTURES, "idle": display.IDLE,
             "effects": display.EFFECT, "message": message, "error": error})
 
     @router.post("/display")
@@ -56,7 +59,7 @@ def install(control, token):
         previous = settings()
         if window_mode is None:
             window_mode = previous["window_mode"]
-        if window_mode not in ("windowed", "borderless"):
+        if window_mode not in WINDOW_MODES:
             return display.redirect(error="Choose a valid window mode.")
         path = display.conf_path()
         stage = None
