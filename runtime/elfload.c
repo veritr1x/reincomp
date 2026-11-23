@@ -69,7 +69,6 @@ static int elf_load_impl(const char *path, uintptr_t base, elf_resolver resolve,
     for (int i = 0; i < eh->e_phnum; i++)
         if (ph[i].p_type == PT_LOAD && ph[i].p_vaddr + ph[i].p_memsz > span) span = ph[i].p_vaddr + ph[i].p_memsz;
     span = (span + 0xffff) & ~(size_t)0xffff;
-    // RWX keeps the test simple: natively the code runs in place, recompiled it is only data.
     void *map;
 #ifdef _WIN32
     // The ARM64 image is data only. Executable x86 code is linked separately.
@@ -85,9 +84,22 @@ static int elf_load_impl(const char *path, uintptr_t base, elf_resolver resolve,
         return -1;
     }
 #else
-    map = mmap((void *)base, span, PROT_READ | PROT_WRITE | PROT_EXEC,
+    int protection = PROT_READ | PROT_WRITE;
+#if defined(__aarch64__)
+    // The native ARM comparison runs the original instructions in this mapping.
+    protection |= PROT_EXEC;
+#endif
+    map = mmap((void *)base, span, protection,
                MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED_NOREPLACE, -1, 0);
-    if (map != (void *)base) return perror("elfload: mmap"), -1;
+    if (map != (void *)base) {
+        if (map == MAP_FAILED) perror("elfload: mmap");
+        else {
+            fprintf(stderr, "elfload: requested guest address is unavailable\n");
+            munmap(map, span);
+        }
+        free((void *)file);
+        return -1;
+    }
 #endif
     image->base = map, image->span = span, image->file = file;
 

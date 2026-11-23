@@ -1,11 +1,11 @@
 {
   "portable": {
     "bunkerVersion": "1.12.22",
-    "sha256": "84f3974b9f931de304e8e69a487621a6238c027be89c0979f55113a67170aaea",
-    "size": 1057820304,
+    "sha256": "2a7638dd6b77b500a6647b51b65f15ef0d54ae18bc980592d24a1183e7968ff9",
+    "size": 1057830876,
     "playerMembers": {
-      "game/EngineCalls.dll": "3493b7408c0e2ee8a4d62a42f9483a85c313341942621db97195b4cedec2e9e4",
-      "game/GameAssembly.dll": "3fcd77a9c147d0cc69309362720fa7a5a1a80a624a833e2279586ed45acc2f70",
+      "game/EngineCalls.dll": "e2ce196944b4c8835f3496440b5d422bb52e5c74f57f5d0309572c0e829882e7",
+      "game/GameAssembly.dll": "4e87fe7d33448e41608d12c30efd6e8e68723757b0b28b015213d24044607217",
       "game/WindowsPlayer.exe": "1d2a5afd032eee54d4064719904365f003ed02db8eb75d8476dd55cd6385cafe",
       "game/archive-media.exe": "16b2edfdfd5347f1f8a2806490bc980c26dd692e0ac989cbdb5663fe4a968734",
       "game/bunker_icon.py": "cc881470a8c2573943345eb50d03314de1d0c5ee205b4e2964a3df5ec6020b63",
@@ -13,10 +13,10 @@
       "game/desktop_display.py": "fc4f43b6fda5fbfca6eb1b68745385a63928349b0323c0d3fa609548b1c23844",
       "game/desktop_services.py": "98ea7a9027efe2a81541939f1ac39d6b2f82dab7d720e8d7281ed4e3ba221208",
       "game/package_assets.py": "985eddf6f559caf278a3e51d571d6263d9ec5938e7c959ff848a70c2ce5759bc",
-      "game/portable-emblem.json": "2092e014485dc55fc14bfafb697078e64136d902fae124574cda032ba60cd95b",
+      "game/portable-emblem.json": "fecf1517b377e4bd70db285fc5e955c402ffcfd394e8b11e910dfef27c2250b5",
       "game/resource-setup.css": "9e053656b6aa02b705eb89fc5f1b54b13e77f633cbd86777cacc8912273b242a",
       "game/resource-setup.html": "ea759481c7b406a5717cb550ba3d459051824777e3a0c0ce0c62849292b6560a",
-      "game/resource-window.exe": "271a7cc5a7044978351ae4df472812de3462f658b639fa44b67196451992906e",
+      "game/resource-window.exe": "5c870a7c5d7b9a631d3a7b2063950a60e5ad189e58ef8a5ce060a8da4d688e04",
       "game/resource_setup.py": "321c36089656be29e08a879eb2332bcb9039db84890b4ef5391dce68b76abbd3",
       "launcher.exe": "1cc23e8548b6e0e2a1948e7231849f167abba87deb1c104eb932b30f2472b5c9",
       "pods/VERSION": "5b8c973f22b0dc69ace88eef018d1c426691091594238ca751347f4a08d987dc",

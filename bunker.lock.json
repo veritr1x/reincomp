@@ -8,6 +8,10 @@
       "sha256": "e19f0855a329237538fd6c2a732d01f24b2d500edb38adc4c9118ab5823dff1a"
     },
     "server": {
+      "linux-x86_64": {
+        "file": "bunker-server-1.12.22-linux-x86_64",
+        "sha256": "da13e7786ed814aa323dae195ac37cfa7b3d8b08a66d87e4de054ce1fe26abc9"
+      },
       "windows-x86_64": {
         "file": "bunker-server-1.12.22-windows-x86_64.exe",
         "sha256": "746cab16b33f11a0e29a7925f1f8ab2f63bae7b94054907a11892a75c4132f92"

@@ -1,4 +1,4 @@
-// Resolve the current scene's own Skip control when a shortcut is pressed.
+// Resolve the current scene's own HUD control when a shortcut is pressed.
 // Raycast at its centre so a modal, a disabled canvas, or a different scene
 // cannot turn the shortcut into a click on an underlying button.
 namespace desktop_skip {
@@ -83,9 +83,10 @@ struct HitTest {
         return hitTransform && value(get(hitTransform,"IsChildOf",{transform}),descendant) && descendant;
     }
 };
-static void press(int width,int height){
+enum class Action { Skip, AutoRun };
+static void press(Action action,int width,int height){
     struct Binding {const char *ns,*owner,*field;};
-    static constexpr Binding buttons[]={
+    static constexpr Binding skipButtons[]={
         {"Dark.View.MoviePlay","MoviePlayer","_closeButtonForCage"},
         {"Dark.View.MoviePlay","MoviePlayer","_closeButton"},
         {"Dark.View.HeadUpDisplay.Menu","ReplaySkipButtonAction","_skipButton"},
@@ -102,12 +103,20 @@ static void press(int width,int height){
         {"Dark.View.Title","SplashScreen","_splashTap"},
         {"Dark.View.Title","SplashScreen","_splashSoundTextTap"}
     };
+    static constexpr Binding autoRunButtons[]={
+        {"Dark.View.HeadUpDisplay.Menu","AutoRunButtonAction","_autoRunButton"}
+    };
+    const bool skipping=action==Action::Skip;
+    const char *actionName=skipping?"skip":"auto-run";
+    const Binding *buttons=skipping?skipButtons:autoRunButtons;
+    const size_t count=skipping?std::size(skipButtons):std::size(autoRunButtons);
     const char *selected="none";
     HitTest hit;
     bool ready=hit.init();
     auto trace=std::getenv("REINCOMP_TRACE_DESKTOP_INPUT")?std::fopen("desktop-input.log","a"):nullptr;
-    if(trace)std::fprintf(trace,"skip raycaster ready=%d\n",ready);
-    if(ready)for(const auto &b:buttons){
+    if(trace)std::fprintf(trace,"%s raycaster ready=%d\n",actionName,ready);
+    if(ready)for(size_t i=0;i<count;++i){
+        const auto &b=buttons[i];
         P cls=nullptr,owner=findScreenComponent(b.ns,b.owner,cls);
         P button=screenObjectField(owner,b.field);
         float position[2]{};
@@ -115,8 +124,8 @@ static void press(int width,int height){
         bool matches=hit.hits(button,position,width,height);
         if(trace){
             auto name=reinterpret_cast<P(*)(P)>(registry.at("UnityEngine.Object::GetName"));
-            std::fprintf(trace,"skip candidate=%s.%s at=%.0f,%.0f hit=%ls matches=%d\n",
-                b.owner,b.field,position[0],position[1],hit.lastHit?playerString(name(hit.lastHit)).c_str():L"(none)",matches);
+            std::fprintf(trace,"%s candidate=%s.%s at=%.0f,%.0f hit=%ls matches=%d\n",
+                actionName,b.owner,b.field,position[0],position[1],hit.lastHit?playerString(name(hit.lastHit)).c_str():L"(none)",matches);
         }
         if(!matches)continue;
         const char *kind=il2cpp_class_get_name(classOf(button));
@@ -132,7 +141,7 @@ static void press(int width,int height){
         if(pressed){selected=b.field;break;}
     }
     if(trace){
-        std::fprintf(trace,"skip control=%s\n",selected);
+        std::fprintf(trace,"%s control=%s\n",actionName,selected);
         std::fclose(trace);
     }
 }

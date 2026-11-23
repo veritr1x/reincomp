@@ -22,6 +22,7 @@
 #include <shlwapi.h>
 #include <tuple>
 #include <type_traits>
+#include <utility>
 #include <vector>
 #include "desktop-touch.h"
 #include "desktop-gamepad.h"
@@ -229,6 +230,9 @@ extern "C" __declspec(dllexport) bool ConsumeDesktopSkip(){
     const bool pressed=desktop_input::skipRequested;
     desktop_input::skipRequested=false;
     return pressed;
+}
+extern "C" __declspec(dllexport) bool ConsumeDesktopAutoRun(){
+    return std::exchange(desktop_input::autoRunRequested,false);
 }
 extern "C" __declspec(dllexport) void DesktopGamepadsChanged(){desktop_gamepad::devicesChanged.store(true);}
 extern "C" __declspec(dllexport) void ShutdownDesktopGamepads(){desktop_gamepad::shutdown();}

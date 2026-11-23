@@ -17,10 +17,12 @@ inline XINPUT_GAMEPAD playStationState(const DIJOYSTATE &input){
     XINPUT_GAMEPAD state{};
     state.sThumbLX=axis(input.lX,false);state.sThumbLY=axis(input.lY,true);
     state.sThumbRX=axis(input.lZ,false);state.sThumbRY=axis(input.lRz,true);
+    if(input.rgbButtons[0]&0x80)state.wButtons|=XINPUT_GAMEPAD_X; // Square
     if(input.rgbButtons[1]&0x80)state.wButtons|=XINPUT_GAMEPAD_A;
     if(input.rgbButtons[2]&0x80)state.wButtons|=XINPUT_GAMEPAD_B;
     if(input.rgbButtons[3]&0x80)state.wButtons|=XINPUT_GAMEPAD_Y; // Triangle
     if(input.rgbButtons[9]&0x80)state.wButtons|=XINPUT_GAMEPAD_BACK; // Options opens Bunker like Xbox View
+    if(input.rgbButtons[10]&0x80)state.wButtons|=XINPUT_GAMEPAD_LEFT_THUMB;
     if(input.rgdwPOV[0]<36000)state.wButtons|=hatDirection(((input.rgdwPOV[0]+2250)/4500)%8);
     return state;
 }

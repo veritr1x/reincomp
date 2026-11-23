@@ -27,14 +27,17 @@ as a non-Steam game and select Proton under **Properties → Compatibility**.
 Keep the shortcut pointed at that same EXE after selecting **Deploy**.
 See the [Proton gameplay checks](docs/proton.md) for the tested setup and how
 to verify keyboard movement in a field or storybook scene.
+The native Linux player is in development. [Linux build status and tests](BUILDING.md#linux).
 
 To build from source instead, see [BUILDING.md](BUILDING.md).
 
 ## Controls
 
 - Mouse or touch: tap and drag.
-- Move with WASD, the left stick or the D-pad. Aim with the right stick or swipe the DualSense touchpad with one finger. The controller ring fades after one second and hides as soon as you use the mouse.
-- Press A, Cross or the DualSense touchpad to tap at the controller ring’s position. B or Circle goes back. Space, Y or Triangle skips.
+- Move with WASD, the arrow keys, the left stick or the D-pad. Hold Left Shift to walk, or toggle walking with Tab or a left-stick click (L3). A gentle stick tilt also gives you fine movement.
+- Press R, Xbox X or PlayStation Square to toggle field auto-run when the Auto button is available.
+- Aim with the right stick or swipe the DualSense touchpad with one finger. The controller ring fades after one second and hides as soon as you use the mouse.
+- Press A, Cross or the DualSense touchpad to tap at the controller ring’s position. Esc, Mouse Back, B or Circle goes back. Space, Y or Triangle skips.
 - Alt+Enter toggles fullscreen. Ctrl+B, Xbox View (Select/Back), or PlayStation Options opens the Bunker launcher. Press it again to return to the game.
 
 In reincomp, open **Bunker → Display → Window mode** and choose **Windowed** or **Borderless fullscreen**. Select **Save** to apply it now and use it on your next launch.

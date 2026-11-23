@@ -249,6 +249,28 @@ struct BunkerView::Impl:std::enable_shared_from_this<Impl> {
             if (!e.repeat) location.href = '/bunker/desktop-toggle';
           }
         }, true);)",nullptr);
+#if REINCOMP_VIEW_REVISION >= 1
+    if(!pageEvent){
+      // Keep mouse Back on the same close path as B/Circle. Chromium would
+      // otherwise navigate its own history after the side-button release.
+      web->AddScriptToExecuteOnDocumentCreated(
+          LR"(if (window === top) {
+            let backPressed = false;
+            for (const kind of ['mousedown','mouseup','auxclick']) {
+              addEventListener(kind, e => {
+                if (!e.isTrusted || e.button !== 3) return;
+                e.preventDefault(); e.stopImmediatePropagation();
+                if (kind === 'mousedown') backPressed = true;
+                if (kind === 'mouseup' && backPressed) {
+                  backPressed = false;
+                  location.href = '/bunker/desktop-toggle';
+                }
+              }, true);
+            }
+            addEventListener('blur', () => { backPressed = false; });
+          })",nullptr);
+    }
+#endif
     // The pages' own Close is a link the app around them takes.
     auto *on_navigation=new Handler<ICoreWebView2NavigationStartingEventHandler,ICoreWebView2*,ICoreWebView2NavigationStartingEventArgs*>(
       kNavigationHandler,[weak](ICoreWebView2*,ICoreWebView2NavigationStartingEventArgs *arguments)->HRESULT{

@@ -6,14 +6,14 @@
 heads.txt holds every trace head of the library, one hexadecimal address per
 line. The heads are cut into shards in address order; each shard is lifted
 with DIR/remill-lift and DIR/aarch64.bc, instrumented, and compiled for
-Windows. Every head is a boundary for every shard, so the shards link
+the selected host. Every head is a boundary for every shard, so the shards link
 together. A direct target that is not in the list is lifted in a further
 round and reported. Finished shards are kept: run again to resume.
 
 Output: OUT/shard-NNNNN.o and OUT/result.json (the objects in link order and
 any heads added).
 """
-import argparse, concurrent.futures, json, re, shlex, subprocess, sys
+import argparse, concurrent.futures, hashlib, json, os, re, shlex, shutil, subprocess, sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent / 'tools'))
@@ -25,9 +25,12 @@ def main():
     ap.add_argument('--lib', type=Path, required=True)
     ap.add_argument('--bias', type=lambda s: int(s, 0), required=True)
     ap.add_argument('--heads', type=Path, required=True)
+    ap.add_argument('--trace-boundaries', type=Path, help='all known function entries, including those outside a partial build')
+    ap.add_argument('--linked-heads', type=Path, help='functions supplied by other objects in the same link')
+    ap.add_argument('--entry-only', action='store_true', help='compile only the requested heads and report remaining direct references')
     ap.add_argument('--toolchain', type=Path, required=True, help='folder with remill-lift and aarch64.bc')
     ap.add_argument('--poll', type=Path, required=True)
-    ap.add_argument('--poll-flags', default='--speed --inline-poll=teb')
+    ap.add_argument('--poll-flags', help='instrumenter options; defaults to the target host TLS model')
     ap.add_argument('--clang', default='/usr/lib/llvm-18/bin/clang', help='clang 18; on Windows, the path of clang.exe')
     ap.add_argument('--opt', default='-O1')
     ap.add_argument('--fallback-opt', default='-O2', help='used for a shard the compiler fails on at --opt')
@@ -38,6 +41,31 @@ def main():
     ap.add_argument('--jobs', type=int, default=8)
     a = ap.parse_args()
     a.out.mkdir(parents=True, exist_ok=True)
+    # Both host targets reuse numbered shard names. Hold the lock until the
+    # completed manifest is published. Closing it also releases it after a crash.
+    with (a.out / '.lift.lock').open('a+b') as lock:
+        try:
+            if os.name == 'nt':
+                import msvcrt
+                if lock.tell() == 0:
+                    lock.write(b'\0')
+                    lock.flush()
+                lock.seek(0)
+                msvcrt.locking(lock.fileno(), msvcrt.LK_NBLCK, 1)
+            else:
+                import fcntl
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except (BlockingIOError, PermissionError) as error:
+            raise SystemExit(f'Cannot lock {a.out} for compilation: {error}') from error
+        build(a)
+
+
+def build(a):
+    linux = 'linux' in a.target.split('-')
+    default_poll = '--speed --inline-poll' if linux else '--speed --inline-poll=teb'
+    flags = shlex.split(default_poll if a.poll_flags is None else a.poll_flags)
+    if linux and any(flag in ('--inline-poll=teb', '--direct-calls') for flag in flags):
+        raise SystemExit('the selected poll options require Windows TEB thread-local storage')
     image, start, execs = load_image(a.lib)
     # Code patches (game/patches.json): the bytes are changed in the image the lifter
     # reads, so the recompiled code carries them. The library on disk is not touched.
@@ -55,17 +83,53 @@ def main():
     heads = sorted({int(line, 16) for line in a.heads.read_text().split()})
     bad = [x for x in heads if not in_exec(x)]
     assert not bad, f'{len(bad)} heads are outside executable code, first {bad[0]:#x}'
-    flags = shlex.split(a.poll_flags)
-    # On Windows the tools carry .exe.
-    program = lambda path: str(path) + ('.exe' if not Path(path).exists() and Path(str(path) + '.exe').exists() else '')
-    lifter, poll = program(a.toolchain / 'remill-lift'), program(a.poll)
+    def program(path):
+        for candidate in (Path(path), Path(str(path) + '.exe')):
+            if candidate.is_file():
+                return str(candidate.resolve())
+        return shutil.which(str(path)) or str(path)
+
+    lifter, poll, clang = program(a.toolchain / 'remill-lift'), program(a.poll), program(a.clang)
+    def file_digest(path):
+        digest = hashlib.sha256()
+        with open(path, 'rb') as stream:
+            for block in iter(lambda: stream.read(1 << 20), b''):
+                digest.update(block)
+        return digest.hexdigest()
+    # Both targets use the same filenames. An interrupted rebuild must never
+    # combine Linux ELF and Windows COFF, even when their trace addresses match.
+    recipe = hashlib.sha256(json.dumps([
+        a.target, flags, a.opt, a.fallback_opt, a.shard_size, a.bias,
+        hashlib.sha256(image).hexdigest(), hashlib.sha256(a.heads.read_bytes()).hexdigest(),
+        [file_digest(path) for path in (lifter, poll, a.toolchain / 'aarch64.bc', clang)],
+    ]).encode()).hexdigest()
+    boundaries = set()
+    if a.trace_boundaries:
+        boundaries = {int(x, 16) for x in a.trace_boundaries.read_text().split()}
+        recipe = hashlib.sha256((recipe + file_digest(a.trace_boundaries)).encode()).hexdigest()
+    linked = set()
+    if a.linked_heads:
+        linked = {int(x, 16) for x in a.linked_heads.read_text().split()}
+        if linked.intersection(heads):
+            raise ValueError('a requested function is already supplied by linked objects')
+        boundaries.update(linked)
+        recipe = hashlib.sha256((recipe + file_digest(a.linked_heads)).encode()).hexdigest()
+    manifest = a.out / 'result.json'
+    manifest.unlink(missing_ok=True)
 
     def lift(job):
         index, entries, heads_file = job
         prefix = a.out / f'shard-{index:05d}'
         obj, done = prefix.with_suffix('.o'), prefix.with_suffix('.done')
-        if obj.exists() and done.exists():
-            return index, json.loads(done.read_text())
+        if done.exists():
+            if obj.exists():
+                try:
+                    cached = json.loads(done.read_text())
+                except json.JSONDecodeError:
+                    cached = {}  # Older releases wrote the marker in place.
+                if cached.get('recipe') == recipe:
+                    return index, cached
+            done.unlink()
         ef, ll, pl = prefix.with_suffix('.entries'), prefix.with_suffix('.ll'), prefix.with_suffix('.poll.ll')
         ef.write_text(''.join(f'{x:#x}\n' for x in entries))
         fallback = False
@@ -75,7 +139,9 @@ def main():
                  '--bytes_file', str(raw), '--address', str(a.bias + start), '--entry_addresses_file', str(ef),
                  '--trace_heads_file', str(heads_file), '--guest_call_transfer=true', '--ir_out', str(ll)])
             run([poll, *flags, str(ll), str(pl)])
-            compile_ir = lambda level: [a.clang, '-target', a.target, level, '-Wno-override-module', '-c', str(pl), '-o', str(obj)]
+            pending_obj = prefix.with_suffix('.o.tmp')
+            compile_ir = lambda level: [clang, '-target', a.target, *(['-fPIC'] if linux else []),
+                                        level, '-Wno-override-module', '-c', str(pl), '-o', str(pending_obj)]
             try:
                 run(compile_ir(a.opt))
             except subprocess.CalledProcessError:
@@ -87,10 +153,13 @@ def main():
         defs = {int(x, 16) for x in re.findall(r'^define[^\n]*@sub_([0-9a-f]+)\(', text, re.M)}
         decls = {int(x, 16) for x in re.findall(r'^declare[^\n]*@sub_([0-9a-f]+)\(', text, re.M)}
         assert set(entries) <= defs, f'shard {index}: the lifter left out requested heads'
-        summary = {'defs': sorted(defs), 'decls': sorted(decls), 'fallback': fallback}
+        summary = {'defs': sorted(defs), 'decls': sorted(decls), 'fallback': fallback, 'recipe': recipe}
+        pending_obj.replace(obj)
         for f in (ll, pl, ef):
             f.unlink()
-        done.write_text(json.dumps(summary))
+        marker = prefix.with_suffix('.done.tmp')
+        marker.write_text(json.dumps(summary))
+        marker.replace(done)
         return index, summary
 
     known, lifted, objects, added, index, rounds = set(heads), set(), [], [], 0, 0
@@ -99,7 +168,7 @@ def main():
     while pending:
         rounds += 1
         heads_file = a.out / f'heads-round{rounds}.txt'
-        heads_file.write_text(''.join(f'{x:#x}\n' for x in sorted(known)))
+        heads_file.write_text(''.join(f'{x:#x}\n' for x in sorted(known | boundaries)))
         jobs = []
         for i in range(0, len(pending), a.shard_size):
             jobs.append((index, pending[i:i + a.shard_size], heads_file))
@@ -118,13 +187,22 @@ def main():
                 if count % 100 == 0:
                     print(f'round {rounds}: {count} of {len(jobs)} shards', flush=True)
         # Direct targets nobody defines: lift them too, as heads of their own.
-        pending = sorted(x for x in wanted - lifted - known if in_exec(x))
+        pending = sorted(x for x in wanted - lifted - known - linked if in_exec(x))
+        if a.entry_only:
+            break
         added += pending
         known |= set(pending)
-    result = {'lib': a.lib.name, 'bias': hex(a.bias), 'heads': len(lifted), 'added': [hex(x) for x in added],
+    result = {'lib': a.lib.name, 'target': a.target, 'bias': hex(a.bias), 'heads': len(lifted), 'added': [hex(x) for x in added],
               'objects': objects, 'rounds': rounds, 'fallback_shards': fallbacks}
-    (a.out / 'result.json').write_text(json.dumps(result))
-    print(json.dumps({**result, 'objects': len(objects), 'added': len(added)}))
+    if a.entry_only:
+        result['unlinked'] = sorted(wanted - lifted)
+    temporary = manifest.with_suffix('.json.tmp')
+    temporary.write_text(json.dumps(result))
+    temporary.replace(manifest)
+    summary = {**result, 'objects': len(objects), 'added': len(added)}
+    if a.entry_only:
+        summary['unlinked'] = len(result['unlinked'])
+    print(json.dumps(summary))
 
 
 if __name__ == '__main__':

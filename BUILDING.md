@@ -1,7 +1,8 @@
 # Building
 
-The native player build runs on Windows. The optional web builder also uses
-Emscripten to build the compiler that runs in the player's browser.
+The released player builds on Windows. The optional web builder uses
+Emscripten to build the compiler that runs in the player's browser. The Linux
+section covers the experimental native player and the tested Proton path.
 
 ## Build the portable EXE
 
@@ -24,6 +25,72 @@ tables and spring-animation group locally, compiles the native host and
 translates the APK in an isolated browser profile. Compiling the ARM64 game
 from scratch can take hours. The faster public web builder uses its released
 precompiled game runtime.
+
+## Linux
+
+For the Windows build running under Steam Proton, see the
+[Proton gameplay checks](docs/proton.md).
+
+The experimental native x86-64 player uses Unity 2019.4.29f1's
+`linux64_withgfx_nondevelopment_il2cpp` module, its matching
+`UnityPlayer_s.debug`, and a prepared install's `.bunker-player` directory.
+Build on x86-64 Linux with Python 3.11+, a C++17 compiler, CMake, GNU
+binutils and the recompiler dependencies listed below.
+
+```sh
+install="/path/to/.bunker-player"
+unity="/path/to/linux64_withgfx_nondevelopment_il2cpp"
+python3 recompiler/linux/build_toolchain.py --out build-output/linux-tools
+python3 build/linux_player/build_game_assembly.py --lib "$install/data/native/libil2cpp.so" \
+    --unity "$unity" --toolchain build-output/linux-tools --out build-output/linux-assembly
+python3 build/linux_player/stage.py --install "$install" --unity "$unity" \
+    --game-assembly build-output/linux-assembly/GameAssembly.so --out build-output/linux-player
+build-output/linux-player/Reincarnation.x86_64 -batchmode -nographics -logFile /dev/stderr
+```
+
+The builder compiles the original VM bootstrap to x86-64 ELF. The staging
+command converts the startup files to Unity's Linux64 target and installs
+the ARM data image beside the managed metadata. Choose a new output directory.
+The native player loads the assembly, runs the original static constructors,
+registers Unity's internal calls and starts managed runtime initialization.
+Native 2D and 3D gameplay are still unverified.
+
+To include the offline server, pass `--server /path/to/bunker-server-1.12.22-linux-x86_64`
+to the staging command. It verifies the release checksum. The server can
+check its game, asset and account endpoints against a private save on Linux.
+
+```sh
+build-output/linux-player/bunker-server -data "/path/to/test-save" \
+    -assets "/path/to/imported-assets" -port-offset 32100 -self-test -stdin </dev/null
+```
+
+To exercise the native recompiler on four functions from your APK, run the
+following from the repository root on x86-64 Linux. Install Git, Clang and
+LLVM 18 development files, gflags and glog development headers, and a C++17
+compiler. On Ubuntu 24.04 the development packages are `clang-18 llvm-18-dev
+libgflags-dev libgoogle-glog-dev g++`. The toolchain build fetches the same
+pinned Remill revision and applies the same instruction patches as the Windows
+build. Pass `--remill /path/to/local/clone` to reuse a checkout. The test links
+the translated objects into a Linux shared library and checks their results
+and cooperative polling at runtime.
+
+```sh
+python3 recompiler/linux/build_toolchain.py --out build-output/linux-tools
+bash recompiler/tests/linux-il2cpp.sh "/path/to/.bunker-player/data/native/libil2cpp.so" \
+    build-output/linux-tools build-output/linux-tools/poll-instrument build-output/linux-il2cpp \
+    "/path/to/linux64_withgfx_nondevelopment_il2cpp"
+```
+
+The optional final argument enables a native engine ABI test using GNU
+binutils and the module's matching `UnityPlayer_s.debug`. It recovers the
+Linux internal-call addresses, calls Unity's native transform constructor,
+and composes the resulting matrices using the original game's translated
+`libunity.so` routine. To exercise the exported C functions and internal-call
+registration of the actual staged shared library, run:
+
+```sh
+python3 recompiler/tests/linux-game-assembly.py build-output/linux-player build-output/linux-il2cpp/engine-calls.json
+```
 
 ## What to install
 

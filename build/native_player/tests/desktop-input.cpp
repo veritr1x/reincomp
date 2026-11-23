@@ -30,6 +30,12 @@ static HWND keyboardFocus=HWND(1);
 static int windowsKey=0;
 static BOOL keyboardInfo(DWORD,GUITHREADINFO *info){info->hwndFocus=keyboardFocus;return TRUE;}
 static SHORT heldWindowsKey(int key){return key==windowsKey?SHORT(0x8000):0;}
+static bool walkTurnEnabled=false;
+static FARPROC playerExport(HMODULE module,LPCSTR name){
+    if(!std::strcmp(name,"SetDesktopWalkTurn"))
+        return reinterpret_cast<FARPROC>(+[](bool enabled){walkTurnEnabled=enabled;});
+    return GetProcAddress(module,name);
+}
 static RECT clientBounds{0,0,640,360};
 static POINT cursor{260,145};
 static int warps=0;
@@ -77,6 +83,7 @@ static bool readRecordedPad(HWND,XINPUT_GAMEPAD &state,POINT &swipe,bool &click)
 #define GetForegroundWindow() HWND(1)
 #define GetGUIThreadInfo keyboardInfo
 #define GetAsyncKeyState heldWindowsKey
+#define GetProcAddress playerExport
 #define GetClientRect readBounds
 #define GetCursorPos readCursor
 #define ScreenToClient toClient
@@ -93,6 +100,7 @@ static bool readRecordedPad(HWND,XINPUT_GAMEPAD &state,POINT &swipe,bool &click)
 #undef GetForegroundWindow
 #undef GetGUIThreadInfo
 #undef GetAsyncKeyState
+#undef GetProcAddress
 #undef GetClientRect
 #undef GetCursorPos
 #undef ScreenToClient
@@ -113,10 +121,11 @@ static void checkDualSenseReports(){
         auto p=report+(bluetooth?2:1);
         DWORD size=bluetooth?78:64;
         POINT delta{};
-        p[7]=0xe2;p[8]=0x20;
+        p[7]=0xf2;p[8]=0x60;
         p[32]=4;p[33]=50;p[34]=0x40;p[35]=1;p[36]=0x80;
         assert(touch.sample(report,size,delta) && !delta.x && !delta.y);
-        assert(touch.pad.wButtons==(XINPUT_GAMEPAD_DPAD_RIGHT|XINPUT_GAMEPAD_A|XINPUT_GAMEPAD_B|XINPUT_GAMEPAD_Y|XINPUT_GAMEPAD_BACK));
+        assert(touch.pad.wButtons==(XINPUT_GAMEPAD_DPAD_RIGHT|XINPUT_GAMEPAD_A|XINPUT_GAMEPAD_B|XINPUT_GAMEPAD_X|
+                                   XINPUT_GAMEPAD_Y|XINPUT_GAMEPAD_BACK|XINPUT_GAMEPAD_LEFT_THUMB));
         p[33]=90;p[34]=0x80;
         assert(touch.sample(report,size,delta) && delta.x==40 && delta.y==4);
         assert(!touch.takeClick(false)); // sliding a finger never presses the pad
@@ -137,8 +146,9 @@ static void checkDualSenseReports(){
 }
 static float x=51,y=84;
 static bool down,held,up;
-static std::array<bool,128> keys{};
-static std::array<bool,128> pressed{};
+static std::array<bool,512> keys{};
+static std::array<bool,512> pressed{};
+static bool sideDown,sideHeld,sideUp;
 static std::array<int,2> deviceIds{100,101};
 static void readPhysical(int i,desktop_input::Touch *out){
     auto &t=*out;
@@ -174,6 +184,9 @@ static void checkBrowserController(){
     dashboard=30;assert(sample(XINPUT_GAMEPAD_B)==0&&events.back().action==web::Back&&events.back().view==30);
     dashboard=0;assert(sample(XINPUT_GAMEPAD_B)==0);sample(0);
     assert(sample(XINPUT_GAMEPAD_B)==XINPUT_GAMEPAD_B);
+    dashboard=30;
+    XINPUT_GAMEPAD unplugged{};
+    assert(browser.route(HWND(1),false,unplugged,at,.02f,hit,post));
 }
 int main(){
     _wputenv_s(L"REINCOMP_WINDOW_PARENT",L"2");
@@ -183,8 +196,9 @@ int main(){
     using namespace bunker::desktop_touch;
     frame=[] {return tick;};width=[] {return w;};height=[] {return h;};deltaTime=[] {return .01f;};
     physicalCount=[] {return physical;};physicalTouch=readPhysical; mousePosition=[](float *p){p[0]=x;p[1]=y;p[2]=0;};
-    mouseHeld=[](int)->uint8_t{return held;};mouseDown=[](int)->uint8_t{return down;};
-    mouseUp=[](int)->uint8_t{return up;};keyHeld=[](int k)->uint8_t{return keys.at(k);};
+    mouseHeld=[](int i)->uint8_t{return i==3?sideHeld:(i==0&&held);};
+    mouseDown=[](int i)->uint8_t{return i==3?sideDown:(i==0&&down);};
+    mouseUp=[](int i)->uint8_t{return i==3?sideUp:(i==0&&up);};keyHeld=[](int k)->uint8_t{return keys.at(k);};
     keyDown=[](int k)->uint8_t{return pressed.at(k);};
     auto read=[](int i){State s{};Touch result{};s.gpr.x0.qword=i;s.gpr.x1.qword=uintptr_t(&result);
         touch(s,reinterpret_cast<P>(readPhysical));return result;};
@@ -218,6 +232,54 @@ int main(){
     windowsKey=0;next();pressed[VK_SPACE]=true;next();assert(!skipRequested);
     pressed[VK_SPACE]=false;windowsKey=VK_SPACE;next();assert(skipRequested);
     skipRequested=false;windowsKey=0;next();
+    // Movement shortcuts affect only the floating field stick (never a UGUI finger).
+    auto settledRadius=[&]{
+        for(int i=0;i<14;++i)next();
+        assert(movement.held && number(0x83d27da0)==0);
+        return std::hypot(movement.touch.position.x-w*.5f,movement.touch.position.y-h*.5f);
+    };
+    for(auto [vk,unity]:{std::pair{VK_UP,273},std::pair{VK_DOWN,274},std::pair{VK_LEFT,276},std::pair{VK_RIGHT,275}}){
+        windowsKey=vk;assert(next()==1 && read(0).phase==Began);
+        keys[unity]=true;windowsKey=0;assert(nearbyint(settledRadius())==nearbyint(h*.15f));
+        keys[unity]=false;next();assert(next()==0);
+    }
+    keys['w']=keys[275]=true;
+    const auto runRadius=settledRadius();
+    windowsKey=VK_LSHIFT;const auto walkRadius=settledRadius();
+    assert(walkTurnEnabled);
+    assert(std::abs(walkRadius-.35f*160/2.54f)<.01f && walkRadius<runRadius && movement.touch.phase==Stationary);
+    screenDpi=[](){return 96.f;};
+    assert(std::abs(settledRadius()-.35f*96/2.54f)<.01f);
+    screenDpi=[](){return 0.f;};
+    assert(std::abs(settledRadius()-walkRadius)<.01f);
+    windowsKey=0;assert(std::abs(settledRadius()-runRadius)<.01f);
+    assert(!walkTurnEnabled);
+    windowsKey=VK_TAB;assert(std::abs(settledRadius()-walkRadius)<.01f);
+    windowsKey=0;assert(std::abs(settledRadius()-walkRadius)<.01f && walkTurnEnabled);
+    focus=false;next();assert(!walkTurnEnabled);
+    focus=true;assert(std::abs(settledRadius()-walkRadius)<.01f && walkTurnEnabled);
+    windowsKey=VK_TAB;assert(std::abs(settledRadius()-runRadius)<.01f);
+    windowsKey=0;next();keyboardFocus=HWND(3);windowsKey=VK_TAB;next();
+    keyboardFocus=HWND(1);assert(std::abs(settledRadius()-runRadius)<.01f);
+    keys.fill(false);windowsKey=0;next();next();
+    keyboardFocus=HWND(3);keys[273]=true;windowsKey='R';
+    assert(next()==0 && !autoRunRequested);
+    keys.fill(false);keyboardFocus=HWND(1);next();assert(!autoRunRequested);
+    windowsKey=0;next();windowsKey='R';next();assert(autoRunRequested);
+    autoRunRequested=false;next();assert(!autoRunRequested);windowsKey=0;next();
+    auto escape=[&](int edge){
+        State s{};s.gpr.x0.dword=VK_ESCAPE;
+        void *original=reinterpret_cast<void *>(+[](int)->uint8_t{return 0;});
+        if(edge==0)key<0>(s,original);
+        if(edge==1)key<1>(s,original);
+        if(edge==2)key<2>(s,original);
+        return s.gpr.x0.qword!=0;
+    };
+    sideDown=sideHeld=true;next();assert(escape(0)&&escape(1)&&!escape(2));
+    sideDown=false;next();assert(escape(0)&&!escape(1));
+    sideHeld=false;sideUp=true;next();assert(!escape(0)&&escape(2));
+    sideUp=false;keyboardFocus=HWND(3);sideDown=true;next();assert(!escape(1));
+    sideDown=false;keyboardFocus=HWND(1);next();
     down=held=true;assert(next()==1);auto start=read(0);assert(start.phase==Began && start.id==0);
     down=false;x+=24;y-=7;assert(next()==1);
     auto drag=read(0);assert(drag.id==start.id && drag.phase==Moved && drag.delta.x==24 && drag.delta.y==-7);
@@ -372,6 +434,15 @@ int main(){
     keys.fill(false);w=1600;h=900;next();
     connected=true;pad={};pad.sThumbLX=32767;clockMs+=1100;
     assert(next()==1 && read(0).phase==Began);
+    const auto full=settledRadius();pad.wButtons=XINPUT_GAMEPAD_LEFT_THUMB;
+    const auto slow=settledRadius();assert(slow>0 && slow<full);
+    pad.sThumbLX=10000;assert(settledRadius()<slow); // lighter tilt retains analog range
+    pad.sThumbLX=0;pad.wButtons=XINPUT_GAMEPAD_DPAD_UP;assert(std::abs(settledRadius()-slow)<.01f);
+    pad.wButtons|=XINPUT_GAMEPAD_LEFT_THUMB;assert(std::abs(settledRadius()-full)<.01f);
+    pad.wButtons=XINPUT_GAMEPAD_X;next();assert(autoRunRequested);autoRunRequested=false;
+    pad.sThumbLX=32767;next();assert(!autoRunRequested);
+    DIJOYSTATE buttons{};buttons.rgdwPOV[0]=0xffffffff;buttons.rgbButtons[0]=buttons.rgbButtons[10]=0x80;
+    assert(playStationState(buttons).wButtons==(XINPUT_GAMEPAD_X|XINPUT_GAMEPAD_LEFT_THUMB));
     connected=false;
     assert(next()==1 && read(0).phase==Canceled);
     assert(next()==0);
@@ -380,6 +451,6 @@ int main(){
     keys['d']=true;connected=false;
     assert(next()==1 && read(0).phase==Moved && read(0).delta.x>0);
     keys.fill(false);assert(next()==1 && read(0).phase==Ended);assert(next()==0);
-    std::puts("Native input frame, drag, tap, WASD, two physical fingers, focus loss, controller, web pages and resized coordinates passed.");
+    std::puts("Native input passed: WASD/arrows, walk hold/toggle, auto-run shortcuts, mouse Back, touch, controller, focus, web pages and resize.");
     return 0;
 }

@@ -4,7 +4,7 @@ using bunker::desktop_touch::Point;
 using bunker::desktop_touch::Touch;
 using bunker::desktop_touch::thumb;
 static int (*frame)(), (*width)(), (*height)(), (*physicalCount)();
-static float (*deltaTime)();
+static float (*deltaTime)(), (*screenDpi)();
 static void (*mousePosition)(float *);
 static void (*mouseScroll)(float *);
 static void (*physicalTouch)(int,Touch *);
@@ -39,7 +39,18 @@ static void sampleFingers(void (*read)(int,Touch *)){
     for (auto &finger : fingers) finger.id = fingerId(static_cast<uint32_t>(finger.id));
 }
 static bool padBack, lastBack;
-static bool skipRequested;
+static bool skipRequested, autoRunRequested;
+// A button held while focus returns or a controller reconnects is not a new press.
+struct Shortcut {
+    bool keyReady=false, padReady=false;
+    bool sample(bool game,bool connected,bool key,bool button){
+        const bool pressed=game && ((key && keyReady) || (connected && button && padReady));
+        keyReady=game && !key;
+        padReady=game && connected && !button;
+        return pressed;
+    }
+};
+static bool mouseBackHeld, mouseBackDown, mouseBackUp;
 static bool sparseMouse=std::getenv("REINCOMP_COMPARE_MENU_POINTER")==nullptr, needMouse=true;
 static uint64_t mouseChecks=0, idleChecks=0;
 enum class MouseAction { Down, Move, Up };
@@ -244,14 +255,14 @@ struct BrowserPad {
     bool route(HWND owner,bool connected,XINPUT_GAMEPAD &pad,POINT at,float dt,bunker::web_controller::HitTest hit,Send send){
         using namespace bunker::web_controller;
         uint32_t dashboard=0;
-        const uint32_t target=connected&&hit?hit(owner,at,&dashboard):0;
+        const uint32_t target=owner&&hit?hit(owner,at,&dashboard):0;
         const bool a=(pad.wButtons&XINPUT_GAMEPAD_A)!=0,b=(pad.wButtons&XINPUT_GAMEPAD_B)!=0;
         if(contact&&(!connected||window!=owner)){
             send(window,contact,Cancel,last,0);contact=0;
         }
         if(!connected){
             consumePress|=pressed;consumeBack|=back;fraction=0;
-            return false;
+            return dashboard!=0;
         }
         if(a&&!pressed&&target){
             window=owner;contact=target;last=at;consumePress=true;
@@ -415,40 +426,58 @@ static void advance(){
     GUITHREADINFO gui{sizeof(gui)};
     const bool gameKeys=focused && GetGUIThreadInfo(0,&gui) &&
                         (gui.hwndFocus==window || (parent && gui.hwndFocus==parent));
-    // Arm each binding after a released sample in the focused game. A key
-    // held across a focus change or a controller reconnect is not a press.
-    static bool keyReady=false,padReady=false;
-    // Use one clock for Space. A delayed Unity key-down after the Win32
-    // key-up can otherwise dispatch the same physical press twice.
-    const bool space=gameKeys && GetAsyncKeyState(VK_SPACE)<0;
-    const bool skipButton=(pad.wButtons&XINPUT_GAMEPAD_Y)!=0;
-    if(gameKeys && !dashboard && ((space && keyReady) || (skipButton && padReady))){
+    const bool fieldInput=gameKeys && !dashboard;
+    static Shortcut skip, autoRun, walkToggle;
+    static bool walking=false;
+    // Poll shortcuts on one clock. Unity can report a delayed key-down after
+    // the Win32 release of the same press.
+    const auto heldKey=[&](int vk){return fieldInput && GetAsyncKeyState(vk)<0;};
+    const bool space=heldKey(VK_SPACE);
+    if(skip.sample(fieldInput,padConnected,space,pad.wButtons&XINPUT_GAMEPAD_Y)){
         skipRequested=true;
         if(tracePointer)if(auto log=std::fopen("desktop-input.log","a")){
-            std::fprintf(log,"frame=%d skip input=%s\n",current,space && keyReady?"space":"controller");
+            std::fprintf(log,"frame=%d skip input=%s\n",current,space?"space":"controller");
             std::fclose(log);
         }
     }
-    keyReady=gameKeys && !dashboard && !space;
-    padReady=gameKeys && !dashboard && padConnected && !skipButton;
-    if(!gameKeys || dashboard)skipRequested=false;
+    if(autoRun.sample(fieldInput,padConnected,heldKey('R'),pad.wButtons&XINPUT_GAMEPAD_X))autoRunRequested=true;
+    if(walkToggle.sample(fieldInput,padConnected,heldKey(VK_TAB),pad.wButtons&XINPUT_GAMEPAD_LEFT_THUMB))walking=!walking;
+    if(!fieldInput){skipRequested=false;autoRunRequested=false;}
+    const bool backWasHeld=mouseBackHeld;
+    const bool backButton=fieldInput && mouseHeld(3);
+    mouseBackDown=fieldInput && mouseDown(3);
+    mouseBackHeld=backButton && (backWasHeld || mouseBackDown);
+    mouseBackUp=fieldInput && (backWasHeld || mouseBackDown) && mouseUp(3);
     if(focused&&!dashboard){
         // Unity can miss keyboard state when its window is embedded in the launcher.
         // The host can retain focus after Deploy. A focused WebView owns its own keys.
-        const bool embeddedKeys=parent && gameKeys;
-        auto active=[embeddedKeys](int key){
-            return keyHeld(key) || (keyDown && keyDown(key)) ||
-                   (embeddedKeys && GetAsyncKeyState(key-'a'+'A')<0);
+        auto active=[&](int key,int vk){
+            return fieldInput && (keyHeld(key) || (keyDown && keyDown(key)) || (parent && heldKey(vk)));
         };
-        keys.Set('W',active('w') || (pad.wButtons&XINPUT_GAMEPAD_DPAD_UP));
-        keys.Set('A',active('a') || (pad.wButtons&XINPUT_GAMEPAD_DPAD_LEFT));
-        keys.Set('S',active('s') || (pad.wButtons&XINPUT_GAMEPAD_DPAD_DOWN));
-        keys.Set('D',active('d') || (pad.wButtons&XINPUT_GAMEPAD_DPAD_RIGHT));
+        keys.Set('W',active('w','W') || (pad.wButtons&XINPUT_GAMEPAD_DPAD_UP));
+        keys.Set('A',active('a','A') || (pad.wButtons&XINPUT_GAMEPAD_DPAD_LEFT));
+        keys.Set('S',active('s','S') || (pad.wButtons&XINPUT_GAMEPAD_DPAD_DOWN));
+        keys.Set('D',active('d','D') || (pad.wButtons&XINPUT_GAMEPAD_DPAD_RIGHT));
+        // Unity's arrow KeyCodes have different values from Win32 virtual keys.
+        keys.Set(VK_UP,active(273,VK_UP));
+        keys.Set(VK_DOWN,active(274,VK_DOWN));
+        keys.Set(VK_RIGHT,active(275,VK_RIGHT));
+        keys.Set(VK_LEFT,active(276,VK_LEFT));
     }
     auto stick=keys.Target(w,h);
     auto analog=thumb(pad.sThumbLX,pad.sThumbLY,XINPUT_GAMEPAD_LEFT_THUMB_DEADZONE);
     Point origin{stick.origin_x,h-stick.origin_y};
     Point target=stick.active?Point{stick.x,h-stick.y}:Point{origin.x+analog.x*h*.15f,origin.y+analog.y*h*.15f};
+    const bool walkInput=(walking || heldKey(VK_LSHIFT)) && (target.x!=origin.x || target.y!=origin.y);
+    if(walkInput){
+        // The field measures pans in centimetres. 0.35 cm lies between the
+        // gesture dead zone and the first running step, at any window size.
+        // Match the game's Display.GetDpi fallback for an unknown screen DPI.
+        const float dpi=screenDpi?screenDpi():0.f;
+        const float walkRadius=.35f*(dpi>0?dpi:160.f)/2.54f;
+        auto limited=bunker::windows::keyboard_touch::Step(origin.x,origin.y,target.x,target.y,walkRadius);
+        target={limited.first,limited.second};
+    }
     bool moving=stick.active || analog.x || analog.y;
     // The game records the floating stick's center at Began. Its old pixel
     // coordinates are no longer valid after a resize or fullscreen switch.
@@ -473,6 +502,13 @@ static void advance(){
         target={p.first,p.second};
     }
     movement.sample(0x40000001,false,moving,false,cancelMovement,origin,target,dt);
+    const bool walkTurn=walkInput && movement.held && !realCount && !pointer.held && !padPointer.held;
+    static bool lastWalkTurn=false;
+    if(walkTurn!=lastWalkTurn){
+        static auto setWalkTurn=reinterpret_cast<void(*)(bool)>(GetProcAddress(GetModuleHandleW(L"GameAssembly.dll"),"SetDesktopWalkTurn"));
+        if(setWalkTurn)setWalkTurn(walkTurn);
+        lastWalkTurn=walkTurn;
+    }
     if(tracePointer && movement.visible && movement.touch.phase!=bunker::desktop_touch::Stationary){
         if(auto log=std::fopen("desktop-input.log","a")){
             std::fprintf(log,"frame=%d movement phase=%d position=%.0f,%.0f delta=%.0f,%.0f\n",
@@ -516,6 +552,7 @@ template<int edge> static void key(State &s,void *fn){
     if(s.gpr.x0.dword==27){
         advance();
         bool active=edge==0?padBack:edge==1?padBack&&!lastBack:!padBack&&lastBack;
+        active|=edge==0?mouseBackHeld:edge==1?mouseBackDown:mouseBackUp;
         if(active){s.gpr.x0.qword=1;return;}
     }
     invoke<uint8_t,int32_t>(s,fn);
@@ -526,6 +563,7 @@ static Call bind(const char *keyName,void *fn){
     else if(keyNameView=="UnityEngine.Time::get_unscaledDeltaTime")deltaTime=reinterpret_cast<decltype(deltaTime)>(fn);
     else if(keyNameView=="UnityEngine.Screen::get_width")width=reinterpret_cast<decltype(width)>(fn);
     else if(keyNameView=="UnityEngine.Screen::get_height")height=reinterpret_cast<decltype(height)>(fn);
+    else if(keyNameView=="UnityEngine.Screen::get_dpi")screenDpi=reinterpret_cast<decltype(screenDpi)>(fn);
     else if(keyNameView=="UnityEngine.Input::GetMouseButton")mouseHeld=reinterpret_cast<decltype(mouseHeld)>(fn);
     else if(keyNameView=="UnityEngine.Input::GetMouseButtonDown")mouseDown=reinterpret_cast<decltype(mouseDown)>(fn);
     else if(keyNameView=="UnityEngine.Input::GetMouseButtonUp")mouseUp=reinterpret_cast<decltype(mouseUp)>(fn);

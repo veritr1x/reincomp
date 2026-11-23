@@ -44,10 +44,12 @@ struct DualSenseReport {
         pad.sThumbRX = axis(p[2]); pad.sThumbRY = axis(255 - p[3]);
         pad.bLeftTrigger = p[4]; pad.bRightTrigger = p[5];
         pad.wButtons = hatDirection(p[7] & 15);
+        if (p[7] & 0x10) pad.wButtons |= XINPUT_GAMEPAD_X; // Square
         if (p[7] & 0x20) pad.wButtons |= XINPUT_GAMEPAD_A;
         if (p[7] & 0x40) pad.wButtons |= XINPUT_GAMEPAD_B;
         if (p[7] & 0x80) pad.wButtons |= XINPUT_GAMEPAD_Y;
         if (p[8] & 0x20) pad.wButtons |= XINPUT_GAMEPAD_BACK; // Options
+        if (p[8] & 0x40) pad.wButtons |= XINPUT_GAMEPAD_LEFT_THUMB;
         // The mechanical click is independent of finger contact. Remember a
         // short click even if its release arrives in the same batch of reports.
         const bool down = (p[9] & 0x02) != 0;

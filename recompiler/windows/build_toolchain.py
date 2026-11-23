@@ -55,7 +55,7 @@ def fetch(work, name, source):
 
 
 def lifter_sources(remill, build):
-    """Translation units shared by the Windows and WebAssembly builds."""
+    """Translation units shared by the native and WebAssembly builds."""
     sources = [remill / 'lib/Arch' / n for n in ('Arch.cpp', 'Context.cpp', 'Instruction.cpp', 'Name.cpp')]
     sources += [remill / 'lib/Arch/AArch64' / n for n in ('Arch.cpp', 'Decode.cpp', 'Extract.cpp')]
     sources += [remill / 'lib/Arch/Sleigh/AArch64Base.cpp']
@@ -71,6 +71,20 @@ def generate_lifter_sources(remill, build):
     version = (remill / 'lib/Version/Version.cpp.in').read_text()
     version = version.replace('@GIT_RETRIEVED_STATE@', 'true').replace('@GIT_IS_DIRTY@', 'false').replace('@GIT_HEAD_SHA1@', REMILL[1])
     (build / 'Version.cpp').write_text(re.sub(r'@[A-Z_0-9]+@', '', version))
+
+
+def build_semantics(remill, sem, clangxx, llvm_link, dest):
+    sem.mkdir(exist_ok=True)
+    sysroot = remill / 'include/remill/Arch/Runtime/sysroot'
+    common = [f'-I{remill / "include"}', f'-I{remill}', '-target', 'aarch64-none-elf', '-DADDRESS_SIZE_BITS=64', '-DLITTLE_ENDIAN=1',
+              f'--sysroot={sysroot}', '-nostdinc++', '-isystem', sysroot, '-emit-llvm', '-w', '-fno-vectorize', '-fno-slp-vectorize',
+              '-ffreestanding', '-fno-common', '-fno-builtin', '-fno-exceptions', '-fno-rtti', '-fno-asynchronous-unwind-tables',
+              '-std=c++17']
+    units = (('i', 'lib/Arch/AArch64/Runtime/Instructions.cpp', ['-O3', '-g0']), ('b', 'lib/Arch/AArch64/Runtime/BasicBlock.cpp', ['-O0', '-g3']),
+             ('n', 'lib/Arch/Runtime/Intrinsics.cpp', []), ('h', 'lib/Arch/Runtime/HyperCall.cpp', []))
+    for name, source, level in units:
+        run([clangxx, *common, *level, '-c', remill / source, '-o', sem / f'{name}.bc'])
+    run([llvm_link, '--suppress-warnings', *[sem / f'{name}.bc' for name, _, _ in units], '-o', dest])
 
 
 def main():
@@ -107,18 +121,7 @@ def main():
     print('gflags and glog: built')
 
     # The semantics: Remill's AArch64 instruction bodies as LLVM bitcode, with the flags of its BCCompiler.cmake.
-    sem = work / 'semantics'
-    sem.mkdir(exist_ok=True)
-    sysroot = remill / 'include/remill/Arch/Runtime/sysroot'
-    common = [f'-I{remill / "include"}', f'-I{remill}', '-target', 'aarch64-none-elf', '-DADDRESS_SIZE_BITS=64', '-DLITTLE_ENDIAN=1',
-              f'--sysroot={sysroot}', '-nostdinc++', '-isystem', sysroot, '-emit-llvm', '-w', '-fno-vectorize', '-fno-slp-vectorize',
-              '-ffreestanding', '-fno-common', '-fno-builtin', '-fno-exceptions', '-fno-rtti', '-fno-asynchronous-unwind-tables',
-              '-std=c++17']
-    units = (('i', 'lib/Arch/AArch64/Runtime/Instructions.cpp', ['-O3', '-g0']), ('b', 'lib/Arch/AArch64/Runtime/BasicBlock.cpp', ['-O0', '-g3']),
-             ('n', 'lib/Arch/Runtime/Intrinsics.cpp', []), ('h', 'lib/Arch/Runtime/HyperCall.cpp', []))
-    for name, source, level in units:
-        run([clangxx, *common, *level, '-c', remill / source, '-o', sem / f'{name}.bc'])
-    run([llvm / 'bin/llvm-link.exe', '--suppress-warnings', *[sem / f'{name}.bc' for name, _, _ in units], '-o', out / 'aarch64.bc'])
+    build_semantics(remill, work / 'semantics', clangxx, llvm / 'bin/llvm-link.exe', out / 'aarch64.bc')
     print('semantics: aarch64.bc')
 
     # The lifter.

@@ -5,6 +5,21 @@
 #include "player-window.h"
 #include "screen-route.h"
 #include "desktop-skip.h"
+// Picturebook input snaps a reversal to RunPanLevel regardless of drag length.
+// Use the game's walk level for that turn while a desktop walk gesture is held.
+extern "C" __declspec(dllexport) void SetDesktopWalkTurn(bool walking){
+    static P level=[]{
+        auto cls=desktop_skip::type("Dark.Animation","ActorControllerWithGesturePan");
+        if(!cls)return P{};
+        il2cpp_runtime_class_init(cls);
+        return il2cpp_class_get_field_from_name(cls,"RunPanLevel");
+    }();
+    if(!level)return;
+    static int original;
+    if(walking)invoke("il2cpp_field_static_get_value",level,&original);
+    int desired=walking?1:original;
+    invoke("il2cpp_field_static_set_value",level,&desired);
+}
 static std::chrono::steady_clock::time_point titleStarted{};
 static uint32_t routeTitleHandle=0;
 static uint32_t routeAutoHandle=0;
@@ -275,7 +290,9 @@ static void observePlayerFrame(){
     static auto desktopInput=reinterpret_cast<void(*)()>(GetProcAddress(GetModuleHandleW(L"EngineCalls.dll"),"AdvanceDesktopInput"));
     if(desktopInput)desktopInput();
     static auto skipPressed=reinterpret_cast<bool(*)()>(GetProcAddress(GetModuleHandleW(L"EngineCalls.dll"),"ConsumeDesktopSkip"));
-    if(skipPressed && skipPressed())desktop_skip::press(width(),height());
+    if(skipPressed && skipPressed())desktop_skip::press(desktop_skip::Action::Skip,width(),height());
+    static auto autoRunPressed=reinterpret_cast<bool(*)()>(GetProcAddress(GetModuleHandleW(L"EngineCalls.dll"),"ConsumeDesktopAutoRun"));
+    if(autoRunPressed && autoRunPressed())desktop_skip::press(desktop_skip::Action::AutoRun,width(),height());
     if(frame_cpu::enabled)frame_cpu::begin(id);
     int renderInterval=checkpoint && requestedRate && applyInterval ? applyInterval(requestedRate) : 0;
 #ifdef REINCOMP_BUNKER_MODULES
