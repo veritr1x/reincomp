@@ -82,3 +82,11 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: gh release create "$GITHUB_REF_NAME" dist/*.zip dist/*.exe --title "re[in]comp ${GITHUB_REF_NAME#v}" --notes-file dist/notes.md --verify-tag
+
+  recomplauncher:
+    needs: release
+    permissions:
+      contents: write
+    uses: ./.github/workflows/recomplauncher.yml
+    with:
+      tag: ${{ github.ref_name }}

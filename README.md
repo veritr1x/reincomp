@@ -30,6 +30,18 @@ to verify keyboard movement in a field or storybook scene.
 
 To build from source instead, see [BUILDING.md](BUILDING.md).
 
+### Play with RecompLauncher
+
+In RecompLauncher, use the `reincomp-<version>-windows-x64.zip` or
+`reincomp-<version>-linux-x64.tar.gz` package from the
+[reincomp release](https://github.com/veritr1x/reincomp/releases/latest).
+You can also extract the package and select its folder under **Add a build**
+with developer tools enabled. Choose the Global 3.7.1 ARM64 APK,
+`20240404193219.bin.e`, and your Android resource dump (7z or ZIP) in
+**Easy Setup**, then select **Play**. Setup runs locally. RecompLauncher
+can back up and restore the Bunker save. Its game settings include frame rate
+and sound on Windows and window mode on Linux.
+
 ### Play the TAR on Linux
 
 On x86-64 Linux, choose **Linux** in [Bunker's web builder](https://veritr1x.github.io/bunker/)

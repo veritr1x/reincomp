@@ -1,0 +1,30 @@
+{
+  "format": 1,
+  "name": "NieR Re[in]carnation",
+  "repo": "veritr1x/reincomp",
+  "inputs": [
+    {"id": "game", "label": "Global 3.7.1 ARM64 APK", "role": "game", "formats": [{"type": "file", "extensions": ["apk"]}],
+     "dumps": [{"name": "Global 3.7.1 (152) ARM64", "size": 263571029, "crc32": "a824873e"}]},
+    {"id": "master", "label": "Original master data (20240404193219.bin.e)", "role": "update", "formats": [{"type": "file", "extensions": ["e"]}],
+     "dumps": [{"name": "Global April 2024 master data", "size": 7801104, "crc32": "95cdf8d9"}]},
+    {"id": "resources", "label": "Android resource dump", "role": "update", "formats": [{"type": "file", "extensions": ["7z", "zip"]}]}
+  ],
+  "prepare": {
+    "label": "Prepare the offline game",
+    "program": ["pods/python/python.exe"],
+    "args": ["-I", "-B", "{install}/setup/prepare.py", "{input:game}", "{input:master}", "{input:resources}"],
+    "done": ["{data}/ready", "{install}/game/WindowsPlayer_Data/globalgamemanagers", "{install}/data/assets/assets/release/20240404193219.bin.e"]
+  },
+  "start": {"program": ["launcher.exe"]},
+  "settings": [
+    {"id": "framerate", "label": "Frame rate", "in": "args", "choices": [
+      {"label": "Bunker setting", "args": []}, {"label": "30 FPS", "args": ["-fps=30"]},
+      {"label": "60 FPS", "args": ["-fps=60"]}, {"label": "120 FPS", "args": ["-fps=120"]}
+    ]},
+    {"id": "sound", "label": "Sound", "in": "args", "choices": [
+      {"label": "On", "args": []}, {"label": "Muted", "args": ["-nosound"]}
+    ]}
+  ],
+  "saves": ["{install}/data/server/game.db", "{install}/data/server/auth.db", "{install}/data/server/auth.key"],
+  "folders": {"logs": [{"path": "{install}/data"}]}
+}

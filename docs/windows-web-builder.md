@@ -26,6 +26,16 @@ It verifies the pack against the matching kit and serves the selected runtime
 parts publicly. Player APKs, master data, saves and resource dumps stay on
 the player's device.
 
+### RecompLauncher release packages
+
+Record the same runtime manifest SHA-256 in `portable.runtimeManifestSHA256`
+in reincomp's `release.lock.json` before tagging. The release workflow packages
+the Windows player and native Linux runtime for RecompLauncher once the matching
+Pages build and native runtime are public. If either is published later, run
+**RecompLauncher packages** with the release tag. Each archive includes its
+platform's `recomplauncher.json`. The packager takes its dependencies from
+the pinned public releases and accepts local copies for testing.
+
 ## Testing a first build
 
 On Windows, run the following command using Node.js 22 or later and Microsoft

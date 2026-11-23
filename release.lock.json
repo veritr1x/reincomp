@@ -1,6 +1,7 @@
 {
   "portable": {
     "bunkerVersion": "1.12.23",
+    "runtimeManifestSHA256": "b39efa50e069af2f209de8a01ef410cad225714709573f7e3f98ef3a9d1c89cb",
     "sha256": "b5a0154e597f9e348e2ddddff4bbfb9ae2f3c60f7b047b3be43aea7dd7f2e49a",
     "size": 1057902864,
     "playerMembers": {

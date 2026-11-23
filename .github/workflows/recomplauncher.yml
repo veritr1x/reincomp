@@ -1,0 +1,59 @@
+name: RecompLauncher packages
+
+on:
+  workflow_call:
+    inputs:
+      tag:
+        type: string
+        required: true
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Published reincomp tag to package
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 100
+    permissions:
+      contents: write
+    env:
+      TAG: ${{ inputs.tag }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Check release tag
+        run: '[[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]'
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag }}
+          persist-credentials: false
+      - name: Wait for the matching web builder and native runtime
+        run: |
+          version="$(cat launcher/VERSION)"
+          test "v$version" = "$TAG"
+          for attempt in $(seq 1 60); do
+            if curl -fsSL https://veritr1x.github.io/bunker/version.json | jq -e --arg v "$version" '.windows and .reincompVersion == $v' >/dev/null &&
+               gh release view "$TAG" --json assets | jq -e --arg name "reincomp-linux-x86_64-$version.tar.gz" 'any(.assets[]; .name == $name)' >/dev/null; then
+              exit 0
+            fi
+            sleep 60
+          done
+          echo "Run RecompLauncher packages again once Pages and the Linux runtime are published." >&2
+          exit 1
+      - name: Build the two platform archives
+        run: |
+          python3 build/recomplauncher/package.py windows --cache cache --out dist
+          python3 build/recomplauncher/package.py linux --cache cache --out dist
+      - name: Attach packages to the release
+        run: |
+          for file in dist/*.zip dist/*.tar.gz; do
+            name="$(basename "$file")"
+            if ! gh release view "$TAG" --json assets | jq -e --arg n "$name" 'any(.assets[]; .name == $n)' >/dev/null; then
+              gh release upload "$TAG" "$file"
+            fi
+          done
