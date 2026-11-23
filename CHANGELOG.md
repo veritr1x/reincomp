@@ -3,6 +3,10 @@
 What changed, newest first, by date and area. A release's heading comes
 above the dated sections it holds.
 
+## 0.3.6 (2026-11-24)
+
+- Fixed a Windows crash when closing Mama's menu after the first Loadout tutorial. Closing the menu now returns to the field after saving the deck.
+
 ## 0.3.5 (2026-11-23)
 
 - Build a native x86-64 Linux player in Bunker’s web builder. Choose **Linux** and select the original Global 3.7.1 ARM64 APK and `20240404193219.bin.e`. Both inputs stay on your device.

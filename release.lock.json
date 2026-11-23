@@ -1,11 +1,11 @@
 {
   "portable": {
     "bunkerVersion": "1.12.23",
-    "runtimeManifestSHA256": "b39efa50e069af2f209de8a01ef410cad225714709573f7e3f98ef3a9d1c89cb",
-    "sha256": "b5a0154e597f9e348e2ddddff4bbfb9ae2f3c60f7b047b3be43aea7dd7f2e49a",
-    "size": 1057902864,
+    "runtimeManifestSHA256": "ca1a51b34d5e42815fa848d6c0bbcecdbca478bf8729052eba5225ed28d959a8",
+    "sha256": "5679e89724c33b145fb43f47e742544e23c9bb8821d893cb215058066e5a2b7f",
+    "size": 1057902948,
     "playerMembers": {
-      "game/EngineCalls.dll": "d283f016383aaf96dbd3f95acbe2056ba9ddd2df1d6ede1d8c62db2b6cc8dc8d",
+      "game/EngineCalls.dll": "a7ce74e9399d32ecae8a25e4e6b29dde2097da8046a9dbef617ff87051957893",
       "game/Fsr31.dll": "0f74d7dcbeba57d8870a34eb594edd1ba88f3b751a12e226af7899cab2246884",
       "game/GameAssembly.dll": "d608a159906ed78508ce4a2c3e759bf31da5ee5abbdf68a586bc185167635748",
       "game/WindowsPlayer.exe": "1d2a5afd032eee54d4064719904365f003ed02db8eb75d8476dd55cd6385cafe",
@@ -20,7 +20,7 @@
       "game/resource-setup.html": "d86f61c65deab1fd9033683a0e57a7ce35bbbcb82674dbe4d37ce3bbdd2bcfcd",
       "game/resource-window.exe": "5c870a7c5d7b9a631d3a7b2063950a60e5ad189e58ef8a5ce060a8da4d688e04",
       "game/resource_setup.py": "321c36089656be29e08a879eb2332bcb9039db84890b4ef5391dce68b76abbd3",
-      "launcher.exe": "3321fc66ad196b6c37f85cf963ace341a9492fa8c89fed6a2d99240366d1c214",
+      "launcher.exe": "d5b6cd010c5a9c96a99e24159af19b1be8ed636c8edea0d9628a9515f5be47de",
       "pods/VERSION": "1190cbd2a7006335d6e8a4c96ad87023bd32c76eecb0c1f1d39e010ca4b7bfdc",
       "pods/app/archive/static/archive.css": "8f20523fbb327ba8502e4c83b676b105c23160e404244fd001107be4288bc7ad",
       "pods/app/archive/templates/base.html": "6ebb5bb56648c3cce2fdcb9152d08ce0f66246d5357aafdf609e17c001903fd0",
@@ -41,7 +41,7 @@
   },
   "linuxRuntime": {
     "bunkerVersion": "1.12.23",
-    "asset": "reincomp-linux-x86_64-0.3.5.tar.gz",
+    "asset": "reincomp-linux-x86_64-0.3.6.tar.gz",
     "sha256": "92e352ba26f11617caf3526ac4862ab1f3aafb89fb277f5e820fcd65bba84972",
     "size": 272297976
   },

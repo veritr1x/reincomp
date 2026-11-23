@@ -271,6 +271,14 @@ extern "C" __declspec(dllexport) Call BindEngineCall(const char *key,void *fn) {
            GetEnvironmentVariableW(L"REINCOMP_INTERACTIVE_WINDOW",nullptr,0))return [](State &,void *){};
         if(auto callback=desktop_input::bind(key,fn))return callback;
         if(!std::strcmp(key,"UnityEngine.Screen::get_safeArea_Injected"))return picturebookSafeArea;
+        if(!std::strcmp(key,"UnityEngine.Behaviour::set_enabled"))return [](State &s,void *original){
+            // TutorialIconAnimationView.Cancel disables its two Animators. Its
+            // continuation can run after closing the menu destroyed their native objects.
+            const auto caller=s.gpr.x30.qword;
+            if((caller==0x82892fd4 || caller==0x82892fe8) &&
+               !nativeUnityObjectAlive(reinterpret_cast<P>(s.gpr.x0.qword)))return;
+            invoke<void,P,uint8_t>(s,original);
+        };
         if(!std::strcmp(key,"UnityEngine.Behaviour::get_isActiveAndEnabled"))return [](State &s,void *original){
             // The Exchange shop can finish loading a row icon after Unity has
             // destroyed its Graphic. SetVerticesDirty has nothing to schedule

@@ -4,8 +4,8 @@
     "release": "v1.12.23",
     "commit": "b64d6be4cd2a99622dac3a9a95b10fc77b08f03c",
     "browserKit": {
-      "file": "bunker-windows-browser-1.12.23-reincomp-0.3.5.zip",
-      "sha256": "d556fcfb9052b74a37d300c925a4b1a043a1c00f6de3c550407f0af4435f18d6"
+      "file": "bunker-windows-browser-1.12.23-reincomp-0.3.6.zip",
+      "sha256": "04ce6b31140aa07a8598796555f5cea338f5043774052235f09ba6f65b402de1"
     },
     "server": {
       "linux-x86_64": {
