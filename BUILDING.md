@@ -35,11 +35,15 @@ The experimental native x86-64 player uses Unity 2019.4.29f1's
 `linux64_withgfx_nondevelopment_il2cpp` module, its matching
 `UnityPlayer_s.debug`, and a prepared install's `.bunker-player` directory.
 Build on x86-64 Linux with Python 3.11+, a C++17 compiler, CMake, GNU
-binutils and the recompiler dependencies listed below.
+binutils, the OpenSSL development headers (`libssl-dev` on Ubuntu), and the
+recompiler dependencies listed below.
 
 ```sh
 install="/path/to/.bunker-player"
 unity="/path/to/linux64_withgfx_nondevelopment_il2cpp"
+python3 -m venv build-output/linux-python
+. build-output/linux-python/bin/activate
+python -m pip install UnityPy==1.25.4
 python3 recompiler/linux/build_toolchain.py --out build-output/linux-tools
 python3 build/linux_player/build_game_assembly.py --lib "$install/data/native/libil2cpp.so" \
     --unity "$unity" --toolchain build-output/linux-tools --out build-output/linux-assembly
@@ -48,16 +52,79 @@ python3 build/linux_player/stage.py --install "$install" --unity "$unity" \
 build-output/linux-player/Reincarnation.x86_64 -batchmode -nographics -logFile /dev/stderr
 ```
 
-The builder compiles the original VM bootstrap to x86-64 ELF. The staging
+The default build compiles the VM bootstrap, managed core library, render pipeline,
+and scene-load initializers to x86-64 ELF. To compile the entire game method inventory, pass
+`--heads game/heads-il2cpp.txt` to the assembly build and use a separate output
+directory to keep the smaller bootstrap build available. Use `--jobs N` to set
+the number of compiler workers and `--scratch /path/on/local/filesystem` for
+temporary LLVM files when the build output is on a slower drive. The staging
 command converts the startup files to Unity's Linux64 target and installs
 the ARM data image beside the managed metadata. Choose a new output directory.
-The native player loads the assembly, runs the original static constructors,
-registers Unity's internal calls and starts managed runtime initialization.
-Native 2D and 3D gameplay are still unverified.
+On Ubuntu under WSL2 the full build compiled 536,472 ARM entries to x86-64,
+started the original render pipeline, and displayed the animated title screen
+in an OpenGL 4.5 window using Mesa llvmpipe. The staged-library
+test loads all 110 managed assemblies, allocates a managed string, checks which
+objects Unity can reach in a cyclic array, and verifies that live objects on
+native worker stacks survive garbage collection. Movement in the 3D Cage
+(`tw002001`) and the 2D storybook (`pb_ma0100001`) has been verified under
+both Proton and native Linux. On native Linux, W/S reversed the field
+character's movement and D/A reversed the storybook character's movement.
+Two story battles (scenes 11 and 20) finished and advanced to the next story
+scene. The first accepted a manual weapon skill. A separate test of quest 13
+used a level-one party to exercise defeat, then a level-40 test party to
+clear all three waves. The local Bunker server recorded each wave and both
+quest outcomes.
+Set `REINCOMP_NATIVE_TRACE_CALLS=1` when launching the player to log which
+managed methods Unity invokes during scene loading.
+
+Keep the virtual environment active when starting the native player. The first
+game bundle opens a Python conversion worker. It reuses converted OpenGL bundles
+in `$XDG_CACHE_HOME/reincomp/linux-bundles-v1` (or `~/.cache/reincomp/linux-bundles-v1`).
 
 To include the offline server, pass `--server /path/to/bunker-server-1.12.23-linux-x86_64`
-to the staging command. It verifies the release checksum. The server can
-check its game, asset and account endpoints against a private save on Linux.
+to the staging command. To include its game-side gRPC client, also pass
+`--grpc-package /path/to/grpc.core.2.26.0.nupkg` with the official Grpc.Core
+2.26.0 NuGet package. Staging checks the Linux extension's SHA-256 and includes
+the gRPC notices from the prepared install. The game adapter maps its loopback
+channel to Bunker's game port (8003 by default). If starting the server with
+`-port-offset N`, set `REINCOMP_BUNKER_PORT_OFFSET=N` for the player.
+The same offset applies to the asset HTTP port (8080 by default). The original
+managed client has connected to the Linux server through the game's gRPC
+library. The server can check its game, asset and account endpoints against a
+private save on Linux.
+
+For normal startup with the full game assembly, pass `--firebase-package
+/path/to/com.google.firebase.app-9.6.0.tgz` to the staging command as well.
+Use Google's Firebase App Unity package for version 9.6.0 and install
+`libsecret-1-0` on Ubuntu. Staging verifies the Linux plugin's SHA-256 and
+copies the game's service configuration and SDK notices from the prepared
+install.
+
+To launch the full native test build with a window, use the same activated
+Python environment and Unity module as above. Choose a new staging directory,
+an imported asset library, and a writable test copy of the matching Bunker save.
+
+```sh
+python3 build/linux_player/build_game_assembly.py --lib "$install/data/native/libil2cpp.so" \
+    --unity "$unity" --toolchain build-output/linux-tools --heads game/heads-il2cpp.txt \
+    --out build-output/linux-full-assembly
+python3 build/linux_player/stage.py --install "$install" --unity "$unity" \
+    --game-assembly build-output/linux-full-assembly/GameAssembly.so \
+    --grpc-package /path/to/grpc.core.2.26.0.nupkg \
+    --firebase-package /path/to/com.google.firebase.app-9.6.0.tgz \
+    --server /path/to/bunker-server-1.12.22-linux-x86_64 --out build-output/linux-full-player
+
+(
+    cd build-output/linux-full-player || exit 1
+    ./bunker-server -data "/path/to/test-save" -assets "/path/to/imported-assets" &
+    server=$!
+    trap 'kill -TERM "$server" 2>/dev/null || true' EXIT
+    ./Reincarnation.x86_64 -force-glcore
+)
+```
+
+The title screen accepts a mouse tap. To check the Linux server separately, run
+its self-test against a private save.
 
 ```sh
 build-output/linux-player/bunker-server -data "/path/to/test-save" \
@@ -85,12 +152,29 @@ The optional final argument enables a native engine ABI test using GNU
 binutils and the module's matching `UnityPlayer_s.debug`. It recovers the
 Linux internal-call addresses, calls Unity's native transform constructor,
 and composes the resulting matrices using the original game's translated
-`libunity.so` routine. To exercise the exported C functions and internal-call
-registration of the actual staged shared library, run:
+`libunity.so` routine. The following test exercises the exported C functions
+and internal-call registration of the staged shared library.
 
 ```sh
 python3 recompiler/tests/linux-game-assembly.py build-output/linux-player build-output/linux-il2cpp/engine-calls.json
 ```
+
+With GDB installed, the following test starts the staged Unity player with an
+empty temporary cache, opens both original decrypted UnityFS bundles, and
+checks their scene paths and the storybook stream position.
+
+```sh
+python3 recompiler/tests/linux-scene-bundles.py build-output/linux-player \
+    /path/to/tw002001.androidbundle /path/to/pb_ma0100001.androidbundle
+```
+
+With a full build, add `--activate-scenes --check-streaming` to instantiate
+and unload both scenes and verify that Unity reads the original packaged JPEG.
+Add `--battle-field /path/to/field01.androidbundle` to instantiate the battle
+arena and check the game's damage calculation. Add `--check-download` to
+exercise the mission clock, check available cache space, and download a file
+from a temporary loopback server through Octo. The test compares the file's
+bytes and MD5 checksum. These checks also work in an install path with spaces.
 
 ## What to install
 

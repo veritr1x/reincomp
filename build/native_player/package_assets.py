@@ -18,10 +18,11 @@ def copy_asset(source, destination):
     return destination
 
 
-def stage(apk, folder, metadata):
-    data = folder/'game/WindowsPlayer_Data'
+def stage(apk, folder, metadata, *, linux=False):
+    data = folder/'Reincarnation_Data' if linux else folder/'game/WindowsPlayer_Data'
+    platform = 24 if linux else 19
     assets = folder/'data/apk-assets'
-    native = folder/'data/native'
+    native = data/'Native' if linux else folder/'data/native'
     for target in (data, assets, native):
         target.mkdir(parents=True, exist_ok=True)
     with ZipFile(apk) as z:
@@ -29,9 +30,13 @@ def stage(apk, folder, metadata):
             if entry.is_dir():
                 continue
             path = PurePosixPath(entry.filename)
-            if path.parts[:1] == ('assets',):
+            if linux and path.parts[:1] == ('assets',) and path.parts[1:2] != ('bin',):
+                if path.suffix == '.dex':
+                    continue
+                target = (data/'StreamingAssets').joinpath(*path.parts[1:])
+            elif path.parts[:1] == ('assets',):
                 target = assets.joinpath(*path.parts[1:])
-            elif entry.filename in ('lib/arm64-v8a/libil2cpp.so','lib/arm64-v8a/libunity.so'):
+            elif entry.filename == 'lib/arm64-v8a/libil2cpp.so' or (not linux and entry.filename == 'lib/arm64-v8a/libunity.so'):
                 target = native/path.name
             else:
                 continue
@@ -88,15 +93,17 @@ def stage(apk, folder, metadata):
                 obj.save_typetree(tree)
                 changed = True
         if changed:
-            asset._m_target_platform = 19
+            asset._m_target_platform = platform
             dest.write_bytes(asset.save())
         elif header[31:36] == b'\0\x0d\0\0\0':
             # Unity rejects even platform-independent levels and prefabs when
             # their SerializedFile header still declares the Android target.
             with dest.open('r+b') as stream:
                 stream.seek(32)
-                stream.write((19).to_bytes(4, 'little'))
+                stream.write(platform.to_bytes(4, 'little'))
     (data/'Managed/Metadata/global-metadata.dat').write_bytes(metadata)
+    if linux:
+        return
     # The Android IL2CPP backend opens these through its mounted private
     # storage. The Windows player does not perform Android's first-run copy.
     shutil.copytree(data/'Managed', folder/'data/storage/files/il2cpp', dirs_exist_ok=True, copy_function=copy_asset)

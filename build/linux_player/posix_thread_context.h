@@ -20,6 +20,7 @@ public:
         size_t stackSize = 2 << 20;
         size_t guardSize = 4096;
         std::optional<uint64_t> inheritedMask;
+        bool guestCreated = false;
     };
     explicit PosixThreadContext(Runner runner) : run(std::move(runner)) {
         if (auto error=pthread_key_create(&key,retire)) throw std::system_error(error,std::generic_category());
@@ -40,6 +41,7 @@ public:
     }
 protected:
     Runner run;
+    std::mutex keyLock;
     int createKey(unsigned *out,addr_t destructor) {
         std::lock_guard guard(keyLock);
         if (destructors.size() >= PTHREAD_KEYS_MAX || nextKey == UINT_MAX) return EAGAIN;
@@ -66,7 +68,6 @@ protected:
     }
 private:
     pthread_key_t key;
-    std::mutex keyLock;
     std::map<unsigned,addr_t> destructors;
     unsigned nextKey=0;
     static void retire(void *ptr) {

@@ -1,12 +1,17 @@
+#include <cfenv>
+#ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
+#else
+#include <dlfcn.h>
+#include <link.h>
+#endif
 #include "firebase_app.h"
 #include "../runtime/bridge.h"
 #include "../runtime/guest_memory.h"
 #include <algorithm>
 #include <array>
 #include <cerrno>
-#include <cfenv>
 #include <cstdio>
 #include <cstring>
 #include <exception>
@@ -21,9 +26,17 @@ namespace bunker::windows {
 namespace {
 void Need(bool yes,const char *message){if(!yes)throw std::runtime_error(message);}
 struct Environment {
-  DWORD error=GetLastError();int saved_errno=errno;std::fenv_t floating{};
+#ifdef _WIN32
+  DWORD error=GetLastError();
+#endif
+  int saved_errno=errno;std::fenv_t floating{};
   Environment(){std::fegetenv(&floating);}
-  void Restore()const noexcept{std::fesetenv(&floating);errno=saved_errno;SetLastError(error);}
+  void Restore()const noexcept{
+    std::fesetenv(&floating);errno=saved_errno;
+#ifdef _WIN32
+    SetLastError(error);
+#endif
+  }
 };
 struct BoundaryEnvironment {
   Environment entry;
@@ -111,8 +124,15 @@ struct FirebaseAppService::Impl {
   using LogCallback=void(*)(int32_t,const char*);
   using RegisterExceptions=void(*)(Exception,Exception,Exception,Exception,Exception,Exception,Exception,Exception,Exception,Exception,Exception);
   using RegisterArguments=void(*)(ArgumentException,ArgumentException,ArgumentException);
-  Config config;HMODULE library=nullptr;
-  std::map<std::string,FARPROC> exports;
+  Config config;
+#ifdef _WIN32
+  using Symbol=FARPROC;
+  HMODULE library=nullptr;
+#else
+  using Symbol=void *;
+  void *library=nullptr;
+#endif
+  std::map<std::string,Symbol> exports;
   mutable std::mutex mutex;bool revoked=false,registering=false;size_t imports=0,callbacks=0;
   // Per-thread SDK-call ownership. The game legitimately overlaps imports from
   // different threads (for example PollCallbacks beside config setup), as on
@@ -143,7 +163,7 @@ struct FirebaseAppService::Impl {
   static std::shared_ptr<Impl> global;
   static bool generation_used;
   explicit Impl(Config value):config(std::move(value)){}
-  template<typename T>T Function(const std::string &name)const{static_assert(sizeof(T)==sizeof(FARPROC));auto symbol=exports.at(name);T result;std::memcpy(&result,&symbol,sizeof(result));return result;}
+  template<typename T>T Function(const std::string &name)const{static_assert(sizeof(T)==sizeof(Symbol));auto symbol=exports.at(name);T result;std::memcpy(&result,&symbol,sizeof(result));return result;}
   void Healthy()const{std::exception_ptr error;{std::lock_guard lock(mutex);error=failure;}if(error)std::rethrow_exception(error);}
   void Failed(std::exception_ptr error)noexcept{try{std::lock_guard lock(mutex);if(!failure)failure=error;}catch(...){std::abort();}}
   struct Import {
@@ -450,8 +470,13 @@ struct FirebaseAppService::Impl {
       Need(found==crash_frames.end()||found->vector_owner==vector,"Crashlytics borrowed frame aliases another object");
       if(found==crash_frames.end())crash_frames.push_back({result,vector});}return result;
   }
-  void Revoke(){
-    {std::lock_guard lock(mutex);if(revoked)return;Need(imports==0&&callbacks==0&&!registering,"Firebase revoke requires actual SDK import/callback quiescence");Need(apps.empty(),"Firebase revoke requires all native App references released");Need(crash_vectors.empty()&&crash_frames.empty(),"Firebase revoke requires all native Crashlytics frame/vector objects released");Need(!messaging_parent_app&&messaging_messages.empty(),"Firebase revoke requires detached Messaging listener and released native messages");revoked=true;}
+  void Revoke(bool managedStopped=false){
+    {std::lock_guard lock(mutex);if(revoked)return;
+      Need(imports==0&&callbacks==0&&!registering,"Firebase revoke requires actual SDK import/callback quiescence");
+      Need(managedStopped||apps.empty(),"Firebase revoke requires all native App references released");
+      Need(crash_vectors.empty()&&crash_frames.empty(),"Firebase revoke requires all native Crashlytics frame/vector objects released");
+      Need((managedStopped||!messaging_parent_app)&&messaging_messages.empty(),"Firebase revoke requires detached Messaging listener and released native messages");
+      revoked=true;}
     NativeCall native;
     Function<void(*)(MessageCallback,TokenCallback)>(kCommands[44])(nullptr,nullptr);
     Function<void(*)(StringCallback)>(kCommands[43])(nullptr);
@@ -464,6 +489,14 @@ struct FirebaseAppService::Impl {
     Function<void(*)(StringCallback)>(kCommands[24])(nullptr);
     Function<RegisterArguments>(kCommands[23])(nullptr,nullptr,nullptr);
     Function<RegisterExceptions>(kCommands[22])(nullptr,nullptr,nullptr,nullptr,nullptr,nullptr,nullptr,nullptr,nullptr,nullptr,nullptr);
+    if(managedStopped){
+      const auto release=Function<void(*)(void*)>(kCommands[21]);
+      for(const auto &[app,count]:apps)
+        for(size_t i=0;i<count;++i)release(reinterpret_cast<void*>(app));
+      apps.clear();
+      crash_instances.clear();
+      messaging_parent_app=0;
+    }
     {std::lock_guard lock(global_mutex);if(global.get()==this)global.reset();}
   }
 };
@@ -477,12 +510,20 @@ FirebaseAppService::FirebaseAppService(Config config,addr_t base):marker_base_(b
     Need((base&7)==0&&base<=UINT64_MAX-kCommands.size()*8,"invalid Firebase SDK marker base");
     Need(bool(config.verify_library)&&bool(config.runner)&&bool(config.admitted_thread)&&bool(config.translated_entry),"Firebase SDK requires file verification and actual guest callback admission");
     const auto &path=config.dll_path;
+#ifdef _WIN32
     Need(path.size()>3&&((path[1]==L':'&&(path[2]==L'\\'||path[2]==L'/'))||(path[0]==L'\\'&&path[1]==L'\\')),"Firebase SDK requires an absolute Windows DLL path");
     const auto split=path.find_last_of(L"/\\");
     Need(split!=path.npos&&path.substr(split+1)==L"FirebaseCppApp-9_6_0.dll","Firebase SDK DLL filename differs from qualified package");
     config.verify_library(path,kDllSha256);
+#else
+    Need(!path.empty() && path.front()=='/' && path.substr(path.find_last_of('/')+1)=="FirebaseCppApp-9_6_0.so",
+         "Firebase SDK requires the absolute path to the Linux 9.6.0 plugin");
+    config.verify_library(path,kLinuxSha256);
+#endif
     auto impl=std::make_shared<Impl>(std::move(config));
     {std::lock_guard lock(Impl::global_mutex);Need(!Impl::generation_used&&!Impl::global,"only one Firebase SDK service generation is admitted per process");}
+#ifdef _WIN32
+    auto close=FreeLibrary;
     impl->library=LoadLibraryExW(impl->config.dll_path.c_str(),nullptr,LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR|LOAD_LIBRARY_SEARCH_SYSTEM32);
     Need(impl->library!=nullptr,"cannot load the verified Firebase Windows SDK DLL");
     // Verify the actual loaded module as well: a preloaded same-name DLL must
@@ -490,9 +531,20 @@ FirebaseAppService::FirebaseAppService(Config config,addr_t base):marker_base_(b
     try{std::vector<wchar_t> loaded(32768);auto length=GetModuleFileNameW(impl->library,loaded.data(),static_cast<DWORD>(loaded.size()));
       Need(length&&length<loaded.size(),"cannot identify the actual loaded Firebase SDK DLL");
       impl->config.verify_library(std::wstring(loaded.data(),length),kDllSha256);
-      for(const auto&name:kCommands){auto symbol=GetProcAddress(impl->library,name.c_str());Need(symbol!=nullptr,"qualified Firebase DLL is missing a closed typed export");impl->exports.emplace(name,symbol);}}
-    catch(...){FreeLibrary(impl->library);throw;}
-    {std::lock_guard lock(Impl::global_mutex);if(Impl::generation_used||Impl::global){FreeLibrary(impl->library);throw std::runtime_error("concurrent/repeated Firebase SDK service construction");}Impl::generation_used=true;Impl::global=impl;}
+      auto symbolFor=GetProcAddress;
+#else
+    auto close=dlclose;
+    impl->library=dlopen(impl->config.dll_path.c_str(),RTLD_NOW|RTLD_LOCAL);
+    if (!impl->library) throw std::runtime_error(std::string("cannot load Linux Firebase SDK: ")+dlerror());
+    try {
+      link_map *loaded=nullptr;
+      Need(!dlinfo(impl->library,RTLD_DI_LINKMAP,&loaded)&&loaded&&loaded->l_name,"cannot identify loaded Firebase SDK");
+      impl->config.verify_library(loaded->l_name,kLinuxSha256);
+      auto symbolFor=dlsym;
+#endif
+      for(const auto&name:kCommands){auto symbol=symbolFor(impl->library,name.c_str());Need(symbol!=nullptr,"Firebase SDK is missing a required export");impl->exports.emplace(name,symbol);}}
+    catch(...){close(impl->library);throw;}
+    {std::lock_guard lock(Impl::global_mutex);if(Impl::generation_used||Impl::global){close(impl->library);throw std::runtime_error("concurrent/repeated Firebase SDK service construction");}Impl::generation_used=true;Impl::global=impl;}
     // Successful loads intentionally retain their reference until process exit:
     // process-global native SDK callback state cannot outlive its code mapping.
     impl_=std::move(impl);
@@ -504,6 +556,7 @@ const std::vector<std::string>&FirebaseAppService::Commands(){return kCommands;}
 addr_t FirebaseAppService::Marker(const std::string&name)const{auto it=std::find(kCommands.begin(),kCommands.end(),name);if(it==kCommands.end())throw std::invalid_argument("unknown typed Firebase SDK export");return marker_base_+8*static_cast<addr_t>(it-kCommands.begin());}
 void FirebaseAppService::CheckHealthy()const{BoundaryEnvironment boundary;impl_->Healthy();}
 void FirebaseAppService::Revoke(){BoundaryEnvironment boundary;if(impl_)impl_->Revoke();}
+void FirebaseAppService::CloseAfterManagedShutdown(){BoundaryEnvironment boundary;if(impl_)impl_->Revoke(true);}
 Module FirebaseAppService::MakeModule()const{
   Module module;module.name="libFirebaseCppApp-9_6_0.so";module.aliases={"FirebaseCppApp-9_6_0","FirebaseCppApp-9_6_0.so","FirebaseCppApp-9_6_0.dll","libFirebaseCppApp-9_6_0","libFirebaseCppApp-9_6_0.dll"};
   module.kind=Module::Kind::TypedService;for(const auto&name:kCommands)module.exports.emplace(name,Marker(name));module.reset_image=[]{};return module;

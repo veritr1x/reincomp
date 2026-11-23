@@ -1,4 +1,4 @@
-// node cold-build.cjs site-directory-or-https-url original.apk master.bin.e new-run-directory [expected-exe-sha256]
+// node cold-build.cjs site-directory-or-https-url original.apk master.bin.e new-run-directory [expected-sha256] [--linux]
 const assert = require("node:assert/strict");
 const crypto = require("node:crypto");
 const fs = require("node:fs");
@@ -21,7 +21,8 @@ async function main() {
   const published = /^https:\/\//.test(process.argv[2]) ? new URL(process.argv[2]) : null;
   const site = published ? null : path.resolve(process.argv[2]);
   const [apk, master, run] = process.argv.slice(3, 6).map(p => path.resolve(p));
-  const expected = process.argv[6];
+  const linux = process.argv.slice(6).includes("--linux");
+  const expected = process.argv.slice(6).find(arg => arg !== "--linux");
   const megabits = Number(process.env.BUILD_TEST_MBPS || 0);
   assert.ok(Number.isFinite(megabits) && megabits >= 0);
   if (published) assert.equal(megabits,0,"Rate limiting requires a local site");
@@ -119,7 +120,9 @@ async function main() {
     const opened = performance.now();
     await call("Page.navigate",{url:published?.href || origin+"/"});
     await until(() => evaluate('document.querySelector("#bunker-version")?.textContent.includes('+JSON.stringify(siteVersion.version)+')'),30000);
-    await evaluate('document.querySelector("input[value=windows]").click()');
+    const platform = linux ? "linux" : "windows";
+    await evaluate(`document.querySelector("input[value=${platform}]").click()`);
+    if (linux) assert.equal(await evaluate('document.querySelector("#linux-option").hidden'), false);
     const doc = await call("DOM.getDocument");
     async function select(selector, file) {
       const element = await call("DOM.querySelector",{nodeId:doc.root.nodeId, selector});
@@ -146,7 +149,7 @@ async function main() {
     }, 24*3600000);
     const ready = performance.now();
     await evaluate('document.querySelector("#download").click()');
-    const file = path.join(downloads,"Nier Reincarnation.exe");
+    const file = path.join(downloads,linux ? "NieR-Reincarnation-Linux-x86_64.tar" : "Nier Reincarnation.exe");
     // Edge renames the temporary .crdownload when the file is ready. Reading
     // the blob from the page here would add another 1 GB read to the timing.
     await until(() => fs.statSync(file,{throwIfNoEntry:false})?.size > 0 &&
@@ -163,8 +166,13 @@ async function main() {
       compilerWasmRequests:published ? null : requests.filter(r=>/\/(?:lift|coff|poll|gnu-link)\.wasm$/.test(r.name)), file, stages};
     fs.writeFileSync(path.join(run,"result.json"), JSON.stringify(report,null,2));
     console.log(JSON.stringify(report));
-    if (expected) assert.equal(sha256,expected,"Downloaded EXE differs from reference");
-    if (!published && siteVersion.windowsRuntime) {
+    if (expected) assert.equal(sha256,expected,"Download differs from reference");
+    if (!published && linux) {
+      assert.equal(report.runtimeBytes,0);
+      assert.deepEqual(report.compilerWasmRequests,[]);
+      assert.equal(await evaluate('document.querySelector("#install-linux").hidden'),false);
+    }
+    if (!published && siteVersion.windowsRuntime && !linux) {
       assert.ok(report.runtimeBytes > 0);
       assert.deepEqual(report.compilerWasmRequests,[]);
     }
@@ -176,7 +184,15 @@ async function main() {
       input.files=d.files;input.dispatchEvent(new Event("change"));document.querySelector("#build").click(); })()`);
     await until(()=>evaluate(log+'.includes("master data differs")'),20000);
     if (!published) assert.equal(requests.slice(count).some(r=>r.name.includes("/runtime/")),false);
-    if (!published && siteVersion.windowsRuntime) {
+    if (linux) {
+      await select("#master", master);
+      await evaluate(`(async()=>{ const input=document.querySelector("#game"),f=input.files[0];
+        const head=new Uint8Array(await f.slice(0,1).arrayBuffer());head[0]^=1;
+        const d=new DataTransfer();d.items.add(new File([head,f.slice(1)],f.name));
+        input.files=d.files;input.dispatchEvent(new Event("change"));document.querySelector("#build").click(); })()`);
+      await until(()=>evaluate(log+'.includes("APK differs")'),30000);
+    }
+    if (!published && siteVersion.windowsRuntime && !linux) {
       corrupt=true;
       await select("#master",master);
       await evaluate('document.querySelector("#build").click()');

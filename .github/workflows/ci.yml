@@ -59,3 +59,4 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: python3 -m compileall -q build recompiler
+      - run: python3 recompiler/tests/linux-web-launch.py

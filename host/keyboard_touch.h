@@ -49,7 +49,7 @@ class Stick {
   }
   // Drag for a `width` x `height` surface (pixels, y down). Opposite keys
   // cancel; diagonals keep the same radius.
-  Target Target(float width, float height) const {
+  struct Target Target(float width, float height) const {
     struct Target t;
     t.origin_x = width * 0.5f;
     t.origin_y = height * 0.5f;

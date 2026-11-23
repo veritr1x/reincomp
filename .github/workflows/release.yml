@@ -1,6 +1,5 @@
-# A release holds what a player needs besides their own game files, and nothing
-# made from the game: the launcher, and the recompiler's toolchain for Windows
-# (lifter, semantics, instrumenter). Runs for a tag such as v0.3.0.
+# A version tag builds the Windows launcher and recompiler toolchain.
+# The tested native Linux runtime is attached to the same release before Pages deploys.
 name: Release
 
 on:

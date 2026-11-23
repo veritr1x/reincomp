@@ -14,6 +14,7 @@
 #include <utility>
 #ifndef _WIN32
 #include <sys/time.h>
+#include <ctime>
 #endif
 
 namespace bunker::windows::libc_calendar {
@@ -178,6 +179,18 @@ class Calendar {
     return &years_.emplace(year,std::move(value)).first->second;
   }
   bool Local(int64_t seconds,Tm &out){
+#ifndef _WIN32
+    if (!custom_query_) {
+      static_assert(sizeof(std::time_t) == sizeof(seconds));
+      std::time_t t = seconds;
+      std::tm local{};
+      if (!::localtime_r(&t, &local)) { query_error_ = errno; return false; }
+      out = {local.tm_sec, local.tm_min, local.tm_hour, local.tm_mday, local.tm_mon,
+             local.tm_year, local.tm_wday, local.tm_yday, local.tm_isdst, 0,
+             local.tm_gmtoff, reinterpret_cast<addr_t>(Intern(local.tm_zone ? local.tm_zone : ""))};
+      return true;
+    }
+#endif
     Tm utc{};if(!Utc(seconds,utc))return false;int64_t year=int64_t(utc.year)+1900;
     if(year<1601||year>30827)return false;
     for(unsigned attempt=0;attempt<3;++attempt){
@@ -221,6 +234,18 @@ class Calendar {
   }
   bool Twice(const Tm &input,int64_t &result,Tm &out){return Search(input,false,result,out)||Search(input,true,result,out);}
   Answer Resolve(Tm &value){
+#ifndef _WIN32
+    if (!custom_query_) {
+      std::tm tm{};
+      tm.tm_sec=value.sec; tm.tm_min=value.min; tm.tm_hour=value.hour;
+      tm.tm_mday=value.mday; tm.tm_mon=value.mon; tm.tm_year=value.year; tm.tm_isdst=value.isdst;
+      errno=0;
+      auto seconds=std::mktime(&tm);
+      if (seconds == -1 && errno) return {false,-1,errno};
+      if (!Local(seconds,value)) return {false,-1,query_error_};
+      return {true,seconds,0};
+    }
+#endif
     query_error_=0;if(value.isdst>1)value.isdst=1;
     int64_t result;Tm normalized;
     if(Twice(value,result,normalized)){value=normalized;return {true,result,0};}

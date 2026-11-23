@@ -1,4 +1,4 @@
-"""Prepare Windows UnityFS assets from the game's original, already-open UnityFS streams."""
+"""Prepare desktop UnityFS assets from the game's original, already-open UnityFS streams."""
 import hashlib
 from pathlib import Path
 import os
@@ -17,6 +17,7 @@ from UnityPy.streams import EndianBinaryReader
 from desktop_shader import convert as convert_shader
 
 CACHE_DIRECTORY = 'desktop-bundles-v2'
+WINDOWS64, LINUX64 = 19, 24
 
 
 def convert_texture(texture):
@@ -66,23 +67,23 @@ def unityfs_blocks(bundle, raw):
     return bundle.read_fs(reader)
 
 
-def convert_text_bundle(bundle):
+def convert_text_bundle(bundle, target=WINDOWS64):
     # A standalone TextAsset needs only a new build target. Keep its type
     # trees, object table and data byte-for-byte instead of rebuilding them.
     if len(bundle.files) != 1:
         return None
     name, asset = next(iter(bundle.files.items()))
     if (not isinstance(asset, SerializedFile) or asset.header.version != 21
-            or asset.header.endian != '<' or asset._m_target_platform != 13
+            or asset.header.endian != '<' or asset._m_target_platform not in (13, WINDOWS64, LINUX64)
             or {obj.type.name for obj in asset.objects.values()} != {'AssetBundle', 'TextAsset'}):
         return None
     source = asset.reader.bytes
     version = asset.unity_version.encode('ascii') + b'\0'
     # SerializedFile v21 has a 20-byte header followed by the engine version and target.
-    target = 20 + len(version)
-    if source[20:target + 4] != version + (13).to_bytes(4, 'little'):
+    offset = 20 + len(version)
+    if source[20:offset + 4] != version + asset._m_target_platform.to_bytes(4, 'little'):
         return None
-    expected = source[:target] + (19).to_bytes(4, 'little') + source[target + 4:]
+    expected = source[:offset] + target.to_bytes(4, 'little') + source[offset + 4:]
     member = EndianBinaryReader(expected)
     member.flags = asset.flags
     bundle.files[name] = member
@@ -96,7 +97,9 @@ def convert_text_bundle(bundle):
     return out
 
 
-def convert_bundle(raw, crc=0):
+def convert_bundle(raw, crc=0, *, target=WINDOWS64):
+    if target not in (WINDOWS64, LINUX64):
+        raise ValueError(f'Unsupported desktop bundle platform {target}')
     if not raw.startswith(b'UnityFS\0'):
         raise ValueError(f'Unexpected file header {raw[:12].hex()}')
     bundle = UnityPy.load(raw).file
@@ -104,7 +107,7 @@ def convert_bundle(raw, crc=0):
         _, blocks = unityfs_blocks(bundle, raw)
         if zlib.crc32(blocks.bytes) != crc:
             raise ValueError('Game-supplied bundle CRC does not match the original stream')
-    text = convert_text_bundle(bundle)
+    text = convert_text_bundle(bundle, target)
     if text is not None:
         return text
     files = {}
@@ -112,7 +115,9 @@ def convert_bundle(raw, crc=0):
         if not isinstance(asset, SerializedFile):
             continue
         files[name] = set(asset.objects)
-        if asset._m_target_platform == 19:
+        if asset._m_target_platform in (WINDOWS64, LINUX64):
+            # Both players use the same converted desktop GL shader and texture data.
+            asset._m_target_platform = target
             continue
         if asset._m_target_platform != 13:
             raise ValueError(f'{name} targets platform {asset._m_target_platform}')
@@ -125,7 +130,7 @@ def convert_bundle(raw, crc=0):
                     convert_shader(shader)
                 elif 15 not in shader.platforms:
                     raise ValueError(f'No desktop shader for {shader.m_ParsedForm.m_Name}')
-        asset._m_target_platform = 19
+        asset._m_target_platform = target
     if not files:
         raise ValueError('UnityFS contains no serialized asset')
     out = bundle.save(packer='lz4')
@@ -134,7 +139,7 @@ def convert_bundle(raw, crc=0):
         raise ValueError('Converted bundle member list differs')
     for name, ids in files.items():
         asset = reopened.files[name]
-        if asset._m_target_platform != 19 or set(asset.objects) != ids:
+        if asset._m_target_platform != target or set(asset.objects) != ids:
             raise ValueError(f'Converted object inventory differs in {name}')
     return out
 
@@ -223,8 +228,7 @@ def retry_shared_file(operation, *args):
             time.sleep(0.05)
 
 
-if __name__ == '__main__':
-    import threading
+def use_fast_lz4():
     import lz4.block
     from UnityPy.enums.BundleFile import CompressionFlags
     from UnityPy.helpers import CompressionHelper
@@ -233,6 +237,11 @@ if __name__ == '__main__':
     # The private runtime cache is decoded by Unity's same LZ4 reader.
     CompressionHelper.COMPRESSION_MAP[CompressionFlags.LZ4] = (
         lambda data: lz4.block.compress(data, mode='fast', store_size=False))
+
+
+if __name__ == '__main__':
+    import threading
+    use_fast_lz4()
     stop = threading.Event()
     def stop_on_parent_exit():
         sys.stdin.buffer.read()

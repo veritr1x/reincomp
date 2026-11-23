@@ -3,6 +3,12 @@
 What changed, newest first, by date and area. A release's heading comes
 above the dated sections it holds.
 
+## 0.3.5 (2026-11-23)
+
+- Build a native x86-64 Linux player in Bunker’s web builder. Choose **Linux** and select the original Global 3.7.1 ARM64 APK and `20240404193219.bin.e`. Both inputs stay on your device.
+- Extract the downloaded TAR and run `./Play.sh`. The first launch verifies the versioned Linux runtime, prepares the game data and starts the bundled Bunker 1.12.23 server. Supply a resource dump or point the launcher at an existing imported library with `--assets`.
+- Native Linux testing covered 2D and 3D movement and story battles. The Windows portable launcher and its update feed also report 0.3.5.
+
 ## 0.3.1 (2026-11-23)
 
 - In the portable Windows player, open **Ctrl+B → Update and restart** and confirm once. The launcher closes the game, waits for Lunar Tear to finish saving, then verifies and installs the update. The same action works when only Lunar Tear is running.

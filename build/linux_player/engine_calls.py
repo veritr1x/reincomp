@@ -8,7 +8,7 @@ import struct
 import subprocess
 import sys
 
-from stage import UNITY_FILES
+from stage import UNITY_FILES, UNITY_SYMBOLS_SHA256
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "recompiler/tools"))
 from lift_new_traces import load_image
@@ -17,7 +17,7 @@ from lift_new_traces import load_image
 def registrations(module):
     player, debug = module / "UnityPlayer.so", module / "UnityPlayer_s.debug"
     for path, expected in ((player, UNITY_FILES["UnityPlayer.so"]),
-                           (debug, "dc554c57525f77f0f359947f17d109c76d3a81384e6e0d44d58ffed5f1127655")):
+                           (debug, UNITY_SYMBOLS_SHA256)):
         with path.open("rb") as stream:
             if hashlib.file_digest(stream, "sha256").hexdigest() != expected:
                 raise ValueError(f"Expected the Unity 2019.4.29f1 Linux module: {path}")

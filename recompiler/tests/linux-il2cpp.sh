@@ -19,6 +19,10 @@ flags=(-std=c++17 -O2 -pthread -DADDRESS_SIZE_BITS=64 -Ithird_party/remill-inclu
 "$cxx" "${flags[@]}" -Ihost recompiler/tests/linux-pthreads.cpp host/signal_host.cpp -L"$out" -lil2cpp-test \
     '-Wl,-rpath,$ORIGIN' -o "$out/test-pthreads"
 "$out/test-pthreads"
+"$cxx" "${flags[@]}" -Ihost recompiler/tests/linux-mappings.cpp -o "$out/test-mappings"
+"$out/test-mappings"
+"$cxx" "${flags[@]}" -Ihost recompiler/tests/linux-input.cpp -o "$out/test-input"
+"$out/test-input"
 if [ "$#" -eq 5 ]; then
     python3 build/linux_player/engine_calls.py --unity "$5" --out "$out/engine-calls.json"
     transform=$(python3 -c 'import json, sys; print(json.load(open(sys.argv[1]))["UnityEngine.Matrix4x4::TRS_Injected"])' "$out/engine-calls.json")

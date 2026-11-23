@@ -197,7 +197,9 @@ class Service {
     std::lock_guard lock(d.mutex);d.io_error=io;if(!io)d.error_code=code;d.error_message=message;d.complete=true;
   }
 
-  void Run(Download &d,std::string url,const std::string &path,const std::optional<std::filesystem::path> &host_path){
+ public:
+  // Shared with the native Linux player, which has no Android Java objects.
+  static void Run(Download &d,std::string url,const std::string &path,const std::optional<std::filesystem::path> &host_path){
     if(!host_path){Fail(d,true,"","Octo Http: path is outside the writable storage: "+path);Report(d,url);return;}
     for(int redirect=0;redirect<5;++redirect){
       std::string location;
@@ -208,14 +210,15 @@ class Service {
     Report(d,url);
   }
 
-  void Report(Download &d,const std::string &url){
+ private:
+  static void Report(Download &d,const std::string &url){
     std::lock_guard lock(d.mutex);
     if(d.io_error||d.error_code||(d.status&&d.status!=200))
       std::fprintf(stderr,"Octo Http: %s failed status=%d io=%d %s\n",url.c_str(),d.status,int(d.io_error),d.error_message.value_or("").c_str());
   }
 
   // One request. Returns true with `location` set to follow a redirect.
-  bool Fetch(Download &d,const std::string &url,const std::filesystem::path &host_path,std::string &location){
+  static bool Fetch(Download &d,const std::string &url,const std::filesystem::path &host_path,std::string &location){
     static const std::string scheme="http://";
     if(url.compare(0,scheme.size(),scheme)){Fail(d,true,"","unsupported URL scheme: "+url);return false;}
     const auto slash=url.find('/',scheme.size());

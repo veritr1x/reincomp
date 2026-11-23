@@ -1,4 +1,5 @@
 #include "android_context.h"
+#include "host_time_zone.h"
 #include "android_assets.h"
 #include "unicode.h"
 #include <algorithm>
@@ -6,17 +7,6 @@
 #include <memory>
 #include <system_error>
 #include <stdexcept>
-#include <cstdlib>
-#include <fstream>
-#ifdef _WIN32
-#ifndef NOMINMAX
-#define NOMINMAX
-#endif
-#ifndef WIN32_LEAN_AND_MEAN
-#define WIN32_LEAN_AND_MEAN
-#endif
-#include <windows.h>
-#endif
 
 namespace bunker::windows {
 namespace {
@@ -40,29 +30,6 @@ struct ResolverState {Value package;std::function<std::optional<std::u16string>(
 struct ContextState {Value info,assets,package,intent,manager,code_path,resolver;std::shared_ptr<StorageState> storage;};
 struct PackageState {AndroidContextConfig config;};
 struct ActivityListState {std::set<std::u16string> components;};
-// IANA zone of the host, as Android's TimeZone.getDefault().getID() reports.
-std::string HostTimeZoneId(){
-  if(const char *tz=std::getenv("TZ");tz&&*tz){std::string id=tz[0]==':'?tz+1:tz;if(!id.empty()&&id.find('/')!=std::string::npos)return id;}
-#ifdef _WIN32
-  // Windows names its zones by registry key; Windows' bundled ICU maps them.
-  DYNAMIC_TIME_ZONE_INFORMATION info{};
-  if(GetDynamicTimeZoneInformation(&info)!=TIME_ZONE_ID_INVALID&&info.TimeZoneKeyName[0]){
-    using Map=int32_t(*)(const char16_t*,int32_t,const char*,char16_t*,int32_t,int*);
-    if(auto icu=LoadLibraryW(L"icu.dll")){
-      if(auto map=reinterpret_cast<Map>(reinterpret_cast<void*>(GetProcAddress(icu,"ucal_getTimeZoneIDForWindowsID")))){
-        char16_t id[128]{};int status=0;
-        const auto length=map(reinterpret_cast<const char16_t*>(info.TimeZoneKeyName),-1,nullptr,id,127,&status);
-        if(status<=0&&length>0){std::string out;for(int32_t i=0;i<length;++i)out.push_back(char(id[i]));return out;}
-      }
-    }
-  }
-#else
-  std::error_code error;const auto link=std::filesystem::read_symlink("/etc/localtime",error).generic_string();
-  if(!error){const auto at=link.find("zoneinfo/");if(at!=std::string::npos)return link.substr(at+9);}
-  std::ifstream file("/etc/timezone");std::string line;if(std::getline(file,line)&&!line.empty())return line;
-#endif
-  return "UTC";
-}
 Value Keep(jni::Host &host,addr_t local){auto value=host.CaptureValue(local);host.DeleteLocalReference(local);return value;}
 std::optional<std::u16string> Text(jni::Host &host,const Value &value){auto local=host.LocalValue(value);auto text=host.StringValue(local);if(local)host.DeleteLocalReference(local);return text;}
 bool Present(jni::Host &host,const Value &value){auto local=host.LocalValue(value);if(!local)return false;host.DeleteLocalReference(local);return true;}

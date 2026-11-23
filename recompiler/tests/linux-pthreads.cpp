@@ -6,10 +6,25 @@
 int main() {
     constexpr addr_t destructor = 0x123400;
     constexpr addr_t start = 0x234500;
+    constexpr addr_t initialize = 0x345600, nestedInitialize = 0x345610;
+    pthread_once_t first = PTHREAD_ONCE_INIT, nested = PTHREAD_ONCE_INIT;
+    std::atomic<unsigned> initCalls{}, nestedCalls{};
     std::atomic<unsigned> calls{};
     int value = 31;
     unsigned key;
     PosixThreads threads([&](addr_t pc,addr_t arg) -> addr_t {
+        if (pc == initialize) {
+            ++initCalls;
+            State state{};
+            state.gpr.x0.qword = uintptr_t(&nested);
+            state.gpr.x1.qword = nestedInitialize;
+            threads.lookup("pthread_once")(state);
+            return state.gpr.x0.qword;
+        }
+        if (pc == nestedInitialize) {
+            ++nestedCalls;
+            return 0;
+        }
         if (pc == start) {
             auto &local=threads.local();
             if (local.stackSize != 65536 || local.inheritedMask != 0x100 || arg != 17) std::abort();
@@ -36,6 +51,12 @@ int main() {
         threads.lookup(name)(state);
         return state.gpr.x0.qword;
     };
+    auto runOnce = [&] { if (call("pthread_once", uintptr_t(&first), initialize)) std::abort(); };
+    std::thread initializer(runOnce);
+    runOnce();
+    initializer.join();
+    if (initCalls != 1 || nestedCalls != 1) return 1;
+    std::puts("PASS concurrent and nested Linux guest pthread_once initializers");
     if (call("pthread_key_create",uintptr_t(&key),destructor)) return 1;
     std::thread worker([&] {
         if (call("pthread_setspecific",key,uintptr_t(&value)) || call("pthread_getspecific",key) != uintptr_t(&value))

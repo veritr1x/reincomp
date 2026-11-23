@@ -26,6 +26,21 @@ class PosixThreads : public PosixThreadContext {
     std::function<bool()> signalPending;
     std::function<void()> dispatchSignal;
 
+    int once(pthread_once_t *control, addr_t entry) {
+        static_assert(sizeof(pthread_once_t) == 4 && PTHREAD_ONCE_INIT == 0);
+        // pthread_once invokes a parameterless function on the calling
+        // thread. A constructor may in turn initialize another once control.
+        struct Invocation { PosixThreads &threads; addr_t entry; };
+        static thread_local Invocation *current;
+        Invocation invocation{*this, entry};
+        struct Restore {
+            Invocation *before;
+            ~Restore() { current = before; }
+        } restore{current};
+        current = &invocation;
+        return pthread_once(control, [] { current->threads.run(current->entry, 0); });
+    }
+
     int waitCondition(addr_t address,pthread_cond_t *condition,pthread_mutex_t *mutex) {
         auto wake=waitChannel ? waitChannel() : nullptr;
         if (!wake) return pthread_cond_wait(condition,mutex);
@@ -91,6 +106,12 @@ class PosixThreads : public PosixThreadContext {
         return &it->second;
     }
 public:
+    void withRegistryLocks(const std::function<void()> &action) {
+        // A parked thread must not hold either map while the original
+        // collector calls pthread_getspecific or looks up one of its mutexes.
+        std::scoped_lock guard(keyLock, lock);
+        action();
+    }
     void setSignalWait(std::function<std::shared_ptr<Wake>()> channel,
                        std::function<bool()> pending,std::function<void()> dispatch) {
         waitChannel=std::move(channel); signalPending=std::move(pending); dispatchSignal=std::move(dispatch);
@@ -100,6 +121,8 @@ public:
     std::function<void(State &)> lookup(const std::string &name) {
         using recomp::MakeBridge;
         using bunker::windows::AndroidThreadAttr;
+        if (name == "pthread_once") return MakeBridge<int(pthread_once_t *,addr_t)>(
+            [this](auto control, addr_t entry) { return once(control, entry); });
         if (name == "pthread_key_create") return MakeBridge<int(unsigned *,addr_t)>([this](auto key,addr_t pc){return createKey(key,pc);});
         if (name == "pthread_key_delete") return MakeBridge<int(unsigned)>([this](unsigned key){return deleteKey(key);});
         if (name == "pthread_setspecific") return MakeBridge<int(unsigned,addr_t)>([this](auto key,auto value){return setValue(key,value);});
@@ -127,6 +150,7 @@ public:
                     error=pthread_create(out,&native,[](void *value) -> void * {
                         std::unique_ptr<Start> work(static_cast<Start *>(value));
                         auto &local=work->owner.local();
+                        local.guestCreated=true;
                         local.stackSize=work->size;
                         local.guardSize=work->guard;
                         local.inheritedMask=work->mask;

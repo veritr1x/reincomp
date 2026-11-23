@@ -267,10 +267,7 @@ struct Pthreads::Impl {
     if(count>8) throw std::invalid_argument("too many pthread callback arguments");
     for(size_t i=0;i<count;++i)(s.gpr.*regs[i]).qword=args[i];
     if(s0_in)std::memcpy(&s.simd.v[0],s0_in,4);
-    // The Android unwinder reads instructions at an unrecognized return PC to
-    // detect signal frames. Give the host boundary a readable, aligned address.
-    alignas(16) static constexpr uint32_t boundary_words[]={0xd503201f,0xd503201f,0xd503201f,0xd503201f};
-    const addr_t host_return=reinterpret_cast<addr_t>(&boundary_words[1]);
+    const addr_t host_return=GuestThreadReturnAddress();
     s.gpr.pc.qword=entry;s.gpr.x30.qword=host_return;
     auto *previous=t.active;t.active=&s;
     try {if(terminal_frame)runtime.RunWithThreadExit(s,entry,t.terminal_exit);else runtime.Run(s,entry);} catch(...) {t.active=previous;throw;}

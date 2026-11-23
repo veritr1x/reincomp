@@ -6,16 +6,19 @@
 #include <vector>
 
 namespace bunker::windows {
-// Exact Firebase Unity 9.6.0 Windows SDK service. This is not an Android ELF
-// translation and advertises no JNI_OnLoad. The caller verifies the pinned DLL
-// before loading; guest callbacks remain original translated entries.
+// Firebase Unity 9.6.0 desktop SDK. Guest callbacks use the original translated entries.
 class FirebaseAppService {
  public:
+#ifdef _WIN32
+  using LibraryPath=std::wstring;
+#else
+  using LibraryPath=std::string;
+#endif
   using Runner=std::function<uint64_t(addr_t,const std::vector<addr_t>&)>;
   struct Config {
-    std::wstring dll_path;
+    LibraryPath dll_path;
     // Must hash the absolute file against expected_sha256 or throw.
-    std::function<void(const std::wstring&,const std::string&)> verify_library;
+    std::function<void(const LibraryPath&,const std::string&)> verify_library;
     Runner runner;
     // Called only after CurrentExecutionState()!=nullptr; must not allocate a
     // guest thread. Admission includes the live guest owner and module lifetime.
@@ -27,6 +30,7 @@ class FirebaseAppService {
     std::function<std::string(const std::string&)> resolve_config_path{};
   };
   static constexpr const char *kDllSha256="f85bb9f82d79176d3d5da322780d437c023191370e608c45723ad6d83c4d1a12";
+  static constexpr const char *kLinuxSha256="ca0cab5049d6e8ae28a3c188294240c1275b53c4a2e7a97068a17902cd195633";
   explicit FirebaseAppService(Config,addr_t marker_base=0x7fef00000000ULL);
   ~FirebaseAppService();
   FirebaseAppService(const FirebaseAppService&)=delete;
@@ -55,6 +59,9 @@ class FirebaseAppService {
   // The native DLL remains loaded for process lifetime; no stale code unload.
   // A revoked service cannot be replaced by another generation in this process.
   void Revoke();
+  // Once the managed player has stopped, release its remaining App references
+  // through the SDK after disconnecting its callbacks.
+  void CloseAfterManagedShutdown();
  private:
   struct Impl;
   std::shared_ptr<Impl> impl_;

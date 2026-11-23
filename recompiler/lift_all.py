@@ -15,6 +15,7 @@ any heads added).
 """
 import argparse, concurrent.futures, hashlib, json, os, re, shlex, shutil, subprocess, sys
 from pathlib import Path
+from tempfile import TemporaryDirectory
 
 sys.path.insert(0, str(Path(__file__).resolve().parent / 'tools'))
 from lift_new_traces import load_image  # noqa: E402
@@ -26,7 +27,6 @@ def main():
     ap.add_argument('--bias', type=lambda s: int(s, 0), required=True)
     ap.add_argument('--heads', type=Path, required=True)
     ap.add_argument('--trace-boundaries', type=Path, help='all known function entries, including those outside a partial build')
-    ap.add_argument('--linked-heads', type=Path, help='functions supplied by other objects in the same link')
     ap.add_argument('--entry-only', action='store_true', help='compile only the requested heads and report remaining direct references')
     ap.add_argument('--toolchain', type=Path, required=True, help='folder with remill-lift and aarch64.bc')
     ap.add_argument('--poll', type=Path, required=True)
@@ -36,6 +36,8 @@ def main():
     ap.add_argument('--fallback-opt', default='-O2', help='used for a shard the compiler fails on at --opt')
     ap.add_argument('--target', default='x86_64-w64-windows-gnu')
     ap.add_argument('--patches', type=Path, help='game/patches.json: code bytes to change before lifting')
+    ap.add_argument('--image-cache', type=Path, help='share immutable, SHA-256-named lifter input images between output directories')
+    ap.add_argument('--scratch', type=Path, help='fast local storage for temporary LLVM IR and trace lists')
     ap.add_argument('--out', type=Path, required=True)
     ap.add_argument('--shard-size', type=int, default=128)
     ap.add_argument('--jobs', type=int, default=8)
@@ -57,10 +59,15 @@ def main():
                 fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except (BlockingIOError, PermissionError) as error:
             raise SystemExit(f'Cannot lock {a.out} for compilation: {error}') from error
-        build(a)
+        if a.scratch:
+            a.scratch.mkdir(parents=True,exist_ok=True)
+            with TemporaryDirectory(dir=a.scratch,prefix='lift-') as scratch:
+                build(a,Path(scratch))
+        else:
+            build(a,a.out)
 
 
-def build(a):
+def build(a,scratch):
     linux = 'linux' in a.target.split('-')
     default_poll = '--speed --inline-poll' if linux else '--speed --inline-poll=teb'
     flags = shlex.split(default_poll if a.poll_flags is None else a.poll_flags)
@@ -76,9 +83,20 @@ def build(a):
         if 0 <= at <= len(patched) - len(data):
             patched[at:at + len(data)] = data
     image = bytes(patched)
-    raw = a.out / 'image.bin'
-    if not raw.exists() or raw.read_bytes() != image:
-        raw.write_bytes(image)
+    image_digest = hashlib.sha256(image).hexdigest()
+    if a.image_cache:
+        a.image_cache.mkdir(parents=True, exist_ok=True)
+        raw = a.image_cache / (image_digest + '.bin')
+        if not raw.exists() or raw.read_bytes() != image:
+            # Readers can share a complete image while other builds publish it.
+            with TemporaryDirectory(dir=a.image_cache) as staging:
+                pending = Path(staging) / 'image.bin'
+                pending.write_bytes(image)
+                pending.replace(raw)
+    else:
+        raw = a.out / 'image.bin'
+        if not raw.exists() or raw.read_bytes() != image:
+            raw.write_bytes(image)
     in_exec = lambda x: x % 4 == 0 and any(lo <= x - a.bias < hi for lo, hi in execs)
     heads = sorted({int(line, 16) for line in a.heads.read_text().split()})
     bad = [x for x in heads if not in_exec(x)]
@@ -100,20 +118,13 @@ def build(a):
     # combine Linux ELF and Windows COFF, even when their trace addresses match.
     recipe = hashlib.sha256(json.dumps([
         a.target, flags, a.opt, a.fallback_opt, a.shard_size, a.bias,
-        hashlib.sha256(image).hexdigest(), hashlib.sha256(a.heads.read_bytes()).hexdigest(),
+        image_digest, hashlib.sha256(a.heads.read_bytes()).hexdigest(),
         [file_digest(path) for path in (lifter, poll, a.toolchain / 'aarch64.bc', clang)],
     ]).encode()).hexdigest()
     boundaries = set()
     if a.trace_boundaries:
         boundaries = {int(x, 16) for x in a.trace_boundaries.read_text().split()}
         recipe = hashlib.sha256((recipe + file_digest(a.trace_boundaries)).encode()).hexdigest()
-    linked = set()
-    if a.linked_heads:
-        linked = {int(x, 16) for x in a.linked_heads.read_text().split()}
-        if linked.intersection(heads):
-            raise ValueError('a requested function is already supplied by linked objects')
-        boundaries.update(linked)
-        recipe = hashlib.sha256((recipe + file_digest(a.linked_heads)).encode()).hexdigest()
     manifest = a.out / 'result.json'
     manifest.unlink(missing_ok=True)
 
@@ -130,7 +141,8 @@ def build(a):
                 if cached.get('recipe') == recipe:
                     return index, cached
             done.unlink()
-        ef, ll, pl = prefix.with_suffix('.entries'), prefix.with_suffix('.ll'), prefix.with_suffix('.poll.ll')
+        work = scratch / prefix.name
+        ef, ll, pl = work.with_suffix('.entries'), work.with_suffix('.ll'), work.with_suffix('.poll.ll')
         ef.write_text(''.join(f'{x:#x}\n' for x in entries))
         fallback = False
         with prefix.with_suffix('.log').open('w') as log:
@@ -167,8 +179,11 @@ def build(a):
     pending = heads
     while pending:
         rounds += 1
-        heads_file = a.out / f'heads-round{rounds}.txt'
-        heads_file.write_text(''.join(f'{x:#x}\n' for x in sorted(known | boundaries)))
+        if a.trace_boundaries and known.issubset(boundaries) and not a.scratch:
+            heads_file = a.trace_boundaries
+        else:
+            heads_file = scratch / f'heads-round{rounds}.txt'
+            heads_file.write_text(''.join(f'{x:#x}\n' for x in sorted(known | boundaries)))
         jobs = []
         for i in range(0, len(pending), a.shard_size):
             jobs.append((index, pending[i:i + a.shard_size], heads_file))
@@ -187,7 +202,7 @@ def build(a):
                 if count % 100 == 0:
                     print(f'round {rounds}: {count} of {len(jobs)} shards', flush=True)
         # Direct targets nobody defines: lift them too, as heads of their own.
-        pending = sorted(x for x in wanted - lifted - known - linked if in_exec(x))
+        pending = sorted(x for x in wanted - lifted - known if in_exec(x))
         if a.entry_only:
             break
         added += pending

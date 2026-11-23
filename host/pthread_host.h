@@ -10,6 +10,13 @@
 #include "android_types.h"
 
 namespace bunker::windows {
+// Android's unwinder reads the instruction at an unknown return address to
+// detect a signal trampoline. Mark entry from the host with readable ARM NOPs.
+inline addr_t GuestThreadReturnAddress() {
+  alignas(16) static constexpr uint32_t words[]{0xd503201f, 0xd503201f, 0xd503201f, 0xd503201f};
+  return reinterpret_cast<addr_t>(&words[1]);
+}
+
 // Android AArch64 wire types. Host Windows pthread/CRT layouts never escape.
 struct AndroidThreadAttr {
   uint32_t flags = 0, padding = 0;

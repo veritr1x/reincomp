@@ -1,7 +1,7 @@
 {
   "portable": {
     "bunkerVersion": "1.12.23",
-    "sha256": "050ad92f56afa9aff26ae69aa1b52652131303b106935715fa06eafc18ceabaf",
+    "sha256": "b5a0154e597f9e348e2ddddff4bbfb9ae2f3c60f7b047b3be43aea7dd7f2e49a",
     "size": 1057902864,
     "playerMembers": {
       "game/EngineCalls.dll": "d283f016383aaf96dbd3f95acbe2056ba9ddd2df1d6ede1d8c62db2b6cc8dc8d",
@@ -19,7 +19,7 @@
       "game/resource-setup.html": "d86f61c65deab1fd9033683a0e57a7ce35bbbcb82674dbe4d37ce3bbdd2bcfcd",
       "game/resource-window.exe": "5c870a7c5d7b9a631d3a7b2063950a60e5ad189e58ef8a5ce060a8da4d688e04",
       "game/resource_setup.py": "321c36089656be29e08a879eb2332bcb9039db84890b4ef5391dce68b76abbd3",
-      "launcher.exe": "ae987ad92959aa2ecf9445b12ddcda18f51731a55b423f17d161bff0c1e04728",
+      "launcher.exe": "3321fc66ad196b6c37f85cf963ace341a9492fa8c89fed6a2d99240366d1c214",
       "pods/VERSION": "1190cbd2a7006335d6e8a4c96ad87023bd32c76eecb0c1f1d39e010ca4b7bfdc",
       "pods/app/archive/static/archive.css": "8f20523fbb327ba8502e4c83b676b105c23160e404244fd001107be4288bc7ad",
       "pods/app/archive/templates/base.html": "6ebb5bb56648c3cce2fdcb9152d08ce0f66246d5357aafdf609e17c001903fd0",
@@ -37,6 +37,12 @@
       "host-033.o": "c9bf912b07fc30381fe6f922ed7e4a30a7fd849db7d704ea7994e247e05c5d32",
       "runtime-host.o": "b8148b7792d4e01e4000f39a173b016d7a9d21b78376edc3776dcd2f90a1cff2"
     }
+  },
+  "linuxRuntime": {
+    "bunkerVersion": "1.12.23",
+    "asset": "reincomp-linux-x86_64-0.3.5.tar.gz",
+    "sha256": "92e352ba26f11617caf3526ac4862ab1f3aafb89fb277f5e820fcd65bba84972",
+    "size": 272297976
   },
   "toolchain": {
     "url": "https://github.com/veritr1x/reincomp/releases/download/v0.1.0/reincomp-toolchain-0.1.0-windows-x86_64.zip",

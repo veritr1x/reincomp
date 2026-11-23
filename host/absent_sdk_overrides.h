@@ -28,7 +28,8 @@ inline uint32_t Read32(addr_t a){uint32_t v;std::memcpy(&v,reinterpret_cast<cons
 }  // namespace detail
 
 // Register before recomp::PublishGuestOverrides().
-inline void AddOverrides(){
+enum class DeviceReport { OfflineNonce, Unavailable };
+inline void AddOverrides(DeviceReport report=DeviceReport::OfflineNonce){
   static const struct {addr_t entry;const char *name;} kNoOps[]={
       {0x83fe1fc0,"Adjust$$Awake"},
       {0x83fe22dc,"Adjust$$start"},
@@ -135,13 +136,14 @@ inline void AddOverrides(){
   // SafetyNet.Lilium(apiKey, nonce) during user auth. AttestListener is an
   // AndroidJavaProxy for a Java interface that does not exist here, so its
   // constructor only stores the callback (field 0x20), and Attest completes
-  // at once by calling listener.onResult(nonce) in guest code.
+  // through the managed listener. Linux supplies no Android device report.
   recomp::AddGuestOverride(0x83615c94,[](State &s){  // SafetyNet.AttestListener..ctor
     const uint64_t callback=s.gpr.x1.qword;
     recomp::WriteGuestMemory(s.gpr.x0.qword+0x20,&callback,sizeof(callback));});
-  recomp::AddGuestRedirect(0x83615d1c,[](State &s)->addr_t{  // SafetyNet.Attest(apiKey, nonce, listener)
-    std::fprintf(stderr,"Absent SDKs: Lilium attestation answered locally\n");
-    s.gpr.x0.qword=s.gpr.x2.qword;s.gpr.x2.qword=0;  // onResult(this=listener, response=nonce)
+  recomp::AddGuestRedirect(0x83615d1c,[report](State &s)->addr_t{  // SafetyNet.Attest(apiKey, nonce, listener)
+    std::fprintf(stderr,"Absent SDKs: completing local Lilium callback\n");
+    if(report==DeviceReport::Unavailable) s.gpr.x1.qword=0;
+    s.gpr.x0.qword=s.gpr.x2.qword;s.gpr.x2.qword=0;
     return 0x8361614c;});
 
   // IntegrityManager.RequestIntegrityToken(request): Play services are absent,

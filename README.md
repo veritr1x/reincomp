@@ -1,7 +1,7 @@
 # re[in]comp
 
-NieR Re[in]carnation as a native Windows program. The game's ARM64 code is
-recompiled to x86-64 and runs in the Windows Unity player, against the offline
+NieR Re[in]carnation for Windows and Linux. The game's ARM64 code is
+recompiled to x86-64 and runs in the desktop Unity player, against the offline
 server from [Bunker](https://github.com/veritr1x/bunker).
 
 Unofficial hobby project, built with extensive AI assistance (OpenAI Codex and
@@ -9,12 +9,12 @@ Anthropic Claude). Not affiliated with SQUARE ENIX or Applibot.
 
 ## How to play
 
-You need your own copy of the game. None of it is in this repository or its
-releases. The EXE is built on your PC from these files:
+Supply your own copy of the game. Select these two files in the browser:
 
 - the English 3.7.1 (152) arm64-v8a APK
 - the master data, `20240404193219.bin.e`
-- the asset dump (7z or ZIP)
+
+Keep the asset dump (7z or ZIP) for first launch.
 
 Open [Bunker's web builder](https://veritr1x.github.io/bunker/), choose
 **Windows**, select your APK and master data, and run the downloaded EXE.
@@ -22,12 +22,18 @@ Its launcher imports the assets and starts the game.
 If WebView2 is unavailable, use **Choose resource archive** or **Copy extracted
 folder** in the setup window. Select **Deploy** when the game files are ready.
 
-On Linux or Steam Deck, add the downloaded `Nier Reincarnation.exe` to Steam
+For native x86-64 Linux, choose **Linux** when the web builder offers the
+published runtime. Select the same APK and master data. Extract the downloaded
+TAR into a writable folder, place `resource_dump_android.7z` beside `Play.sh`,
+and run `./Play.sh`. First launch downloads and verifies the matching native
+runtime. An existing imported library also works with
+`./Play.sh --assets "/path/to/library"`. [Native Linux setup](docs/linux-web-builder.md).
+
+For Proton on Linux or Steam Deck, add the Windows download `Nier Reincarnation.exe` to Steam
 as a non-Steam game and select Proton under **Properties → Compatibility**.
 Keep the shortcut pointed at that same EXE after selecting **Deploy**.
 See the [Proton gameplay checks](docs/proton.md) for the tested setup and how
 to verify keyboard movement in a field or storybook scene.
-The native Linux player is in development. [Linux build status and tests](BUILDING.md#linux).
 
 To build from source instead, see [BUILDING.md](BUILDING.md).
 
