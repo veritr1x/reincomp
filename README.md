@@ -25,6 +25,8 @@ folder** in the setup window. Select **Deploy** when the game files are ready.
 On Linux or Steam Deck, add the downloaded `Nier Reincarnation.exe` to Steam
 as a non-Steam game and select Proton under **Properties → Compatibility**.
 Keep the shortcut pointed at that same EXE after selecting **Deploy**.
+See the [Proton gameplay checks](docs/proton.md) for the tested setup and how
+to verify keyboard movement in a field or storybook scene.
 
 To build from source instead, see [BUILDING.md](BUILDING.md).
 
