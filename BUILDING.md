@@ -55,7 +55,7 @@ The native player loads the assembly, runs the original static constructors,
 registers Unity's internal calls and starts managed runtime initialization.
 Native 2D and 3D gameplay are still unverified.
 
-To include the offline server, pass `--server /path/to/bunker-server-1.12.22-linux-x86_64`
+To include the offline server, pass `--server /path/to/bunker-server-1.12.23-linux-x86_64`
 to the staging command. It verifies the release checksum. The server can
 check its game, asset and account endpoints against a private save on Linux.
 

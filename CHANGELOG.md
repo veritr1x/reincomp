@@ -3,6 +3,13 @@
 What changed, newest first, by date and area. A release's heading comes
 above the dated sections it holds.
 
+## 0.3.0 (2026-11-23)
+
+- Hold Left Shift to walk or press Tab to toggle walking. Arrow keys also move the character. L3 toggles walking on a controller. R or Xbox X / PlayStation Square activates field auto-run when available. Mouse Back works alongside Esc.
+- FSR uses native resolution for the Summons banner and other menu UI. The Windows renderer reduces OpenGL-to-Vulkan copying and handles startup and window resizing.
+- Bunker’s **Support → Export logs** saves a diagnostic ZIP during play or setup. The Windows frame log records RAM, managed heap and per-adapter GPU memory alongside frame timings every five seconds, including when FSR is off.
+- Windows builds include Bunker 1.12.23. Experimental native Linux player development is available in the source tree.
+
 ## 0.2.8 (2026-11-23)
 
 - Verified keyboard movement in a 3D field after deployment and relaunch, and in a 2D storybook under GE-Proton. The repository includes the movement checker and steps to repeat both tests.
