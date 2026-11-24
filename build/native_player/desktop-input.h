@@ -467,7 +467,8 @@ static void advance(){
     auto stick=keys.Target(w,h);
     auto analog=thumb(pad.sThumbLX,pad.sThumbLY,XINPUT_GAMEPAD_LEFT_THUMB_DEADZONE);
     Point origin{stick.origin_x,h-stick.origin_y};
-    Point target=stick.active?Point{stick.x,h-stick.y}:Point{origin.x+analog.x*h*.15f,origin.y+analog.y*h*.15f};
+    const float radius=std::fmin(w,h)*.15f;
+    Point target=stick.active?Point{stick.x,h-stick.y}:Point{origin.x+analog.x*radius,origin.y+analog.y*radius};
     const bool walkInput=(walking || heldKey(VK_LSHIFT)) && (target.x!=origin.x || target.y!=origin.y);
     if(walkInput){
         // The field measures pans in centimetres. 0.35 cm lies between the

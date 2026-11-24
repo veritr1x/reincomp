@@ -236,7 +236,8 @@ int main(){
     auto settledRadius=[&]{
         for(int i=0;i<14;++i)next();
         assert(movement.held && number(0x83d27da0)==0);
-        return std::hypot(movement.touch.position.x-w*.5f,movement.touch.position.y-h*.5f);
+        const float inset=std::fmin(w,h)*.2f;
+        return std::hypot(movement.touch.position.x-inset,movement.touch.position.y-inset);
     };
     for(auto [vk,unity]:{std::pair{VK_UP,273},std::pair{VK_DOWN,274},std::pair{VK_LEFT,276},std::pair{VK_RIGHT,275}}){
         windowsKey=vk;assert(next()==1 && read(0).phase==Began);
@@ -324,7 +325,7 @@ int main(){
     pressed['d']=true;assert(next()==1 && read(0).phase==Began);
     pressed['d']=false;assert(next()==1 && read(0).phase==Moved && read(0).delta.x>0);
     assert(next()==1 && read(0).phase==Ended);assert(next()==0);
-    keys['w']=true;assert(next()==1 && read(0).position.y==h*.5f);
+    keys['w']=true;assert(next()==1 && read(0).position.x==h*.2f && read(0).position.y==h*.2f);
     assert(next()==1 && read(0).delta.y>0);keys['d']=true;assert(next()==1 && read(0).delta.x>0);
     physical=2;assert(next()==3 && read(0).id==0 && read(1).id==1 && read(2).id>1);
     deviceIds={101,100};assert(next()==3 && read(0).id==1 && read(1).id==0);
@@ -374,7 +375,7 @@ int main(){
     focus=true;pad.sThumbRX=0;next();
     POINT inside=cursor;cursor.x=42;pad.wButtons=XINPUT_GAMEPAD_A;assert(next()==0);
     cursor=inside;assert(next()==0);pad.wButtons=0;next();
-    w=800;h=600;keys['a']=true;assert(next()==1 && read(0).position.x==400 && read(0).position.y==300);
+    w=800;h=600;keys['a']=true;assert(next()==1 && read(0).position.x==120 && read(0).position.y==120);
     assert(number(0x83d27da0)==0);
     keys.fill(false);next();next();
     connected=false;
@@ -426,7 +427,7 @@ int main(){
     assert(next()==1 && read(0).phase==Canceled && read(0).position.x==oldPosition.x);
     w=960;assert(next()==0);
     w=900;assert(next()==0);
-    assert(next()==1 && read(0).phase==Began && read(0).position.x==450 && read(0).position.y==325);
+    assert(next()==1 && read(0).phase==Began && read(0).position.x==130 && read(0).position.y==130);
     assert(next()==1 && read(0).delta.x>0 && read(0).delta.y==0);
     w=h=0;
     assert(next()==1 && read(0).phase==Canceled);

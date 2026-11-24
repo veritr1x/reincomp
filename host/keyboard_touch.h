@@ -1,7 +1,7 @@
 #pragma once
 // Keyboard controls for the touch-only game. The character moves by dragging
 // anywhere on screen (a floating stick), so held direction keys become one
-// held drag from the screen centre toward their combined direction.
+// held drag from the lower left toward their combined direction.
 // Keys are Win32 virtual-key codes; a Linux window backend maps to the same.
 // Portable C++, no platform headers.
 #include <cmath>
@@ -51,8 +51,9 @@ class Stick {
   // cancel; diagonals keep the same radius.
   struct Target Target(float width, float height) const {
     struct Target t;
-    t.origin_x = width * 0.5f;
-    t.origin_y = height * 0.5f;
+    const float short_side = std::fmin(width, height);
+    t.origin_x = short_side * 0.2f;
+    t.origin_y = height - short_side * 0.2f;
     uint8_t bits = 0;
     for (int i = 0; i < 8; ++i)
       if (held_[i]) bits |= Direction(kKeys[i]);
@@ -61,7 +62,7 @@ class Stick {
     t.active = bits != 0;  // held, even if opposite keys cancel (stand still)
     const float length = std::sqrt(dx * dx + dy * dy);
     if (length > 0) { dx /= length; dy /= length; }
-    const float radius = height * 0.15f;
+    const float radius = short_side * 0.15f;
     t.x = t.origin_x + dx * radius;
     t.y = t.origin_y + dy * radius;
     return t;

@@ -33,7 +33,8 @@ int main() {
     ++number; press=false; assert(touches()==1 && first().phase==Stationary);
     ++number; mouse=false; release=true; assert(touches()==1 && first().phase==Ended);
     ++number; release=false; right=true; assert(touches()==0 && touches(true)==1 && first().phase==Began && contact.id==0);
-    ++number; assert(touches(true)==1 && first().phase==Moved && contact.position.x>480);
+    assert(contact.position.x==108 && contact.position.y==108);
+    ++number; assert(touches(true)==1 && first().phase==Moved && contact.position.x>108);
     ++number; focused=false; assert(touches(true)==1 && first().phase==Canceled);
     ++number; focused=true; right=false; real=1; mouse=true; assert(touches()==1 && first().id==8);
     ++number; real=0; assert(touches()==0);
