@@ -1,13 +1,13 @@
 {
   "portable": {
     "bunkerVersion": "1.12.23",
-    "runtimeManifestSHA256": "ca1a51b34d5e42815fa848d6c0bbcecdbca478bf8729052eba5225ed28d959a8",
-    "sha256": "5679e89724c33b145fb43f47e742544e23c9bb8821d893cb215058066e5a2b7f",
-    "size": 1057902948,
+    "runtimeManifestSHA256": "2219230654bd90e6fb9456b4844d21d464993afbc636dc25fb1a9753d82184fa",
+    "sha256": "5929ff620817669ac001a4e2c0714082b52a9c95a6596e80be31d658b80ebd3d",
+    "size": 1057904607,
     "playerMembers": {
       "game/EngineCalls.dll": "a7ce74e9399d32ecae8a25e4e6b29dde2097da8046a9dbef617ff87051957893",
       "game/Fsr31.dll": "0f74d7dcbeba57d8870a34eb594edd1ba88f3b751a12e226af7899cab2246884",
-      "game/GameAssembly.dll": "d608a159906ed78508ce4a2c3e759bf31da5ee5abbdf68a586bc185167635748",
+      "game/GameAssembly.dll": "b5f8435c09d61a452e24c5b152bc3fc8b02edcf2f4ca383089cf9878eae07258",
       "game/WindowsPlayer.exe": "1d2a5afd032eee54d4064719904365f003ed02db8eb75d8476dd55cd6385cafe",
       "game/archive-media.exe": "2f664df4fca41f145b8e75fe175678dc7894cb3a6914da786adddb4471356fe7",
       "game/bunker_icon.py": "cc881470a8c2573943345eb50d03314de1d0c5ee205b4e2964a3df5ec6020b63",
@@ -15,12 +15,12 @@
       "game/desktop_display.py": "fc4f43b6fda5fbfca6eb1b68745385a63928349b0323c0d3fa609548b1c23844",
       "game/desktop_services.py": "98ea7a9027efe2a81541939f1ac39d6b2f82dab7d720e8d7281ed4e3ba221208",
       "game/package_assets.py": "985eddf6f559caf278a3e51d571d6263d9ec5938e7c959ff848a70c2ce5759bc",
-      "game/portable-emblem.json": "83099b7a22cf0b6a0836b53b5c12beaa0851279a787358223780b70aa88e0cb8",
+      "game/portable-emblem.json": "874ce44b79fc407b62eb41594d57a95a41394cdc96b0a33334633a57bc8b51a2",
       "game/resource-setup.css": "9e053656b6aa02b705eb89fc5f1b54b13e77f633cbd86777cacc8912273b242a",
       "game/resource-setup.html": "d86f61c65deab1fd9033683a0e57a7ce35bbbcb82674dbe4d37ce3bbdd2bcfcd",
       "game/resource-window.exe": "5c870a7c5d7b9a631d3a7b2063950a60e5ad189e58ef8a5ce060a8da4d688e04",
       "game/resource_setup.py": "321c36089656be29e08a879eb2332bcb9039db84890b4ef5391dce68b76abbd3",
-      "launcher.exe": "d5b6cd010c5a9c96a99e24159af19b1be8ed636c8edea0d9628a9515f5be47de",
+      "launcher.exe": "be502e05344a8ae24e48b18eaaf56348a214e030cf24999d9c557d43b91fb2ca",
       "pods/VERSION": "1190cbd2a7006335d6e8a4c96ad87023bd32c76eecb0c1f1d39e010ca4b7bfdc",
       "pods/app/archive/static/archive.css": "8f20523fbb327ba8502e4c83b676b105c23160e404244fd001107be4288bc7ad",
       "pods/app/archive/templates/base.html": "6ebb5bb56648c3cce2fdcb9152d08ce0f66246d5357aafdf609e17c001903fd0",
@@ -41,7 +41,7 @@
   },
   "linuxRuntime": {
     "bunkerVersion": "1.12.23",
-    "asset": "reincomp-linux-x86_64-0.3.6.tar.gz",
+    "asset": "reincomp-linux-x86_64-0.3.7.tar.gz",
     "sha256": "92e352ba26f11617caf3526ac4862ab1f3aafb89fb277f5e820fcd65bba84972",
     "size": 272297976
   },

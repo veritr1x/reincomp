@@ -3,6 +3,10 @@
 What changed, newest first, by date and area. A release's heading comes
 above the dated sections it holds.
 
+## 0.3.7 (2026-11-24)
+
+- Fixed the “Failed to connect” dialog when leaving an Anecdote mission panel on Windows. The back arrow now opens Notices. Closing Notices returns you to Special Missions.
+
 ## 0.3.6 (2026-11-24)
 
 - Fixed a Windows crash when closing Mama's menu after the first Loadout tutorial. Closing the menu now returns to the field after saving the deck.

@@ -14,6 +14,9 @@
 #include <algorithm>
 #include <map>
 #include <mutex>
+#ifdef REINCOMP_BUNKER_MODULES
+#include <set>
+#endif
 #include <vector>
 
 namespace bunker::windows {
@@ -92,6 +95,7 @@ struct BunkerView::Impl:std::enable_shared_from_this<Impl> {
   // The running game shares its launcher's loopback UI. Pod Programs still
   // uses the authenticated dashboard session and its existing startup path.
   std::wstring launcherHome;
+  std::set<UINT64> handledPageNavigations;
 #endif
 #if REINCOMP_VIEW_REVISION >= 2 || defined(REINCOMP_BUNKER_MODULES)
   std::wstring dashboardPath=L"/";
@@ -293,6 +297,22 @@ struct BunkerView::Impl:std::enable_shared_from_this<Impl> {
             PostMessageW(self->window,self->pageEvent?web_controller::ToggleLauncher:WM_APP+0x36e,0,0);return S_OK;
           }
           if(self->pageEvent){
+#ifdef REINCOMP_BUNKER_MODULES
+            // The game pages use UniWebView links for actions such as Back and
+            // Close. The Android bridge sends the complete URI to Unity.
+            if(uri.rfind(L"uniwebview://",0)==0){
+              UINT64 id{};
+              if(SUCCEEDED(arguments->get_NavigationId(&id)) && SUCCEEDED(arguments->put_Cancel(TRUE))){
+                self->handledPageNavigations.insert(id);
+                LPWSTR source=nullptr;
+                if(SUCCEEDED(self->web->get_Source(&source)) && source && !self->origin.empty() &&
+                   std::wstring_view(source).rfind(self->origin,0)==0)
+                  self->pageEvent(L"MessageReceived",uri);
+                CoTaskMemFree(source);
+              }
+              return S_OK;
+            }
+#endif
             if(uri.compare(0,self->origin.size(),self->origin)!=0 || self->origin.empty()){
               arguments->put_Cancel(TRUE);
               BOOL user=FALSE;arguments->get_IsUserInitiated(&user);
@@ -336,6 +356,10 @@ struct BunkerView::Impl:std::enable_shared_from_this<Impl> {
       auto *done=new Handler<ICoreWebView2NavigationCompletedEventHandler,ICoreWebView2*,ICoreWebView2NavigationCompletedEventArgs*>(
         kCompletedHandler,[weak](ICoreWebView2 *sender,ICoreWebView2NavigationCompletedEventArgs *args)->HRESULT{
           auto self=weak.lock();if(!self||!args)return S_OK;
+#ifdef REINCOMP_BUNKER_MODULES
+          UINT64 id{};
+          if(SUCCEEDED(args->get_NavigationId(&id)) && self->handledPageNavigations.erase(id))return S_OK;
+#endif
           BOOL ok=FALSE;args->get_IsSuccess(&ok);
           LPWSTR raw=nullptr;sender->get_Source(&raw);
           std::wstring uri=raw?raw:L"";CoTaskMemFree(raw);
