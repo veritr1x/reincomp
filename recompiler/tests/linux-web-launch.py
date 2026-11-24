@@ -50,9 +50,9 @@ sys.stdin.read()
                 env = os.environ.copy()
                 env.pop("REINCOMP_BUNKER_PORT_OFFSET", None)
                 if shared:
-                    env["REINCOMP_BUNKER_PORT_OFFSET"] = "0"
+                    env["REINCOMP_BUNKER_PORT_OFFSET"] = "4000"
                 subprocess.run([sys.executable, launcher, *args], cwd=game, env=env, check=True, timeout=10)
-                expected = "0" if shared else "3865"
+                expected = "4000" if shared else "0"
                 self.assertEqual((game / "server-offset").read_text(), expected)
                 self.assertEqual((player / "player-offset").read_text(), expected)
                 if shared:

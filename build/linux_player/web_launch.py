@@ -108,7 +108,7 @@ def main():
             print("Linux player and game resources are ready.")
             return 0
         log = state / "server.log"
-        offset = int(os.environ.get("REINCOMP_BUNKER_PORT_OFFSET", "3865"))
+        offset = int(os.environ.get("REINCOMP_BUNKER_PORT_OFFSET", "0"))
         if not 0 <= offset <= 57455:
             raise ValueError("Invalid Bunker port offset")
         with log.open("w") as errors, subprocess.Popen(
