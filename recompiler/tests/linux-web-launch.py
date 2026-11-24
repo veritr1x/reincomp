@@ -57,6 +57,17 @@ sys.stdin.read()
                 self.assertEqual((player / "player-offset").read_text(), expected)
                 if shared:
                     self.assertFalse((library / "notices").exists())
+                def set_port(value, ok=True):
+                    return subprocess.run([sys.executable, launcher, "--server-ports", value], cwd=game,
+                                          env=env, check=ok, capture_output=True, text=True, timeout=10)
+                self.assertIn("Game 11868", set_port("11945").stdout)
+                self.assertNotEqual(set_port("65536", ok=False).returncode, 0)
+                subprocess.run([sys.executable, launcher, *args], cwd=game, env=env, check=True, timeout=10)
+                expected = "4000" if shared else "3865"
+                self.assertEqual((game / "server-offset").read_text(), expected)
+                self.assertEqual((player / "player-offset").read_text(), expected)
+                self.assertIn("Assets 8080", set_port("default").stdout)
+                self.assertFalse((state / "server-ports.json").exists())
 
 
 if __name__ == "__main__":

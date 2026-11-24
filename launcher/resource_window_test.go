@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -44,6 +45,77 @@ func TestNativeSetupImportsBeforeDeploy(t *testing.T) {
 	want := "setup 1\t\nchoose-folder\nsetup 0\t\nsetup 3\tGame files are ready.\nsetup 0\tStarting the game…\n"
 	if string(got) != want {
 		t.Fatalf("native setup commands = %q, want %q", got, want)
+	}
+}
+
+func TestServerPortPreference(t *testing.T) {
+	root := t.TempDir()
+	data := filepath.Join(root, "data")
+	if err := os.Mkdir(data, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(data, "launcher.json"), []byte(`{"theme":"dark","updates":false}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	master := filepath.Join(root, masterName)
+	if err := os.WriteFile(master, nil, 0600); err != nil {
+		t.Fatal(err)
+	}
+	menu, err := startLauncher(root, "", root, master, "", true, true, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(menu.close)
+	for _, tc := range []struct {
+		body          string
+		status, saved int
+	}{
+		{"", 200, 38080},
+		{`{"assetPort":11945}`, 200, 11945},
+		{`{"assetPort":8079}`, 400, 11945},
+		{`{"assetPort":65536}`, 400, 11945},
+		{`{"assetPort":8080.5}`, 400, 11945},
+		{`{"assetPort":65535}`, 200, 65535},
+		{`{"assetPort":8080}`, 200, 8080},
+		{`{"assetPort":38080}`, 200, 38080},
+	} {
+		method := http.MethodPost
+		if tc.body == "" {
+			method = http.MethodGet
+		}
+		req, err := http.NewRequest(method, menu.homeURL+"preferences", strings.NewReader(tc.body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Header.Set("Origin", "http://"+req.URL.Host)
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if resp.StatusCode == http.StatusOK {
+			var prefs launcherPreferences
+			if err := json.NewDecoder(resp.Body).Decode(&prefs); err != nil || prefs.AssetPort != tc.saved {
+				t.Errorf("response for %q: port %d, error %v", tc.body, prefs.AssetPort, err)
+			}
+		}
+		resp.Body.Close()
+		prefs := readLauncherPreferences(data)
+		if resp.StatusCode != tc.status || prefs.AssetPort != tc.saved || prefs.Theme != "dark" || prefs.Updates {
+			t.Fatalf("%q: HTTP %d, preferences %+v", tc.body, resp.StatusCode, prefs)
+		}
+	}
+}
+
+func TestSavedAssetPortFormats(t *testing.T) {
+	data := t.TempDir()
+	for raw, want := range map[string]int{`"11945"`: 11945, "12080": 12080, `"bad"`: 38080, "65536": 38080} {
+		if err := os.WriteFile(filepath.Join(data, "launcher.json"), []byte(`{"theme":"dark","assetPort":`+raw+`}`), 0600); err != nil {
+			t.Fatal(err)
+		}
+		prefs := readLauncherPreferences(data)
+		if prefs.AssetPort != want || prefs.Theme != "dark" {
+			t.Errorf("stored port %s: got %+v, want port %d and dark theme", raw, prefs, want)
+		}
 	}
 }
 

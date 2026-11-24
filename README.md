@@ -75,6 +75,31 @@ cd "$HOME/Downloads/NieR Reincarnation"
 
 For offline setup and system requirements, see [Native Linux setup](docs/linux-web-builder.md).
 
+### Server ports
+
+The launcher moves the local game, asset and account ports together. Select
+an asset port from 8080 to 65535. For example, 11945 uses game port 11868 and
+account port 6865. Saved changes apply the next time Lunar Tear starts.
+
+- **Windows and Proton** — Open **Bunker → ⋮ → Server ports**, enter the asset
+  port and select **Save**. During play, Ctrl+B opens Bunker. In the native
+  setup window used without WebView2, enter the asset port and click **Save ports**.
+  To return to port 38080, click **Restore defaults** and save. The launcher
+  stores the choice in `data/launcher.json` inside the player installation.
+  If a conflict prevents startup, run `"Nier Reincarnation.exe" -launcher`
+  to open the settings before starting the server.
+- **Native Linux** — Run `./Play.sh --server-ports` in the installation
+  folder, or `./Play.sh --server-ports 11945` to save a value directly.
+  The choice is saved in `.reincomp/server-ports.json` beside `Play.sh`.
+  `./Play.sh --server-ports default` restores asset port 8080.
+- **RecompLauncher** — Open the game's settings and choose **Server ports →
+  Asset port**. This uses the same saved value as the platform launcher.
+- **Bunker for Android and iOS** — In the web builder, choose the mobile
+  platform, then **03 Build → Experimental :: Port offset**. Enter the asset
+  port minus 8080 (3865 for asset port 11945). The generated APK or IPA uses
+  that value. Changing ports on an installed mobile copy requires rebuilding
+  the package. The Apple-silicon Mac build uses the same IPA.
+
 ## Controls
 
 - Mouse or touch: tap and drag.

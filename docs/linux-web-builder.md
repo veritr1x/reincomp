@@ -19,9 +19,12 @@ the matching `reincomp-linux-x86_64-<version>.tar.gz` release asset beside
 `Play.sh` before running it. Keep the installation in a writable folder.
 The local server stores its save in `.reincomp/save`.
 
-The asset server listens on port 8080 by default. If another program uses
-that port, `REINCOMP_BUNKER_PORT_OFFSET=4000 ./Play.sh` moves the asset
-server to 12080 and adjusts the game and account ports to match. To request
+The asset server listens on port 8080 by default. Run `./Play.sh --server-ports`
+to see the ports and choose a new asset port. You can also save a choice directly
+with `./Play.sh --server-ports 11945`. The next launch uses port 11945 for
+assets, 11868 for the game and 6865 for accounts. Use
+`./Play.sh --server-ports default` to restore the defaults.
+`REINCOMP_BUNKER_PORT_OFFSET` overrides the saved setting for that launch. To request
 a 1280 × 720 window, run
 `./Play.sh -- -screen-width 1280 -screen-height 720 -screen-fullscreen 0`.
 The native launcher currently uses the game's frame-rate setting.

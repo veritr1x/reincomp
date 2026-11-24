@@ -16,7 +16,12 @@
     "done": ["{data}/ready", "{install}/game/WindowsPlayer_Data/globalgamemanagers", "{install}/data/assets/assets/release/20240404193219.bin.e"]
   },
   "start": {"program": ["launcher.exe"]},
+  "config": [{"id": "launcher", "format": "json", "file": [{"path": "{install}/data/launcher.json"}]}],
   "settings": [
+    {"id": "assetPort", "label": "Asset port", "in": "launcher", "group": "Server ports",
+     "help": "Moves the game and account ports with the asset server on the next launch.",
+     "slider": {"key": "assetPort", "min": 8080, "max": 65535, "step": 1, "format": "%.0f"},
+     "defaults": {"assetPort": "38080"}},
     {"id": "framerate", "label": "Frame rate", "in": "args", "choices": [
       {"label": "Bunker setting", "args": []}, {"label": "30 FPS", "args": ["-fps=30"]},
       {"label": "60 FPS", "args": ["-fps=60"]}, {"label": "120 FPS", "args": ["-fps=120"]}

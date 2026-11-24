@@ -1,4 +1,5 @@
 #include "../../host/game_page.h"
+#include "../../host/bunker_ports.h"
 namespace webview_jni {
 using bunker::jni::Host;
 using bunker::windows::GamePageAction;
@@ -43,7 +44,11 @@ static void install(Host &host){
     for(const auto &op:ops)
         host.BindStaticVoidMethod(owner,op.name,"("+op.args+")V",[&host,action=op.action](addr_t,const Arguments &a){
             auto id=string(host,a[0]);
-            if(action==GamePageAction::Load)post(action,id,string(host,a[1]));
+            if(action==GamePageAction::Load){
+                auto url=string(host,a[1]);
+                bunker::ports::routeAssetUrl(url,8080+bunker::ports::windowsOffset());
+                post(action,id,url);
+            }
             else if(action==GamePageAction::Header)post(action,id,string(host,a[1]),0,0,0,0,string(host,a[2]));
             else if(action==GamePageAction::Size)post(action,id,{},0,0,int(a[1]),int(a[2]));
             else if(action==GamePageAction::Show)post(a[1]?GamePageAction::Show:GamePageAction::Hide,id);

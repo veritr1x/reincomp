@@ -63,6 +63,7 @@ std::map<P,std::shared_ptr<Operation>> operations;
 void start(State &s, unsigned port) {
     static const Types types;
     auto url = managedPath(reinterpret_cast<P>(s.gpr.x0.qword)).u8string();
+    bunker::ports::routeAssetUrl(url, port, true);
     auto path = managedPath(reinterpret_cast<P>(s.gpr.x1.qword));
     const auto root = fs::weakly_canonical(storagePath() / "octo");
     std::error_code error;

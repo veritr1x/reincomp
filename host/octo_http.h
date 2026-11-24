@@ -38,6 +38,7 @@
 #endif
 
 #include "jni_host.h"
+#include "bunker_ports.h"
 
 namespace bunker::windows::octo_http {
 
@@ -174,7 +175,10 @@ class Service {
       std::lock_guard lock(d->mutex);return d->io_error||d->error_code.has_value();});
   }
 
-  addr_t Start(const std::string &url,const std::string &path){
+  addr_t Start(std::string url,const std::string &path){
+#ifdef REINCOMP_EMBEDDED_PLAYER
+    bunker::ports::routeAssetUrl(url,8080+bunker::ports::windowsOffset(),true);
+#endif
     auto download=std::make_shared<Download>();
     auto result=java_.NewHostInstance(kResult,download);if(!result)return 0;
     auto task=std::make_shared<Task>(Task{download,java_.CaptureValue(result)});

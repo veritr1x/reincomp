@@ -25,23 +25,52 @@ import (
 var hideHelperWindow = func(*exec.Cmd) {}
 var playerParent atomic.Uintptr
 
+const baseAssetPort = 8080
+const defaultWindowsAssetPort = 38080
+
+func validAssetPort(port int) bool { return port >= baseAssetPort && port <= 65535 }
+
 type launcherPreferences struct {
 	Theme       string `json:"theme"`
 	Updates     bool   `json:"updates"`
 	AutoInstall bool   `json:"autoInstall"`
 	Skipped     string `json:"skipped,omitempty"`
+	AssetPort   int    `json:"assetPort"`
 }
 
 func readLauncherPreferences(data string) launcherPreferences {
-	p := launcherPreferences{Theme: "system", Updates: true}
+	p := launcherPreferences{Theme: "system", Updates: true, AssetPort: defaultWindowsAssetPort}
 	b, err := os.ReadFile(filepath.Join(data, "launcher.json"))
 	if err == nil {
-		json.Unmarshal(b, &p)
+		// Config editors can write JSON numbers or their decimal strings.
+		disk := struct {
+			*launcherPreferences
+			Port json.Number `json:"assetPort"`
+		}{launcherPreferences: &p}
+		json.Unmarshal(b, &disk)
+		if port, err := strconv.Atoi(disk.Port.String()); err == nil {
+			p.AssetPort = port
+		}
 	}
 	if p.Theme != "dark" && p.Theme != "light" {
 		p.Theme = "system"
 	}
+	if !validAssetPort(p.AssetPort) {
+		p.AssetPort = defaultWindowsAssetPort
+	}
 	return p
+}
+
+func (p launcherPreferences) save(data string) error {
+	raw, err := json.Marshal(p)
+	if err != nil {
+		return err
+	}
+	path := filepath.Join(data, "launcher.json")
+	if err := os.WriteFile(path+".part", raw, 0600); err != nil {
+		return err
+	}
+	return os.Rename(path+".part", path)
 }
 
 type resourceWindow struct {
@@ -267,6 +296,7 @@ func startLauncher(root, server, assets, master, dump string, ready, inGameOnly 
 					Updates     *bool
 					AutoInstall *bool
 					Skipped     *string
+					AssetPort   *int
 				}
 				if json.NewDecoder(http.MaxBytesReader(out, r.Body, 1024)).Decode(&change) != nil {
 					http.Error(out, "Invalid preferences", 400)
@@ -284,6 +314,13 @@ func startLauncher(root, server, assets, master, dump string, ready, inGameOnly 
 				if change.Updates != nil {
 					p.Updates = *change.Updates
 				}
+				if change.AssetPort != nil {
+					if !validAssetPort(*change.AssetPort) {
+						http.Error(out, "Enter an asset port from 8080 to 65535.", 400)
+						return
+					}
+					p.AssetPort = *change.AssetPort
+				}
 				if change.AutoInstall != nil {
 					p.AutoInstall = *change.AutoInstall
 				}
@@ -294,13 +331,7 @@ func startLauncher(root, server, assets, master, dump string, ready, inGameOnly 
 					}
 					p.Skipped = *change.Skipped
 				}
-				raw, _ := json.Marshal(p)
-				path := filepath.Join(data, "launcher.json")
-				err := os.WriteFile(path+".part", raw, 0600)
-				if err == nil {
-					err = os.Rename(path+".part", path)
-				}
-				if err != nil {
+				if err := p.save(data); err != nil {
 					http.Error(out, err.Error(), 500)
 					return
 				}
@@ -514,6 +545,7 @@ func startLauncher(root, server, assets, master, dump string, ready, inGameOnly 
 		return w, nil
 	}
 	cmd := exec.Command(filepath.Join(root, "game", "resource-window.exe"), root, w.homeURL)
+	cmd.Env = append(os.Environ(), "REINCOMP_LAUNCHER_ASSET_PORT="+strconv.Itoa(readLauncherPreferences(filepath.Join(root, "data")).AssetPort))
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		cancel()
@@ -538,6 +570,22 @@ func startLauncher(root, server, assets, master, dump string, ready, inGameOnly 
 			switch action {
 			case "setup-state", "setup-choose", "setup-folder", "setup-deploy":
 				w.nativeSetup(action)
+			case "setup-save-port":
+				w.mu.Lock()
+				port, err := strconv.Atoi(value)
+				if err != nil || !validAssetPort(port) {
+					w.status = "Enter an asset port from 8080 to 65535."
+				} else {
+					data := filepath.Join(root, "data")
+					p := readLauncherPreferences(data)
+					p.AssetPort = port
+					if err := p.save(data); err != nil {
+						w.status = err.Error()
+					} else {
+						w.status = fmt.Sprintf("Saved for the next server start. Game %d, assets %d, accounts %d.", port-77, port, port-5080)
+					}
+				}
+				w.mu.Unlock()
 			case "window":
 				if handle, err := strconv.ParseUint(value, 10, 64); err == nil && handle != 0 {
 					opened <- value

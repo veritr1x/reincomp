@@ -19,7 +19,7 @@ constexpr UINT choose = WM_APP+101, player = WM_APP+102, finish = WM_APP+103, to
 constexpr UINT openProgram = WM_APP+105, resetProgram=WM_APP+106;
 constexpr UINT showSetup = WM_APP+107, updateSetup=WM_APP+108;
 constexpr UINT_PTR setupTimer=2;
-enum { pickArchive=301, pickFolder, deployGame };
+enum { pickArchive=301, pickFolder, deployGame, editAssetPort, savePorts, defaultPorts };
 std::unique_ptr<BunkerView> page, dashboard;
 std::filesystem::path install;
 HWND child{};
@@ -27,6 +27,17 @@ DWORD playerPid{};
 using window_size::Mode;
 window_size::Fullscreen fullscreen;
 HWND setupHint{}, archiveButton{}, folderButton{}, deployButton{}, setupStatus{};
+HWND portLabel{}, portEdit{}, portPreview{}, portSave{}, portDefault{};
+
+void previewPorts() {
+    BOOL valid{};
+    const auto port=GetDlgItemInt(GetParent(portEdit),editAssetPort,&valid,FALSE);
+    valid=valid && port>=8080 && port<=65535;
+    std::wstring text=valid ? L"Game "+std::to_wstring(port-77)+L"   Accounts "+std::to_wstring(port-5080)
+                            : L"Enter a port from 8080 to 65535.";
+    SetWindowTextW(portPreview,text.c_str());
+    EnableWindow(portSave,valid);
+}
 
 void layoutSetup(HWND window) {
     if (!setupHint) return;
@@ -39,6 +50,12 @@ void layoutSetup(HWND window) {
         MoveWindow(button,margin,y,std::min(width,280),30,TRUE);
         y+=36;
     }
+    MoveWindow(portLabel,margin,y,144,24,TRUE);
+    MoveWindow(portEdit,margin+144,y,80,24,TRUE);
+    MoveWindow(portPreview,margin,y+28,width,24,TRUE);
+    MoveWindow(portSave,margin,y+52,105,30,TRUE);
+    MoveWindow(portDefault,margin+112,y+52,126,30,TRUE);
+    y+=90;
     MoveWindow(setupStatus,margin,y,width,std::max(1L,r.bottom-y-margin),TRUE);
 }
 
@@ -54,6 +71,14 @@ void showNativeSetup(HWND window) {
     archiveButton=control(L"BUTTON",L"Choose resource archive...",WS_TABSTOP|WS_DISABLED,pickArchive);
     folderButton=control(L"BUTTON",L"Copy extracted folder...",WS_TABSTOP|WS_DISABLED,pickFolder);
     deployButton=control(L"BUTTON",L"Deploy",WS_TABSTOP|WS_DISABLED,deployGame);
+    portLabel=control(L"STATIC",L"Server ports · Asset",0,0);
+    portEdit=control(L"EDIT",L"",WS_BORDER|ES_NUMBER|WS_TABSTOP,editAssetPort);
+    portPreview=control(L"STATIC",L"",0,0);
+    portSave=control(L"BUTTON",L"Save ports",WS_TABSTOP,savePorts);
+    portDefault=control(L"BUTTON",L"Restore defaults",WS_TABSTOP,defaultPorts);
+    const auto saved=_wgetenv(L"REINCOMP_LAUNCHER_ASSET_PORT");
+    SetWindowTextW(portEdit,saved?saved:L"38080");
+    previewPorts();
     setupStatus=control(L"STATIC",L"Checking game files...",SS_NOPREFIX,0);
     layoutSetup(window);
     SetTimer(window,setupTimer,700,nullptr);
@@ -62,9 +87,10 @@ void showNativeSetup(HWND window) {
 
 void closeNativeSetup(HWND window) {
     KillTimer(window,setupTimer);
-    for (HWND control : {setupHint,archiveButton,folderButton,deployButton,setupStatus})
+    for (HWND control : {setupHint,archiveButton,folderButton,deployButton,setupStatus,portLabel,portEdit,portPreview,portSave,portDefault})
         if (control) DestroyWindow(control);
     setupHint=archiveButton=folderButton=deployButton=setupStatus=nullptr;
+    portLabel=portEdit=portPreview=portSave=portDefault=nullptr;
 }
 
 void fit(HWND window) {
@@ -127,11 +153,19 @@ LRESULT CALLBACK events(HWND w,UINT message,WPARAM wp,LPARAM lp) {
         return 0;
     }
     case WM_COMMAND:
+        if (portEdit && LOWORD(wp)==editAssetPort && HIWORD(wp)==EN_CHANGE) { previewPorts(); return 0; }
         if (setupHint && HIWORD(wp)==BN_CLICKED) {
             switch (LOWORD(wp)) {
             case pickArchive: std::cout << "setup-choose" << std::endl; return 0;
             case pickFolder:  std::cout << "setup-folder" << std::endl; return 0;
             case deployGame:  std::cout << "setup-deploy" << std::endl; return 0;
+            case savePorts: {
+                BOOL valid{};
+                auto port=GetDlgItemInt(w,editAssetPort,&valid,FALSE);
+                if (valid && port>=8080 && port<=65535) std::cout << "setup-save-port\t" << port << std::endl;
+                return 0;
+            }
+            case defaultPorts: SetWindowTextW(portEdit,L"38080"); return 0;
             }
         }
         break;

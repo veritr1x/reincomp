@@ -62,9 +62,6 @@ var libraries = []string{"libil2cpp.so", "libunity.so"}
 // The master data file the server reads.
 const masterName = "20240404193219.bin.e"
 
-// The ports the game's server profile expects: Bunker's 8003, 8080 and 3000 plus this.
-const portOffset = "30000"
-
 func main() {
 	assets := flag.String("assets", "", "folder with the imported game files the server serves (default: data/assets)")
 	fps := flag.String("fps", "", "frame rate target: a number or game (default: Bunker Display, otherwise 144 on the Windows player)")
@@ -247,6 +244,11 @@ func serveAndPlay(root, data, assets, game, server, view, native, apk, fps, rend
 	}
 
 	fmt.Println("Starting the server...")
+	assetPort := defaultWindowsAssetPort
+	if desktop {
+		assetPort = readLauncherPreferences(data).AssetPort
+	}
+	portOffset := strconv.Itoa(assetPort - baseAssetPort)
 	serve := exec.Command(server, "-data", filepath.Join(data, "server"), "-assets", assets, "-port-offset", portOffset, "-stdin")
 	hideHelperWindow(serve)
 	token := ""
@@ -425,6 +427,7 @@ func serveAndPlay(root, data, assets, game, server, view, native, apk, fps, rend
 				cmd.Env = append(cmd.Env, "REINCOMP_WINDOW_MAXIMIZED=1")
 			}
 		}
+		cmd.Env = append(cmd.Environ(), "REINCOMP_BUNKER_PORT_OFFSET="+portOffset)
 		cmd.Dir, cmd.Stdout, cmd.Stderr = dir, gameLog, gameLog
 		return cmd, nil
 	}

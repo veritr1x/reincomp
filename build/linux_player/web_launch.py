@@ -1,6 +1,7 @@
 """First run and play entry point for the native Linux browser download."""
 import argparse
 from contextlib import contextmanager
+import json
 import os
 from pathlib import Path
 import selectors
@@ -11,6 +12,50 @@ import tempfile
 
 RUNTIME = Path(__file__).resolve().parents[1]
 MASTER = "20240404193219.bin.e"
+BASE_ASSET_PORT = 8080
+
+
+def asset_port(value):
+    if not value.isascii() or not value.isdecimal() or not BASE_ASSET_PORT <= int(value) <= 65535:
+        raise ValueError("Enter a whole asset port from 8080 to 65535.")
+    return int(value)
+
+
+def saved_asset_port(path):
+    try:
+        prefs = json.loads(path.read_text())
+        if not isinstance(prefs, dict):
+            raise ValueError(f"Invalid server port settings in {path}")
+        return asset_port(str(prefs.get("assetPort", BASE_ASSET_PORT)))
+    except FileNotFoundError:
+        return BASE_ASSET_PORT
+
+
+def show_ports(port):
+    offset = port - BASE_ASSET_PORT
+    print(f"Assets {port} · Game {8003 + offset} · Accounts {3000 + offset}")
+
+
+def configure_ports(path, value):
+    if not value:
+        show_ports(saved_asset_port(path))
+        if not sys.stdin.isatty():
+            return
+        value = input("Asset port (8080–65535), 'default' to reset, or Enter to keep: ").strip()
+        if not value:
+            return
+    if value == "default":
+        path.unlink(missing_ok=True)
+        port = BASE_ASSET_PORT
+    else:
+        port = asset_port(value)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=path.parent) as work:
+            pending = Path(work) / path.name
+            pending.write_text(json.dumps({"assetPort": port}))
+            pending.replace(path)
+    print("Saved for the next server start.")
+    show_ports(port)
 
 
 def prepare_player(root, state):
@@ -91,10 +136,18 @@ def main():
     resources.add_argument("--dump", type=Path, help="import a resource dump (.7z or .zip)")
     resources.add_argument("--assets", type=Path, help="use an existing imported resource directory")
     parser.add_argument("--prepare-only", action="store_true", help="prepare and verify the local installation, then exit")
+    parser.add_argument("--server-ports", nargs="?", const="", metavar="PORT|default",
+                        help="show or save the local asset port and exit")
     parser.add_argument("unity_args", nargs=argparse.REMAINDER, help="Unity player arguments after --")
     args = parser.parse_args()
     root = Path.cwd()
     state = root / ".reincomp"
+    port_file = state / "server-ports.json"
+    if args.server_ports is not None:
+        configure_ports(port_file, args.server_ports)
+        if "REINCOMP_BUNKER_PORT_OFFSET" in os.environ:
+            print("REINCOMP_BUNKER_PORT_OFFSET overrides the saved setting while it is set.")
+        return 0
     with resource_library(root, state, args) as assets:
         pack = root / "notices.zip"
         if not pack.is_file():
@@ -108,7 +161,8 @@ def main():
             print("Linux player and game resources are ready.")
             return 0
         log = state / "server.log"
-        offset = int(os.environ.get("REINCOMP_BUNKER_PORT_OFFSET", "0"))
+        override = os.environ.get("REINCOMP_BUNKER_PORT_OFFSET")
+        offset = int(override) if override is not None else saved_asset_port(port_file) - BASE_ASSET_PORT
         if not 0 <= offset <= 57455:
             raise ValueError("Invalid Bunker port offset")
         with log.open("w") as errors, subprocess.Popen(

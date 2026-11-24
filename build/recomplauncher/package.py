@@ -87,7 +87,10 @@ def linux(folder, profile, cache, runtime_archive):
     profile["prepare"]["done"] = ["{data}/ready", "{data}/.reincomp/player-" + VERSION + "/Reincarnation_Data/globalgamemanagers",
                                   "{data}/.reincomp/resources/assets/release/20240404193219.bin.e"]
     profile["start"] = {"program": [python], "args": ["-I", "-B", "{install}/setup/prepare.py", "--play", "--"]}
-    profile["settings"] = [{"id": "window", "label": "Window mode", "in": "args", "choices": [
+    profile["config"][0]["file"] = [{"path": "{data}/.reincomp/server-ports.json"}]
+    port = next(setting for setting in profile["settings"] if setting["id"] == "assetPort")
+    port["defaults"]["assetPort"] = "8080"
+    profile["settings"] = [port, {"id": "window", "label": "Window mode", "in": "args", "choices": [
         {"label": "Game setting", "args": []}, {"label": "Windowed", "args": ["-screen-fullscreen", "0"]},
         {"label": "Fullscreen", "args": ["-screen-fullscreen", "1"]}]}]
     profile["saves"] = [path.replace("{install}/data/server", "{data}/.reincomp/save") for path in profile["saves"]]

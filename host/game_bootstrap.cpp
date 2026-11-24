@@ -61,6 +61,7 @@
 #include "libc.h"
 #include "logging.h"
 #include "server_profile.h"
+#include "bunker_ports.h"
 #include "lift_gap_overrides.h"
 #include "guest_probes.h"
 #include "absent_sdk_overrides.h"
@@ -1161,12 +1162,11 @@ int main(int argc,char **argv){
     if(!GameGrpcNative().empty()){
       bunker::windows::grpc_native::Service::Config grpc_config;
       grpc_config.library_path=fs::absolute(fs::u8path(GameGrpcNative())).u8string();
-      // The client serializes port 443; the local backend's gRPC port is 38003.
-      if(GameServerProfile())grpc_config.target_rewrites["127.0.0.1:443"]="127.0.0.1:38003";
-#ifdef REINCOMP_EMBEDDED_PLAYER
-      if(GameServerProfile() && std::getenv("REINCOMP_ISOLATED_SERVER"))
-        grpc_config.target_rewrites["127.0.0.1:443"]="127.0.0.1:39003";
-#endif
+      if(GameServerProfile()){
+        auto target="127.0.0.1:"+std::to_string(8003+bunker::ports::windowsOffset());
+        grpc_config.target_rewrites["127.0.0.1:443"]=target;
+        grpc_config.target_rewrites["127.0.0.1:38003"]=target;
+      }
       if(const char*v=std::getenv("BUNKER_GRPC_TRACE");v&&std::strcmp(v,"0"))grpc_config.trace=true;
       stage="gRPC native extension setup";grpc_service=std::make_unique<bunker::windows::grpc_native::Service>(std::move(grpc_config));
       grpc_service->Install(runtime);modules.Add(grpc_service->MakeModule());

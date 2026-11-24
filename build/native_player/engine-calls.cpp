@@ -29,6 +29,7 @@
 #include "controller-cursor.h"
 #include "unity-object.h"
 #include "../../host/keyboard_touch.h"
+#include "../../host/bunker_ports.h"
 #include "../../host/web_controller.h"
 namespace {
 using P=void *;
@@ -179,9 +180,7 @@ static void loadBundle(State &s,void *fn){
 static void setAssetUrl(State &s,void *fn){
     auto object=reinterpret_cast<P>(s.gpr.x1.qword);
     auto url=pathText(object);
-    static const std::wstring normal=L"http://127.0.0.1:38080/";
-    if(GetEnvironmentVariableW(L"REINCOMP_ISOLATED_SERVER",nullptr,0) && url.compare(0,normal.size(),normal)==0){
-        url.replace(0,normal.size(),L"http://127.0.0.1:39080/");
+    if(bunker::ports::routeAssetUrl(url,8080+bunker::ports::windowsOffset())){
         s.gpr.x1.qword=reinterpret_cast<uintptr_t>(managedPath(url));
     }
     auto useFile=[&](const std::filesystem::path &path){

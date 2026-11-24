@@ -46,6 +46,7 @@
 <iframe id="update-worker" title="Windows update" hidden referrerpolicy="no-referrer" sandbox="allow-scripts allow-same-origin"></iframe>
 <dialog id="options" aria-label="{{ t('launcher.main.options') }}"><div class="panel"><div class="scroll">
 <section id="service-options" hidden>{{ heading('launcher.main.lunar_tear') }}{{ option('stop','launcher.menu.stop') }}{{ option('check','launcher.menu.check') }}</section>
+<button class="option" id="server-ports">Server ports</button>
 {{ heading('launcher.menu.data') }}<p class="note" id="stop-first" hidden>&gt; {{ t('launcher.menu.stop_first') }}</p>
 {{ option('import-master','launcher.menu.import_master') }}{{ option('export-save','launcher.menu.export_save') }}{{ option('import-save','launcher.menu.import_save') }}
 {{ heading('launcher.menu.support') }}{{ option('show-log','launcher.menu.log') }}<a id="export-log" class="option" href="logs.zip" download>{{ t('launcher.menu.export_log') }} (.zip)</a>
@@ -55,6 +56,17 @@
 <button class="option" data-dialog="help-dialog">{{ t('launcher.menu.help') }}</button><button class="option" data-dialog="about-dialog">{{ t('launcher.menu.about') }}</button>
 </div></div></dialog>
 {% macro close_button() -%}<button class="outline" data-close>{{ t('common.close') }}</button>{%- endmacro %}
+<dialog id="ports-dialog" aria-labelledby="ports-heading"><form class="panel" id="ports-form"><div class="scroll">
+<h2 id="ports-heading">Server ports</h2>
+<label for="asset-port">Asset port</label>
+<input id="asset-port" type="number" min="8080" max="65535" step="1" required aria-describedby="port-range">
+<small id="port-range">8080–65535</small>
+<p><output id="port-preview" for="asset-port" aria-live="polite"></output></p>
+<p>Changes apply the next time Lunar Tear starts.</p>
+<p id="port-error" role="alert" class="note" hidden></p>
+<button class="solid" type="submit">Save</button>
+<button class="outline" id="default-ports" type="button">Restore defaults</button>
+<button class="outline" type="button" data-close>{{ t('common.cancel') }}</button></div></form></dialog>
 <dialog id="files-dialog" aria-labelledby="files-heading"><div class="panel"><div class="scroll">
 <h2 id="files-heading">{{ t('launcher.files_dialog.title') }}</h2>
 {% for kind in ['copy','in_place','archive','link'] %}
@@ -142,6 +154,34 @@ async function act(id,action=id,body){
   try{const r=await fetch(action,{method:'POST',body});if(!r.ok)throw Error(await r.text());await update()}catch(error){detail(error.message)}
 }
 el('more').onclick=()=>el('options').showModal();
+const portInput=el('asset-port');
+function previewPorts(){
+  const port=portInput.valueAsNumber;
+  el('port-preview').textContent=portInput.validity.valid?'Game '+(port-77)+' · Accounts '+(port-5080):'';
+}
+el('server-ports').onclick=async()=>{
+  try{
+    await prefs();
+    closeOptions();
+    portInput.value=settings.assetPort;
+    el('port-error').hidden=true;
+    previewPorts();
+    el('ports-dialog').showModal();
+    portInput.select();
+  }catch(e){closeOptions();detail(e.message)}
+};
+portInput.oninput=previewPorts;
+el('default-ports').onclick=()=>{portInput.value=38080;previewPorts()};
+el('ports-form').onsubmit=async e=>{
+  e.preventDefault();
+  const button=e.currentTarget.querySelector('[type=submit]');
+  button.disabled=true;
+  try{
+    await prefs({assetPort:portInput.valueAsNumber});
+    el('ports-dialog').close();
+  }catch(error){el('port-error').textContent=error.message;el('port-error').hidden=false}
+  finally{button.disabled=false}
+};
 for(const d of document.querySelectorAll('dialog')){
   d.onclick=e=>{if(e.target===d)d.close()};
   for(const b of d.querySelectorAll('[data-close]'))b.onclick=()=>d.close();
