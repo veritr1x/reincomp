@@ -3,7 +3,7 @@ project(LinuxGameAssembly LANGUAGES C CXX ASM)
 find_package(OpenSSL REQUIRED COMPONENTS Crypto)
 set(root "${CMAKE_CURRENT_SOURCE_DIR}/../..")
 file(STRINGS "${GENERATED}/objects.txt" objects)
-add_library(GameAssembly SHARED api.S asset_bundles.cpp engine_bridge.cpp firebase_linux.cpp game_assembly.cpp game_traces.S native_gc.cpp octo_download.cpp
+add_library(GameAssembly SHARED api.S asset_bundles.cpp engine_bridge.cpp firebase_linux.cpp game_assembly.cpp game_traces.S movie_player.cpp native_gc.cpp octo_download.cpp
     "${root}/runtime/elfload.c" "${root}/runtime/runtime.cpp" "${root}/runtime/cooperative_poll.cpp"
     "${root}/runtime/format.cpp" "${root}/host/libc.cpp" "${root}/host/logging.cpp"
     "${root}/host/signal_host.cpp" "${root}/host/semaphore_host.cpp" "${root}/host/nonlocal_jmp.cpp"

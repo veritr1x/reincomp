@@ -19,8 +19,19 @@ the matching `reincomp-linux-x86_64-<version>.tar.gz` release asset beside
 `Play.sh` before running it. Keep the installation in a writable folder.
 The local server stores its save in `.reincomp/save`.
 
+The asset server listens on port 11945 by default. If another program uses
+that port, `REINCOMP_BUNKER_PORT_OFFSET=4000 ./Play.sh` moves the asset
+server to 12080 and adjusts the game and account ports to match. To request
+a 1280 × 720 window, run
+`./Play.sh -- -screen-width 1280 -screen-height 720 -screen-fullscreen 0`.
+The native launcher currently uses the game's frame-rate setting.
+
 The tested configuration is Ubuntu 24.04 x86-64 with OpenGL, OpenSSL 3 and
-`libsecret-1-0`. The launcher uses Bash, curl, flock, tar and sha256sum.
+`libsecret-1-0`. Story movies use FFmpeg with the VP8 and Vorbis encoders
+(`sudo apt install ffmpeg` on Ubuntu). The first play converts each movie
+for Unity and saves it in `reincomp-movies-v1` under the game's Unity data
+directory. Later plays use that copy. The launcher uses Bash, curl, flock,
+tar and sha256sum.
 
 ## Preparing a release
 

@@ -39,6 +39,7 @@
 
 std::function<void(State &)> bindUnityMethod(const char *, void *, unsigned assetPort,const std::filesystem::path &);
 void installLinuxOctoDownloads(const unsigned &portOffset);
+void installLinuxMoviePlayer(const std::filesystem::path &streamingAssets);
 extern "C" void *il2cpp_string_new(const char *);
 std::unique_ptr<bunker::windows::FirebaseAppService> linuxFirebase(
     const std::filesystem::path &, bunker::windows::FirebaseAppService::Runner,
@@ -265,6 +266,7 @@ public:
         bunker::windows::absent_sdks::Call()=[this](addr_t pc,const std::vector<addr_t> &args){return runCallback(pc,args);};
         bunker::windows::absent_sdks::AddOverrides(bunker::windows::absent_sdks::DeviceReport::Unavailable);
         installLinuxOctoDownloads(bunkerOffset);
+        installLinuxMoviePlayer(streamingAssets);
         // The original locale code obtains its IANA identifier via java.util.TimeZone.
         recomp::AddGuestOverride(0x853f4d84, [](State &s){
             s.gpr.x0.qword = reinterpret_cast<addr_t>(il2cpp_string_new(bunker::windows::HostTimeZoneId().c_str()));

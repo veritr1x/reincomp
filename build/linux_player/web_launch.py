@@ -108,7 +108,7 @@ def main():
             print("Linux player and game resources are ready.")
             return 0
         log = state / "server.log"
-        offset = int(os.environ.get("REINCOMP_BUNKER_PORT_OFFSET", "0"))
+        offset = int(os.environ.get("REINCOMP_BUNKER_PORT_OFFSET", "3865"))
         if not 0 <= offset <= 57455:
             raise ValueError("Invalid Bunker port offset")
         with log.open("w") as errors, subprocess.Popen(
@@ -122,7 +122,8 @@ def main():
                 game_args = args.unity_args
                 if game_args[:1] == ["--"]:
                     game_args = game_args[1:]
-                return subprocess.call([player / "Reincarnation.x86_64", "-force-glcore", *game_args], cwd=player)
+                return subprocess.call([player / "Reincarnation.x86_64", "-force-glcore", *game_args],
+                                       cwd=player, env={**os.environ, "REINCOMP_BUNKER_PORT_OFFSET": str(offset)})
             finally:
                 server.stdin.close()
                 try:
