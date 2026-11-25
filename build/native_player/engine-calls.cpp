@@ -290,10 +290,12 @@ extern "C" __declspec(dllexport) Call BindEngineCall(const char *key,void *fn) {
             invoke<double,P>(s,original);
         };
         if(!std::strcmp(key,"UnityEngine.Behaviour::set_enabled"))return [](State &s,void *original){
-            // TutorialIconAnimationView.Cancel disables its two Animators. Its
-            // continuation can run after closing the menu destroyed their native objects.
             const auto caller=s.gpr.x30.qword;
-            if((caller==0x82892fd4 || caller==0x82892fe8) &&
+            // The tutorial cancel and roulette reward update can resume after
+            // their menu or field HUD has been destroyed during a transition.
+            const bool cancelTutorial=caller==0x82892fd4 || caller==0x82892fe8;
+            const bool updateRoulette=caller==0x82cf8d78 || caller==0x82cf8dd8;
+            if((cancelTutorial || updateRoulette) &&
                !nativeUnityObjectAlive(reinterpret_cast<P>(s.gpr.x0.qword)))return;
             invoke<void,P,uint8_t>(s,original);
         };
