@@ -314,8 +314,7 @@ extern "C" __declspec(dllexport) Call BindEngineCall(const char *key,void *fn) {
         };
         if(!std::strcmp(key,"UnityEngine.Behaviour::set_enabled"))return [](State &s,void *original){
             const auto caller=s.gpr.x30.qword;
-            // The tutorial cancel and roulette reward update can resume after
-            // their menu or field HUD has been destroyed during a transition.
+            // These UI callbacks can resume after Unity destroys their view.
             const bool cancelTutorial=caller==0x82892fd4 || caller==0x82892fe8;
             const bool updateRoulette=caller==0x82cf8d78 || caller==0x82cf8dd8;
             const bool finishSkillIcon=caller==0x82e2ba10;

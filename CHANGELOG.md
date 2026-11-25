@@ -3,6 +3,12 @@
 What changed, newest first, by date and area. A release's heading comes
 above the dated sections it holds.
 
+## 0.3.10 (2026-11-25)
+
+- Fixed a Windows slowdown that persisted after visiting Subquests. All historical events remain selectable, and offscreen rows pause their artwork and badge updates. In a 131-tab save, repeated visits settled near 9 ms per frame. Opening the full catalog can still take about four seconds.
+- Fixed a Windows quest-confirmation crash when a skill icon finished loading after the dialog closed. Also fixed a late roulette button update after leaving the field.
+- Windows saves checkpoint preferences when the player exits. The launcher shows progress while checking shared game files and remembers completed checks across launches.
+
 ## 0.3.9 (2026-11-25)
 
 - Windows reuses verified game resources from the imported library through hardlinks on the same volume. This covers fresh installs and existing Octo caches. Other volumes continue to use the local Bunker server.
