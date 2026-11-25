@@ -3,6 +3,12 @@
 What changed, newest first, by date and area. A release's heading comes
 above the dated sections it holds.
 
+## 0.3.8 (2026-11-25)
+
+- Native Linux now opens the shared Bunker launcher for resource setup and plays story movies in the game.
+- Windows and native Linux now remember custom server ports. The default Linux asset port is 8080 again.
+- The desktop movement stick now starts in the lower-left corner. On Windows, picturebook timelines can finish when their director unloads.
+
 ## 0.3.7 (2026-11-24)
 
 - Fixed the “Failed to connect” dialog when leaving an Anecdote mission panel on Windows. The back arrow now opens Notices. Closing Notices returns you to Special Missions.
