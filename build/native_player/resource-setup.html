@@ -2,6 +2,7 @@
 <html lang="{{ text_language() }}">
 <head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+{% if linux %}<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'">{% endif %}
 <title>Bunker</title>
 <style>{% include "resource-setup.css" %}</style>
 </head>
@@ -18,20 +19,25 @@
 <main class="terminal">
 <header class="masthead"><div><small>LUNAR TEAR // 127.0.0.1</small><h1>BUNKER</h1></div>
 <button class="outline" id="more" aria-label="{{ t('launcher.main.options') }}" aria-haspopup="dialog">⋮</button></header>
+{% if not linux %}
 <section class="update" id="release" aria-label="{{ t('launcher.main.update') }}" hidden><div class="panel">
 <div class="update-line"><span id="release-message"></span><a id="release-notes" target="_blank" rel="noopener">{{ t('launcher.main.whats_new') }} ›</a></div>
 <div class="update-actions"><button class="solid" id="install-update" hidden disabled>Update and restart</button><a class="solid" id="update-builder" target="_blank" rel="noopener">Build this release</a>
 <button class="outline" id="later">{{ t('launcher.main.later') }}</button><button class="outline" id="skip">{{ t('launcher.main.skip') }}</button></div></div></section>
+{% endif %}
 <div class="columns">
 <section class="section system">{{ heading('launcher.main.system') }}<div class="panel">
 <div class="kv"><span class="label">{{ t('launcher.main.game_files') }}</span><span class="chip" id="files"></span>{{ info('launcher.main.game_files','launcher.main.game_files_info') }}<button id="choose" class="outline" aria-label="{{ t('launcher.main.choose_files_hint') }}" disabled>{{ t('launcher.main.choose') }}</button></div>
 <div class="kv"><span class="label">{{ t('launcher.main.lunar_tear') }}</span><span class="chip" id="server"></span></div>
-<div class="kv"><span class="label">{{ t('launcher.main.save') }}</span><span id="save"></span>{{ info('launcher.main.save','launcher.main.save_info') }}</div>
+<div class="kv"><span class="label">{{ t('launcher.main.save') }}</span><span id="save"></span>{% if not linux %}{{ info('launcher.main.save','launcher.main.save_info') }}{% endif %}</div>
+{% if not linux %}
 <div class="kv"><span class="label">{{ t('launcher.main.archive') }}</span><span id="archive-index"></span></div>
+{% endif %}
 <div id="meter" role="progressbar" aria-label="{{ t('launcher.main.game_files') }}" aria-valuemin="0" aria-valuemax="100" hidden></div><span id="progress-label" hidden></span>
 </div></section>
 <div class="column">
 <section class="section">{{ heading('launcher.main.play') }}<div class="panel"><p id="message" role="status" hidden></p><button class="solid" id="deploy" aria-label="{{ t('launcher.main.deploy_hint') }}" disabled>{{ t('launcher.main.deploy') }} &nbsp;▶</button></div></section>
+{% if not linux %}
 <section class="section wide-programs">{{ heading('launcher.main.programs') }}<div class="panel">
 {% for key,route in [('pod_programs','/'),('archive','/bunker/archive')] %}
 <div class="program-row"><a class="program-title" data-program href="{{ route }}" aria-disabled="true">{{ t('launcher.main.'+key) }}</a>{% if loop.first %}{{ info('launcher.main.pod_programs','launcher.main.pod_programs_info') }}{% endif %}<span class="chevron" aria-hidden="true">›</span></div>
@@ -40,19 +46,26 @@
 <section class="section narrow-programs">{{ heading('launcher.main.'+key,'launcher.main.pod_programs_info' if loop.first else None) }}<div class="panel">
 <a class="outline" data-program href="{{ route }}" aria-label="{{ t('launcher.main.open_pods_hint' if loop.first else 'launcher.main.open_archive_hint') }}" aria-disabled="true">{{ t('launcher.main.open') }} &nbsp;›</a></div></section>
 {% endfor %}
+{% endif %}
 </div></div>
 <footer>END OF TRANSMISSION // GLORY TO MANKIND</footer>
 </main>
+{% if not linux %}
 <iframe id="update-worker" title="Windows update" hidden referrerpolicy="no-referrer" sandbox="allow-scripts allow-same-origin"></iframe>
+{% endif %}
 <dialog id="options" aria-label="{{ t('launcher.main.options') }}"><div class="panel"><div class="scroll">
+{% if not linux %}
 <section id="service-options" hidden>{{ heading('launcher.main.lunar_tear') }}{{ option('stop','launcher.menu.stop') }}{{ option('check','launcher.menu.check') }}</section>
+{% endif %}
 <button class="option" id="server-ports">Server ports</button>
+{% if not linux %}
 {{ heading('launcher.menu.data') }}<p class="note" id="stop-first" hidden>&gt; {{ t('launcher.menu.stop_first') }}</p>
 {{ option('import-master','launcher.menu.import_master') }}{{ option('export-save','launcher.menu.export_save') }}{{ option('import-save','launcher.menu.import_save') }}
 {{ heading('launcher.menu.support') }}{{ option('show-log','launcher.menu.log') }}<a id="export-log" class="option" href="logs.zip" download>{{ t('launcher.menu.export_log') }} (.zip)</a>
 {{ option('auto-deploy','launcher.menu.auto_deploy_on') }}{{ option('display-theme','launcher.display.title') }}{{ option('updates','launcher.menu.updates_on') }}{{ option('check-updates','launcher.menu.check_updates') }}
 <button class="option" id="auto-install" hidden></button>
 <a class="option" href="/display" data-program aria-disabled="true">{{ t('launcher.menu.app_settings') }}</a>
+{% endif %}
 <button class="option" data-dialog="help-dialog">{{ t('launcher.menu.help') }}</button><button class="option" data-dialog="about-dialog">{{ t('launcher.menu.about') }}</button>
 </div></div></dialog>
 {% macro close_button() -%}<button class="outline" data-close>{{ t('common.close') }}</button>{%- endmacro %}
@@ -69,9 +82,10 @@
 <button class="outline" type="button" data-close>{{ t('common.cancel') }}</button></div></form></dialog>
 <dialog id="files-dialog" aria-labelledby="files-heading"><div class="panel"><div class="scroll">
 <h2 id="files-heading">{{ t('launcher.files_dialog.title') }}</h2>
-{% for kind in ['copy','in_place','archive','link'] %}
+{% for kind in (['archive','in_place'] if linux else ['copy','in_place','archive','link']) %}
 <button class="option" data-source="{{ kind }}">{{ t('launcher.files_dialog.'+kind) }}</button>
 {% endfor %}{{ close_button() }}</div></div></dialog>
+{% if not linux %}
 <dialog id="link-dialog" aria-labelledby="link-heading"><form class="panel" id="link-form"><div class="scroll">
 <h2 id="link-heading"><label for="resource-link">{{ t('launcher.files_dialog.link_title') }}</label></h2>
 <p>{{ t('launcher.files_dialog.link_hint') }}</p>
@@ -81,10 +95,13 @@
 <button class="outline" type="button" data-close>{{ t('common.cancel') }}</button></div></form></dialog>
 <dialog id="theme-dialog" aria-labelledby="theme-heading"><div class="panel"><div class="scroll"><h2 id="theme-heading">{{ t('launcher.display.title') }}</h2>
 {% for mode in ['system','light','dark'] %}<button class="option" data-theme-choice="{{ mode }}">{{ t('launcher.display.'+mode) }}</button>{% endfor %}{{ close_button() }}</div></div></dialog>
+{% endif %}
 <dialog id="info-dialog" aria-labelledby="info-title"><div class="panel"><div class="scroll"><h2 id="info-title"></h2><p id="info-text"></p>{{ close_button() }}</div></div></dialog>
+{% if not linux %}
 <dialog id="log-dialog"><div class="panel"><div class="scroll"><h2>{{ t('launcher.menu.log') }}</h2><pre></pre>{{ close_button() }}</div></div></dialog>
-<dialog id="help-dialog"><div class="panel"><div class="scroll"><h2>{{ t("launcher.menu.help") }}</h2><p>{{ t("launcher.help.server") }}</p><p>Press Ctrl+B, Xbox View (Select/Back), or PlayStation Options during play to open the Bunker launcher. Press it again to return to the game.</p><a href="https://github.com/veritr1x/bunker#readme" target="_blank" rel="noopener">{{ t("launcher.menu.help") }}</a> {{ close_button() }}</div></div></dialog>
-<dialog id="about-dialog"><div class="panel"><div class="scroll"><h2>re[in]comp {{ reincomp }}</h2><p>Bunker {{ version }} · Windows</p><p>{{ t("launcher.about.created",author="veritr1x",site="github.com/veritr1x/bunker") }}</p>
+{% endif %}
+<dialog id="help-dialog"><div class="panel"><div class="scroll"><h2>{{ t("launcher.menu.help") }}</h2><p>{{ t("launcher.help.server") }}</p>{% if linux %}<p>Choose an Android resource archive or an imported folder, then select Deploy. Open Server ports in the options menu to change the local ports.</p>{% else %}<p>Press Ctrl+B, Xbox View (Select/Back), or PlayStation Options during play to open the Bunker launcher. Press it again to return to the game.</p><a href="https://github.com/veritr1x/bunker#readme" target="_blank" rel="noopener">{{ t("launcher.menu.help") }}</a>{% endif %} {{ close_button() }}</div></div></dialog>
+<dialog id="about-dialog"><div class="panel"><div class="scroll"><h2>re[in]comp {{ reincomp }}</h2><p>Bunker {{ version }} · {{ 'Linux' if linux else 'Windows' }}</p><p>{{ t("launcher.about.created",author="veritr1x",site="github.com/veritr1x/bunker") }}</p>
 <h3>{{ t("launcher.about.credits") }}</h3>{% for name in ["credit_lunar_tear","credit_lunar_scripts","credit_lunar_base","credit_patcher","credit_threejs"] %}<p>{{ t("launcher.about."+name) }}</p>{% endfor %}<p>{{ t("launcher.about.disclaimer") }}</p>{{ close_button() }}</div></div></dialog>
 <script>
 const el=id=>document.getElementById(id);
@@ -111,6 +128,7 @@ const number=new Intl.NumberFormat(document.documentElement.lang||'en',{maximumF
 function detail(text){el('message').textContent=text;el('message').hidden=!text}
 function notice(title,text){el('info-title').textContent=title;el('info-text').textContent=text;el('info-dialog').showModal()}
 function closeOptions(){if(el('options').open)el('options').close()}
+{% if not linux %}
 async function update(){
   const response=await fetch('state',{cache:'no-store'});if(!response.ok)throw Error('Unable to read the launcher state.');
   const s=await response.json();
@@ -153,6 +171,7 @@ async function act(id,action=id,body){
   if(el(id))el(id).disabled=true;
   try{const r=await fetch(action,{method:'POST',body});if(!r.ok)throw Error(await r.text());await update()}catch(error){detail(error.message)}
 }
+{% endif %}
 el('more').onclick=()=>el('options').showModal();
 const portInput=el('asset-port');
 function previewPorts(){
@@ -171,7 +190,7 @@ el('server-ports').onclick=async()=>{
   }catch(e){closeOptions();detail(e.message)}
 };
 portInput.oninput=previewPorts;
-el('default-ports').onclick=()=>{portInput.value=38080;previewPorts()};
+el('default-ports').onclick=()=>{portInput.value={{ 8080 if linux else 38080 }};previewPorts()};
 el('ports-form').onsubmit=async e=>{
   e.preventDefault();
   const button=e.currentTarget.querySelector('[type=submit]');
@@ -189,6 +208,9 @@ for(const d of document.querySelectorAll('dialog')){
 for(const b of document.querySelectorAll('[data-info]'))b.onclick=()=>notice(b.dataset.title,b.dataset.info);
 for(const b of document.querySelectorAll('[data-dialog]'))b.onclick=()=>{closeOptions();el(b.dataset.dialog).showModal()};
 el('choose').onclick=()=>el('files-dialog').showModal();
+{% if linux %}
+{% include 'launcher-linux.js' %}
+{% else %}
 for(const b of document.querySelectorAll('[data-source]'))b.onclick=async()=>{
   el('files-dialog').close();
   if(b.dataset.source==='link'){
@@ -272,5 +294,6 @@ el('later').onclick=()=>{pendingAuto=false;postponed=true;el('release').hidden=t
 el('skip').onclick=async()=>{try{await prefs({skipped:latest});el('release').hidden=true}catch(e){detail(e.message)}};
 prefs().then(()=>{if(settings.updates)checkUpdate(false)}).catch(e=>detail(e.message));
 (async function poll(){try{await update()}catch(e){detail(e.message)}finally{setTimeout(poll,650)}})();
+{% endif %}
 </script>
 </body></html>

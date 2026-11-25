@@ -1,19 +1,25 @@
-"""Render the Windows counterpart of Android's Bunker MainActivity with its translations."""
+"""Render the desktop Bunker launcher from its shared page and text catalogue."""
 from pathlib import Path
 import sys
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 
 
-def render(root, assets, reincomp):
-    app = root / 'pods/app'
+def render_page(app, version, reincomp, active=None, linux=False):
     sys.path.insert(0, str(app))
     import bunker_text
-    bunker_text.reload(assets / 'translation/active.json')
-    templates = Environment(loader=FileSystemLoader(Path(__file__).parent),
-                            autoescape=select_autoescape())
+    if active is not None:
+        bunker_text.reload(active)
+    paths = [Path(__file__).parent]
+    if linux:
+        paths.append(paths[0].parent / 'linux_player')
+    templates = Environment(loader=FileSystemLoader(paths), autoescape=select_autoescape())
     bunker_text.install(templates)
+    return templates.get_template('resource-setup.html').render(version=version, reincomp=reincomp, linux=linux)
+
+
+def render(root, assets, reincomp):
     version = (root/'pods/VERSION').read_text(encoding='utf-8').splitlines()[0].removeprefix('Bunker ')
-    return templates.get_template('resource-setup.html').render(version=version, reincomp=reincomp)
+    return render_page(root / 'pods/app', version, reincomp, assets / 'translation/active.json')
 
 
 if __name__ == '__main__':

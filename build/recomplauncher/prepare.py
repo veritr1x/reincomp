@@ -30,6 +30,9 @@ def has_resources(assets):
 
 def linux_play(args):
     script = Path(sys.executable).resolve().parents[2] / "tools/web_launch.py"
+    # The profile puts Unity's options after --. Bunker's own flag goes before it.
+    if "--launcher" in args:
+        args = ["--launcher", *(arg for arg in args if arg != "--launcher")]
     os.chdir(DATA)
     os.environ["PATH"] = str(Path(sys.executable).parent) + os.pathsep + os.environ.get("PATH", "")
     os.environ["PYTHONNOUSERSITE"] = "1"

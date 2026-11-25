@@ -43,6 +43,7 @@ To build from source instead, see [BUILDING.md](BUILDING.md).
 
 Setup runs locally. RecompLauncher can back up and restore the Bunker save.
 Its game settings include frame rate and sound on Windows and window mode on Linux.
+On Linux, choose **On launch → Open Bunker** to use the graphical setup window.
 
 ### Play the TAR on Linux
 
@@ -58,13 +59,14 @@ these commands for the first launch.
 cd "$HOME/Downloads"
 tar -xf NieR-Reincarnation-Linux-x86_64.tar
 cd "NieR Reincarnation"
-./Play.sh --dump "$HOME/Downloads/resource_dump_android.7z"
+./Play.sh
 ```
 
-The first launch downloads and verifies the runtime, imports the resources,
-and starts the game. If you already have an imported library, use
-`./Play.sh --assets "/path/to/library"` for the last command. Choose the
-folder containing `assets/revisions`.
+The first launch downloads and verifies the runtime. On a Linux desktop,
+Bunker opens in a window. Click **Choose** to select the resource archive or
+an imported folder containing `assets/revisions`, then **Deploy**.
+To launch directly from a terminal, use `./Play.sh --dump "/path/to/archive"`
+or `./Play.sh --assets "/path/to/library"`.
 
 To play again, run these two commands.
 
@@ -88,8 +90,8 @@ account port 6865. Saved changes apply the next time Lunar Tear starts.
   stores the choice in `data/launcher.json` inside the player installation.
   If a conflict prevents startup, run `"Nier Reincarnation.exe" -launcher`
   to open the settings before starting the server.
-- **Native Linux** — Run `./Play.sh --server-ports` in the installation
-  folder, or `./Play.sh --server-ports 11945` to save a value directly.
+- **Native Linux** — Open **Bunker → ⋮ → Server ports**. From the terminal,
+  run `./Play.sh --server-ports` or `./Play.sh --server-ports 11945`.
   The choice is saved in `.reincomp/server-ports.json` beside `Play.sh`.
   `./Play.sh --server-ports default` restores asset port 8080.
 - **RecompLauncher** — Open the game's settings and choose **Server ports →

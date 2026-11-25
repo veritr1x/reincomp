@@ -7,6 +7,7 @@ from pathlib import Path
 import re
 import shutil
 import subprocess
+import sys
 import tarfile
 import tempfile
 
@@ -14,6 +15,8 @@ from stage import FIREBASE_LINUX_SHA256, GRPC_LINUX_SHA256, UNITY_FILES
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[1]
+sys.path.insert(0, str(HERE.parent / "native_player"))
+from resource_setup import render_page
 
 
 def digest(path):
@@ -61,7 +64,9 @@ def package(args):
             shutil.copyfile(src, runtime / "licenses" / notice_name)
         scripts = runtime / "tools"
         scripts.mkdir()
-        for src in (HERE / "web_launch.py", HERE / "bundle_worker.py",
+        (scripts / "launcher.html").write_text(render_page(args.bunker / "android/app/src/main/python",
+            lock["release"].removeprefix("v"), version, linux=True), encoding="utf-8")
+        for src in (HERE / "web_launch.py", HERE / "launcher_window.py", HERE / "bundle_worker.py",
                     *(HERE.parent / "native_player" / f for f in ("package_assets.py", "desktop_bundles.py", "desktop_shader.py"))):
             shutil.copyfile(src, scripts / src.name)
 

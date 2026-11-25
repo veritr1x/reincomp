@@ -90,7 +90,9 @@ def linux(folder, profile, cache, runtime_archive):
     profile["config"][0]["file"] = [{"path": "{data}/.reincomp/server-ports.json"}]
     port = next(setting for setting in profile["settings"] if setting["id"] == "assetPort")
     port["defaults"]["assetPort"] = "8080"
-    profile["settings"] = [port, {"id": "window", "label": "Window mode", "in": "args", "choices": [
+    profile["settings"] = [port, {"id": "startup", "label": "On launch", "in": "args", "choices": [
+        {"label": "Start the game", "args": []}, {"label": "Open Bunker", "args": ["--launcher"]}]},
+        {"id": "window", "label": "Window mode", "in": "args", "choices": [
         {"label": "Game setting", "args": []}, {"label": "Windowed", "args": ["-screen-fullscreen", "0"]},
         {"label": "Fullscreen", "args": ["-screen-fullscreen", "1"]}]}]
     profile["saves"] = [path.replace("{install}/data/server", "{data}/.reincomp/save") for path in profile["saves"]]
