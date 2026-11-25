@@ -358,6 +358,49 @@ func serveAndPlay(root, data, assets, game, server, view, native, apk, fps, rend
 		}
 	}
 
+	if desktop {
+		helper := filepath.Join(root, "game", "octo_cache.py")
+		if regularFile(helper) {
+			// Keep another launcher for this install from replacing a cache entry
+			// between the player's private-write check and opening its descriptor.
+			cacheLock, err := lockResourceFiles(data)
+			if err != nil {
+				return fmt.Errorf("Could not lock this player's game cache: %w", err)
+			}
+			defer cacheLock.Close()
+			var closed, stop <-chan struct{}
+			if setup != nil {
+				closed, stop = setup.done, setup.stopServices
+				setup.mu.Lock()
+				setup.status = "Checking game files for cache sharing…"
+				setup.mu.Unlock()
+			}
+			cache := exec.Command(filepath.Join(root, "pods", "python", "python.exe"),
+				"-I", "-B", "-X", "utf8", helper, data, assets)
+			hideHelperWindow(cache)
+			cache.Stdout, cache.Stderr = log, log
+			if err := cache.Start(); err != nil {
+				fmt.Fprintln(log, "Octo cache preparation:", err)
+			} else {
+				finished := make(chan error, 1)
+				go func() { finished <- cache.Wait() }()
+				select {
+				case err := <-finished:
+					if err != nil {
+						fmt.Fprintln(log, "Octo cache preparation:", err)
+					}
+				case <-closed:
+					cache.Process.Kill()
+					<-finished
+					return nil
+				case <-stop:
+					cache.Process.Kill()
+					<-finished
+					return setup.stopped(errStoppedFromLauncher, nil)
+				}
+			}
+		}
+	}
 	menu := setup
 	if desktop && menu == nil {
 		menu, e = startLauncher(root, server, assets, "", "", true, true, nil)

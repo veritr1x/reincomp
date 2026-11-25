@@ -248,7 +248,7 @@ def prepare(a, folder, work, server, deps, pods, bunker, cxx):
         run(sys.executable, '-m', 'pip', 'install', *(['--no-index'] if a.no_download else []),
             '--no-compile', '--target', packages, 'UnityPy==1.25.4')
     run(python, '-I', '-c', 'import UnityPy; from UnityPy.export.Texture2DConverter import parse_image_data')
-    for name in ('desktop_services.py','desktop_display.py','desktop_bundles.py','desktop_shader.py',
+    for name in ('desktop_services.py','desktop_display.py','desktop_bundles.py','desktop_shader.py','octo_cache.py',
                  'resource_setup.py','resource-setup.html','resource-setup.css'):
         shutil.copy2(NATIVE/name,game/name)
     go = a.go or shutil.which('go')

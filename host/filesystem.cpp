@@ -22,6 +22,7 @@
 #include <sddl.h>
 
 #include "filesystem.h"
+#include "octo_cache_file.h"
 #include "provider_memory.h"
 #include "growdown_memory.h"
 #include "unicode.h"
@@ -524,7 +525,7 @@ int FileSystem::Open(const char *path, int flags, uint32_t mode) {
     return id;
   };
   if(writing){registry.lock();if(next()>INT32_MAX){impl_->Error(24);return -1;}}
-  int native = _wopen(host.c_str(), native_flags, mode & 0200 ? _S_IREAD | _S_IWRITE : _S_IREAD);
+  int native = OpenGuestFile(host, native_flags, mode & 0200 ? _S_IREAD | _S_IWRITE : _S_IREAD);
   if (native < 0) { impl_->CrtError(); return -1; }
   ScopedDescriptor unpublished(native);
   if(!registry.owns_lock())registry.lock();
@@ -853,7 +854,7 @@ addr_t FileSystem::FOpen(const char *path, const char *mode) {
   if (exclusive) flags |= linux_flags::exclusive;
   fs::path host; const Impl::Mount *mount;
   if (!impl_->Resolve(path, *mode != 'r' || plus, host, mount)) return 0;
-  int native = _wopen(host.c_str(), impl_->NativeFlags(flags), _S_IREAD | _S_IWRITE);
+  int native = OpenGuestFile(host, impl_->NativeFlags(flags), _S_IREAD | _S_IWRITE);
   if (native < 0) { impl_->CrtError(); return 0; }
   std::wstring native_mode(1, static_cast<wchar_t>(*mode)); if (plus) native_mode += L'+'; native_mode += L'b';
   FILE *file = _wfdopen(native, native_mode.c_str());

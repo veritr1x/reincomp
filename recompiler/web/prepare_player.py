@@ -60,7 +60,7 @@ def prepare(args):
         release.build_player_entry(args.cxx, members['game/WindowsPlayer.exe'], entry, work)
         members['game/WindowsPlayer.exe'] = entry
         for name in ('resource-setup.html','resource-setup.css','resource_setup.py','package_assets.py','desktop_shader.py',
-                     'desktop_bundles.py','desktop_display.py','desktop_services.py','header_emblem.py'):
+                     'desktop_bundles.py','desktop_display.py','desktop_services.py','header_emblem.py','octo_cache.py'):
             members['game/'+name] = NATIVE/name
         members['game/bunker_icon.py'] = args.bunker/'android/tools/bunker_icon.py'
         members['game/resource-window.exe'] = args.window

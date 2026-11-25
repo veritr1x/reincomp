@@ -3,6 +3,11 @@
 What changed, newest first, by date and area. A release's heading comes
 above the dated sections it holds.
 
+## 0.3.9 (2026-11-25)
+
+- Windows reuses verified game resources from the imported library through hardlinks on the same volume. This covers fresh installs and existing Octo caches. Other volumes continue to use the local Bunker server.
+- Rebuilt the Windows runtime with the filesystem code in the compiler kit and restored byte-for-byte builds of the Windows host objects.
+
 ## 0.3.8 (2026-11-25)
 
 - Native Linux now opens the shared Bunker launcher for resource setup and plays story movies in the game.

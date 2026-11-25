@@ -15,8 +15,10 @@
 #endif
 
 namespace bunker::windows {
+// Keep the helper local, as it was in the released Windows JNI host object.
+namespace {
 // IANA zone of the host, as Android's TimeZone.getDefault().getID() reports.
-inline std::string HostTimeZoneId(){
+std::string HostTimeZoneId(){
   if(const char *tz=std::getenv("TZ");tz&&*tz){std::string id=tz[0]==':'?tz+1:tz;if(!id.empty()&&id.find('/')!=std::string::npos)return id;}
 #ifdef _WIN32
   // Windows names its zones by registry key; Windows' bundled ICU maps them.
@@ -37,5 +39,6 @@ inline std::string HostTimeZoneId(){
   std::ifstream file("/etc/timezone");std::string line;if(std::getline(file,line)&&!line.empty())return line;
 #endif
   return "UTC";
+}
 }
 }

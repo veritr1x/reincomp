@@ -59,9 +59,11 @@ class FirebaseAppService {
   // The native DLL remains loaded for process lifetime; no stale code unload.
   // A revoked service cannot be replaced by another generation in this process.
   void Revoke();
+#ifndef _WIN32
   // Once the managed player has stopped, release its remaining App references
   // through the SDK after disconnecting its callbacks.
   void CloseAfterManagedShutdown();
+#endif
  private:
   struct Impl;
   std::shared_ptr<Impl> impl_;

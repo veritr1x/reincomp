@@ -21,6 +21,8 @@ jobs:
           python-version: "3.12"
       - name: Test Windows updater browser handoff
         run: python launcher/test_update_player.py
+      - name: Test Windows resource hardlinks
+        run: python recompiler/tests/windows-octo-cache.py
       - uses: msys2/setup-msys2@v2
         id: msys2
         with:
@@ -36,6 +38,10 @@ jobs:
           $env:PATH = "$bin;$env:PATH"
           $compiler = Join-Path $bin 'g++.exe'
           & $compiler --version
+          & $compiler -std=c++17 -static recompiler/tests/windows-octo-write.cpp -o octo-write.exe
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          ./octo-write.exe "$env:RUNNER_TEMP/octo-write"
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
           python build/build.py --compile-only --out out --cxx $compiler
 
   launcher:

@@ -6,6 +6,13 @@ click **Build**. The browser verifies both files and assembles
 `Nier Reincarnation.exe` locally. Open the downloaded EXE and select the
 resource dump in Bunker's launcher.
 
+On first launch, Windows verifies the imported Android bundles and media against
+the original resource catalog. On the same NTFS volume, the game cache and
+library share those files through hardlinks. The launcher also links matching
+files in an existing cache. The game can still download missing or translated
+files from the local Bunker server. A library on a different volume uses the
+normal download path. Converted Windows bundles stay in their own cache.
+
 ## Publishing a tested runtime
 
 The version-matched public compiler and player kit is a ZIP asset on the
