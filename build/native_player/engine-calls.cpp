@@ -270,6 +270,16 @@ extern "C" __declspec(dllexport) Call BindEngineCall(const char *key,void *fn) {
            GetEnvironmentVariableW(L"REINCOMP_INTERACTIVE_WINDOW",nullptr,0))return [](State &,void *){};
         if(auto callback=desktop_input::bind(key,fn))return callback;
         if(!std::strcmp(key,"UnityEngine.Screen::get_safeArea_Injected"))return picturebookSafeArea;
+        if(!std::strcmp(key,"UnityEngine.Playables.PlayableDirector::get_time"))return [](State &s,void *original){
+            // PicturebookTimelinePlayer.ObserveTimelineStop can resume after scene
+            // unload. It holds the duration in d9 and compares it to the time in d0.
+            // Report the end of the timeline so its normal stopped callback runs.
+            if(s.gpr.x30.qword==0x82ca1140 && !nativeUnityObjectAlive(reinterpret_cast<P>(s.gpr.x0.qword))){
+                std::memcpy(&s.simd.v[0],&s.simd.v[9],sizeof(double));
+                return;
+            }
+            invoke<double,P>(s,original);
+        };
         if(!std::strcmp(key,"UnityEngine.Behaviour::set_enabled"))return [](State &s,void *original){
             // TutorialIconAnimationView.Cancel disables its two Animators. Its
             // continuation can run after closing the menu destroyed their native objects.
