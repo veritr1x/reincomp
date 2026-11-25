@@ -58,6 +58,13 @@ struct Runtime {
 #include "../bunker-events.h"
 extern "C" Memory *sub_83291fb4(State &s,addr_t,Memory *m){s.gpr.pc.qword=s.gpr.x30.qword;return m;}
 extern "C" Memory *sub_82b01eb0(State &s,addr_t,Memory *m){s.gpr.pc.qword=s.gpr.x30.qword;return m;}
+static unsigned colliderLookups=0;
+extern "C" Memory *sub_830ce360(State &s,addr_t,Memory *m){
+    ++colliderLookups;
+    s.gpr.x0.qword=42;
+    s.gpr.pc.qword=s.gpr.x30.qword;
+    return m;
+}
 struct Object {
     std::array<addr_t,32> words{};
     addr_t address(){return reinterpret_cast<addr_t>(words.data());}
@@ -73,6 +80,21 @@ int main(){
     state.put(0x48,list.address());list.put(0x10,items.address());list.put(0x18,2);
     items.put(0x20,stay.address());items.put(0x28,enter.address());
     State s{};
+    Memory memory{};
+    Object liveActor,destroyedActor;
+    liveActor.put(0x10,1);
+    for(auto actor:{liveActor.address(),destroyedActor.address(),addr_t(0)}){
+        for(auto caller:{0x82983a50u,0x82983a54u}){
+            s.gpr.x0.qword=actor;
+            s.gpr.x30.qword=caller;
+            s.gpr.pc.qword=0x830ce360;
+            colliderLookups=0;
+            assert(actorCollider(s,0x830ce360,&memory)==&memory);
+            const bool expired=actor==destroyedActor.address() && caller==0x82983a50u;
+            assert(colliderLookups==(expired?0u:1u));
+            assert(s.gpr.x0.qword==(expired?0u:42u) && s.gpr.pc.qword==caller);
+        }
+    }
     auto cross=[&]{s.gpr.x0.qword=zone.address();s.gpr.x1.qword=collider.address();entered(s);};
     auto arm=[&]{s.gpr.x1.qword=state.address();changingState(s);};
     auto update=[&]{s.gpr.x0.qword=stay.address();updateStay(s);};
@@ -88,5 +110,5 @@ int main(){
     Object view,button;view.put(0x90,button.address());s.gpr.x0.qword=view.address();
     vm.visible=true;showTimetable(s,0,nullptr);assert(!vm.visible);
     vm.available=true;showTimetable(s,0,nullptr);assert(vm.visible);
-    std::puts("Story zone re-entry, expiry, destroyed and collected colliders, and Guerrilla availability passed.");
+    std::puts("Story zone re-entry, expiry, actor teardown, collider lifetime, and Guerrilla availability passed.");
 }

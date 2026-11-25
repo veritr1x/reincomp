@@ -1,8 +1,23 @@
-// Global 3.7.1 names and offsets from Bunker's display_patch.c and
-// guerrilla_unlock.c. The build checks the expected original instructions.
+// Global 3.7.1 story and menu hooks. The roulette and Guerrilla hooks follow
+// Bunker's display_patch.c and guerrilla_unlock.c.
+#include "unity-object.h"
+
 namespace bunker_events {
 extern "C" Memory *sub_83291fb4(State &,addr_t,Memory *);
 extern "C" Memory *sub_82b01eb0(State &,addr_t,Memory *);
+extern "C" Memory *sub_830ce360(State &,addr_t,Memory *);
+
+static Memory *actorCollider(State &s,addr_t pc,Memory *memory){
+    // OnEnter compares the incoming collider's GameObject with GetCollider's
+    // result. A queued crossing can outlive the current actor during a map load.
+    const auto actor=s.gpr.x0.qword;
+    if(s.gpr.x30.qword==0x82983a50 && actor && !nativeUnityObjectAlive(reinterpret_cast<const void *>(actor))){
+        s.gpr.x0.qword=0;
+        s.gpr.pc.qword=s.gpr.x30.qword;
+        return memory;
+    }
+    return sub_830ce360(s,pc,memory);
+}
 
 static Memory *showRoulette(State &s,addr_t pc,Memory *memory){
     using Show=bool(*)(void *,void *);
@@ -114,6 +129,7 @@ static void updateStay(State &s){
     }
 }
 static void install(){
+    recomp::AddGuestDirectEntry(0x830ce360,actorCollider);
     recomp::AddGuestDirectEntry(0x83291fb4,showRoulette);
     recomp::AddGuestDirectEntry(0x82b01eb0,showTimetable);
     recomp::AddGuestProbe(0x8363082c,entered);
