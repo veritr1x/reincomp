@@ -1,6 +1,10 @@
 """Exercise cache seeding with a real Octo-shaped catalog and filesystem links."""
+import contextlib
 import errno
+import os
 import hashlib
+import io
+import shutil
 from pathlib import Path
 import sys
 import tempfile
@@ -8,6 +12,7 @@ import unittest
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "build/native_player"))
+import octo_cache
 from octo_cache import seed
 
 
@@ -78,6 +83,75 @@ class OctoCacheTest(unittest.TestCase):
         self.assertEqual(dest.read_bytes(), b"user")
         self.assertFalse(dest.samefile(source))
         self.assertFalse(escaped.exists())
+
+    def linked(self, key="k", name="tag.txt"):
+        dest = self.entry(4, key, name, b"good")
+        source = self.revision / "resources" / name
+        source.parent.mkdir(exist_ok=True)
+        source.write_bytes(b"good")
+        seed(self.data, self.assets)
+        self.assertTrue(dest.samefile(source))
+        return dest, source
+
+    def test_finished_check_survives_the_game_clearing_its_cache_folder(self):
+        dest, _ = self.linked()
+        # Octo removes files it does not know from its own folders.
+        for stray in self.cache.rglob("*"):
+            if stray.is_file() and stray not in (dest, dest.parent / ".meta", self.cache / "v"):
+                stray.unlink()
+        self.assertEqual([p.name for p in self.cache.iterdir() if p.name not in ("v", "v1")], [])
+        with patch("octo_cache.catalog_entries", side_effect=AssertionError("walked the library again")):
+            seed(self.data, self.assets)
+
+    def test_recreated_cache_is_linked_again(self):
+        dest, source = self.linked()
+        shutil.rmtree(self.cache)
+        seed(self.data, self.assets)
+        self.assertTrue(dest.samefile(source))
+
+    def test_linked_entries_are_rechecked_without_hashing(self):
+        self.linked()
+        (self.data / octo_cache.RECEIPT).unlink()
+        calls = []
+        real = octo_cache.linked_entry
+        with patch("octo_cache.digest", side_effect=AssertionError("hashed a linked file")), \
+             patch("octo_cache.linked_entry", side_effect=lambda *a: calls.append(a) or real(*a)):
+            seed(self.data, self.assets)
+        self.assertEqual([real(*a) for a in calls], [True])
+        self.assertTrue((self.data / octo_cache.RECEIPT).is_file())
+
+    def test_missing_meta_is_restored(self):
+        dest, _ = self.linked()
+        (dest.parent / ".meta").unlink()
+        (self.data / octo_cache.RECEIPT).unlink()
+        seed(self.data, self.assets)
+        self.assertEqual((dest.parent / ".meta").stat().st_size, 8)
+
+    def test_leaves_no_work_folder_when_the_catalog_link_is_locked(self):
+        real = os.unlink
+        def locked(path, *args, **kwargs):
+            if Path(path).parent.name.startswith(octo_cache.WORK) and Path(path).name == "0":
+                raise PermissionError(13, "sharing violation")
+            return real(path, *args, **kwargs)
+        self.entry(4, "k", "tag.txt", b"good")
+        with patch("os.unlink", side_effect=locked):
+            seed(self.data, self.assets)
+        seed(self.data, self.assets)
+        self.assertEqual([p.name for p in self.cache.iterdir() if p.name.startswith(octo_cache.WORK)], [])
+
+    def test_reports_progress_as_whole_percentages(self):
+        for index in range(4):
+            self.entry(4, f"k{index}", f"tag{index}.txt", b"good")
+            source = self.revision / f"resources/tag{index}.txt"
+            source.parent.mkdir(exist_ok=True)
+            source.write_bytes(b"good")
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            seed(self.data, self.assets)
+        lines = out.getvalue().splitlines()
+        self.assertEqual([l for l in lines if l.startswith("progress ")],
+                         ["progress 0", "progress 25", "progress 50", "progress 75", "progress 100"])
+        self.assertEqual(lines[-1], "Linked 4 verified Octo files")
 
 
 if __name__ == "__main__":

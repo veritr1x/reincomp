@@ -378,12 +378,30 @@ func serveAndPlay(root, data, assets, game, server, view, native, apk, fps, rend
 			cache := exec.Command(filepath.Join(root, "pods", "python", "python.exe"),
 				"-I", "-B", "-X", "utf8", helper, data, assets)
 			hideHelperWindow(cache)
-			cache.Stdout, cache.Stderr = log, log
-			if err := cache.Start(); err != nil {
+			cache.Stderr = log
+			lines, err := cache.StdoutPipe()
+			if err == nil {
+				err = cache.Start()
+			}
+			if err != nil {
 				fmt.Fprintln(log, "Octo cache preparation:", err)
 			} else {
 				finished := make(chan error, 1)
-				go func() { finished <- cache.Wait() }()
+				go func() {
+					// Wait closes the pipe, so read every line first.
+					output := bufio.NewScanner(lines)
+					for output.Scan() {
+						status, ok := cacheProgress(output.Text())
+						if !ok {
+							fmt.Fprintln(log, output.Text())
+						} else if setup != nil {
+							setup.mu.Lock()
+							setup.status = status
+							setup.mu.Unlock()
+						}
+					}
+					finished <- cache.Wait()
+				}()
 				select {
 				case err := <-finished:
 					if err != nil {
@@ -904,4 +922,15 @@ func fileSHA256(path string) (string, error) {
 		return "", e
 	}
 	return hex.EncodeToString(h.Sum(nil)), nil
+}
+
+// cacheProgress turns a "progress <percent>" line from octo_cache.py into the
+// launcher's status text. Other output belongs in the log.
+func cacheProgress(line string) (string, bool) {
+	number, found := strings.CutPrefix(line, "progress ")
+	percent, err := strconv.Atoi(number)
+	if !found || err != nil || percent < 0 || percent > 100 {
+		return "", false
+	}
+	return fmt.Sprintf("Checking game files for cache sharing · %d%%", percent), true
 }
