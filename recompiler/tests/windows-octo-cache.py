@@ -1,6 +1,8 @@
 """Exercise cache seeding with a real Octo-shaped catalog and filesystem links."""
+import contextlib
 import errno
 import hashlib
+import io
 from pathlib import Path
 import sys
 import tempfile
@@ -78,6 +80,20 @@ class OctoCacheTest(unittest.TestCase):
         self.assertEqual(dest.read_bytes(), b"user")
         self.assertFalse(dest.samefile(source))
         self.assertFalse(escaped.exists())
+
+    def test_reports_progress_as_whole_percentages(self):
+        for index in range(4):
+            self.entry(4, f"k{index}", f"tag{index}.txt", b"good")
+            source = self.revision / f"resources/tag{index}.txt"
+            source.parent.mkdir(exist_ok=True)
+            source.write_bytes(b"good")
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            seed(self.data, self.assets)
+        lines = out.getvalue().splitlines()
+        self.assertEqual([l for l in lines if l.startswith("progress ")],
+                         ["progress 0", "progress 25", "progress 50", "progress 75", "progress 100"])
+        self.assertEqual(lines[-1], "Linked 4 verified Octo files")
 
 
 if __name__ == "__main__":

@@ -135,8 +135,16 @@ def seed(data, assets):
         linked = 0
         retry = False
         staged = Path(work) / "payload"
+        # The launcher shows these whole percentages while a large library is hashed.
+        total = sum(1 for _, catalog in available for _ in catalog_entries(catalog))
+        done, shown = 0, -1
         for folder, catalog in available:
             for relative, key, md5 in catalog_entries(catalog):
+                percent = done * 100 // total
+                done += 1
+                if percent != shown:
+                    shown = percent
+                    print(f"progress {percent}", flush=True)
                 source, dest = folder / relative, app / key
                 try:
                     if not source.is_file():
@@ -171,6 +179,8 @@ def seed(data, assets):
                     if getattr(exc, "winerror", None) in (32, 33):
                         retry = True
                     continue
+        if total:
+            print("progress 100", flush=True)
         if not retry:
             pending = Path(work) / "receipt"
             pending.write_bytes(token)
