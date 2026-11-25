@@ -1,13 +1,13 @@
 {
   "portable": {
     "bunkerVersion": "1.12.23",
-    "runtimeManifestSHA256": "2ffb1b7ad491b536ef384c472656ff79a7b08fc77c595dfa23c168954109e5c6",
-    "sha256": "da1315563cc3f273bec14a983456d3b7d00c305644a11384f64f839c39b05409",
-    "size": 1057966827,
+    "runtimeManifestSHA256": "173ec6d57ff2dc955ce40e10a0dccccc7fc8913ce8abef82a37f31d64c7a4a4f",
+    "sha256": "a8fb3c37860927c1be94c2e297a7a12d93a1b8ff5e7a493796c829055c95de40",
+    "size": 1049362494,
     "playerMembers": {
       "game/EngineCalls.dll": "6f5393a73e26107789750e499d0ceacbafad14796ba70a998ffcaf8a2332d08c",
       "game/Fsr31.dll": "0f74d7dcbeba57d8870a34eb594edd1ba88f3b751a12e226af7899cab2246884",
-      "game/GameAssembly.dll": "b663453a0f7d246ffb08e8a8bc35f2b31342ffae7586146487b118b932268a9d",
+      "game/GameAssembly.dll": "dd1554993ea773119e8b39455069dca091d10972a64cc49930177fab1cb4be22",
       "game/WindowsPlayer.exe": "1d2a5afd032eee54d4064719904365f003ed02db8eb75d8476dd55cd6385cafe",
       "game/archive-media.exe": "2f664df4fca41f145b8e75fe175678dc7894cb3a6914da786adddb4471356fe7",
       "game/bunker_icon.py": "cc881470a8c2573943345eb50d03314de1d0c5ee205b4e2964a3df5ec6020b63",
@@ -20,7 +20,7 @@
       "game/resource-setup.html": "69bb94b9011c277dd52904453ad3ecc5cfaa653ef77b311d7dac22fb7dc04add",
       "game/resource-window.exe": "355db0f63439858c67bb41aeab51f0810df2eedf681e0d87dd5331154f888dde",
       "game/resource_setup.py": "eb728df11d282ee5160c928935ea7a36ea0a65432269f57fbcffe9deefeea0da",
-      "launcher.exe": "c73ee1d29dd1520ae6fe8245ce97a44ef77e5ca76bcab87db103eca7a76d99a4",
+      "launcher.exe": "898f3c869cd366ed916282a4fdb96704b80ad51f34d0fa91eb5ecb152de190f1",
       "pods/VERSION": "1190cbd2a7006335d6e8a4c96ad87023bd32c76eecb0c1f1d39e010ca4b7bfdc",
       "pods/app/archive/static/archive.css": "8f20523fbb327ba8502e4c83b676b105c23160e404244fd001107be4288bc7ad",
       "pods/app/archive/templates/base.html": "6ebb5bb56648c3cce2fdcb9152d08ce0f66246d5357aafdf609e17c001903fd0",
@@ -37,13 +37,13 @@
       "elfload.o": "fdf5f845833ba3cf9556fa7f40ff88106ec00946eacef87d5b9150a8f2ebdd93",
       "embedded-bootstrap.o": "0e8740bf7a0987d42972759094b4023d2be90e4fc4cfe39a6ab127e122494711",
       "host-033.o": "7765858258bb376eacc1eeef9945eccca5317e7b5bf8cb1b0b9926c8b2cb43b3",
-      "runtime-host.o": "6bf6e8cc15a3101d1048553a2fb980aeeb5cf7bb22ecbf8cdb95f84a6146e7c4"
+      "runtime-host.o": "7f8469a6c9608fcbcc5228f9dd3d571ca69ecbe13ec25f740c2bad9993a0d2a2"
     }
   },
   "linuxRuntime": {
     "bunkerVersion": "1.12.23",
-    "asset": "reincomp-linux-x86_64-0.3.10.tar.gz",
-    "sha256": "7c39b3d423e85ffae4e4869f573f8388c783a9e7e6eb4b5d479b5e529b403391",
+    "asset": "reincomp-linux-x86_64-0.3.11.tar.gz",
+    "sha256": "4c0a054fe43c5e2150e0f768107e2bc6e6dc9cfec62d96251c6ba69f7ee30120",
     "size": 272342077
   },
   "toolchain": {

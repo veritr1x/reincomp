@@ -3,7 +3,7 @@
 What changed, newest first, by date and area. A release's heading comes
 above the dated sections it holds.
 
-## Unreleased
+## 0.3.11 (2026-11-26)
 
 - Windows opens Subquests faster by narrowing each quest's schedule lookup and deferring artwork for offscreen rows. On a 131-tab save, the longest frame on first opening fell from 5.27 to 1.65 seconds. All 131 events kept their original positions.
 
