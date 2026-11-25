@@ -3,6 +3,7 @@ import hashlib
 import os
 from pathlib import Path, PureWindowsPath
 import re
+import shutil
 import struct
 import sys
 import tempfile
@@ -86,6 +87,24 @@ def create_once(path, data):
         os.unlink(temp.name)
 
 
+# Octo removes files it does not know from its cache, so the receipt for a
+# finished check lives beside the launcher's other state.
+RECEIPT = "octo-cache-linked-v1"
+WORK = "reincomp-link-"
+
+
+def identity(*paths):
+    return repr([(st.st_dev, st.st_ino) for st in map(os.stat, paths)]).encode()
+
+
+def linked_entry(source, dest):
+    # Three reads settle an entry that an earlier check already linked.
+    try:
+        return os.path.samestat(os.stat(dest), os.stat(source)) and os.path.isfile(dest.parent / ".meta")
+    except OSError:
+        return False
+
+
 def seed(data, assets):
     base = assets / "assets/revisions/0"
     catalogs = [(p.resolve(), (p / "list.bin").read_bytes()) for p in (base / "android", base)
@@ -111,13 +130,17 @@ def seed(data, assets):
     app = cache / "v1/301"
     if not app.resolve().is_relative_to(cache):
         return
-    stamp = app / ".reincomp-linked-v1"
+    # A work folder stays behind when another process holds the catalog open.
+    for stale in cache.glob(WORK + "*"):
+        shutil.rmtree(stale, ignore_errors=True)
+    stamp = data / RECEIPT
     token = fingerprint.digest()
-    if version.is_file() and stamp.is_file() and stamp.read_bytes() == token:
+    # A deleted or replaced cache gets new folders, which the receipt does not match.
+    if version.is_file() and app.is_dir() and stamp.is_file() and stamp.read_bytes() == token + identity(version, app):
         return
     # Probe the actual mounted revision. A library on another volume uses the
     # ordinary Octo download without opening or hashing all its payloads.
-    with tempfile.TemporaryDirectory(dir=cache) as work:
+    with tempfile.TemporaryDirectory(dir=cache, prefix=WORK, ignore_cleanup_errors=True) as work:
         available = []
         for folder, catalog in catalogs:
             try:
@@ -146,6 +169,8 @@ def seed(data, assets):
                     shown = percent
                     print(f"progress {percent}", flush=True)
                 source, dest = folder / relative, app / key
+                if linked_entry(source, dest):
+                    continue
                 try:
                     if not source.is_file():
                         continue
@@ -183,7 +208,7 @@ def seed(data, assets):
             print("progress 100", flush=True)
         if not retry:
             pending = Path(work) / "receipt"
-            pending.write_bytes(token)
+            pending.write_bytes(token + identity(version, app))
             os.replace(pending, stamp)
         print(f"Linked {linked} verified Octo files", flush=True)
 
