@@ -318,16 +318,19 @@ extern "C" __declspec(dllexport) Call BindEngineCall(const char *key,void *fn) {
             // their menu or field HUD has been destroyed during a transition.
             const bool cancelTutorial=caller==0x82892fd4 || caller==0x82892fe8;
             const bool updateRoulette=caller==0x82cf8d78 || caller==0x82cf8dd8;
-            if((cancelTutorial || updateRoulette) &&
+            const bool finishSkillIcon=caller==0x82e2ba10;
+            if((cancelTutorial || updateRoulette || finishSkillIcon) &&
                !nativeUnityObjectAlive(reinterpret_cast<P>(s.gpr.x0.qword)))return;
             invoke<void,P,uint8_t>(s,original);
         };
         if(!std::strcmp(key,"UnityEngine.Behaviour::get_isActiveAndEnabled"))return [](State &s,void *original){
-            // The Exchange shop can finish loading a row icon after Unity has
-            // destroyed its Graphic. SetVerticesDirty has nothing to schedule
-            // in that case.
-            if(s.gpr.x30.qword==0x83d31e94 && s.gpr.x0.qword){
-                if(!nativeUnityObjectAlive(reinterpret_cast<P>(s.gpr.x0.qword))){s.gpr.x0.qword=0;return;}
+            // Late sprite assignments call Graphic.SetAllDirty. A destroyed
+            // Graphic has no layout, vertices or material to rebuild.
+            const auto caller=s.gpr.x30.qword;
+            if((caller==0x83d31d8c || caller==0x83d31e94 || caller==0x83d31f30) &&
+               s.gpr.x0.qword && !nativeUnityObjectAlive(reinterpret_cast<P>(s.gpr.x0.qword))){
+                s.gpr.x0.qword=0;
+                return;
             }
             invoke<uint8_t,P>(s,original);
         };
