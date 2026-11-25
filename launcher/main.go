@@ -89,6 +89,10 @@ func main() {
 	}
 	if e != nil {
 		fmt.Fprintln(os.Stderr, "\n"+e.Error())
+		// The portable player has no console, so a failure there needs its own window.
+		if !*prepareOnly && showFailure(e.Error()) {
+			os.Exit(1)
+		}
 		if !*prepareOnly {
 			fmt.Fprintln(os.Stderr, "\nPress Enter to close.")
 			bufio.NewReader(os.Stdin).ReadString('\n')
@@ -934,3 +938,7 @@ func cacheProgress(line string) (string, bool) {
 	}
 	return fmt.Sprintf("Checking game files for cache sharing · %d%%", percent), true
 }
+
+// showFailure reports a startup failure in a window when the launcher has no
+// console to print it in. It returns false when the console already shows it.
+var showFailure = func(string) bool { return false }

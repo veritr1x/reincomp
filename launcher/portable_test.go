@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 )
 
@@ -105,5 +106,43 @@ func TestPortableInstallAndRetry(t *testing.T) {
 		if err != nil || string(b) != want {
 			t.Fatalf("%s: %q, %v", name, b, err)
 		}
+	}
+}
+
+func TestPortableInstallClearsAbandonedStaging(t *testing.T) {
+	previous := lockPlayerPackage
+	lockPlayerPackage = func(string) (func(), error) { return func() {}, nil }
+	defer func() { lockPlayerPackage = previous }()
+	outer := t.TempDir()
+	exe := filepath.Join(outer, "Nier Reincarnation.exe")
+	makePortable(t, exe, "v1", "", false)
+	// A launcher that was closed mid-install leaves its staging folder behind.
+	install := filepath.Join(outer, ".bunker-player")
+	abandoned := filepath.Join(install, ".install-3287437195", "game")
+	if err := os.MkdirAll(abandoned, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(install, ".owner"), []byte("Bunker portable player 1"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(abandoned, "WindowsPlayer.exe"), []byte("partial"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	inst, err := playerInstallation(exe)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer inst.close()
+	items, err := os.ReadDir(install)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, item := range items {
+		if strings.HasPrefix(item.Name(), ".install-") {
+			t.Fatalf("staging folder %s was left behind", item.Name())
+		}
+	}
+	if b, err := os.ReadFile(filepath.Join(install, "game", "WindowsPlayer.exe")); err != nil || string(b) != "v1game/WindowsPlayer.exe" {
+		t.Fatalf("installed player: %q, %v", b, err)
 	}
 }

@@ -169,6 +169,15 @@ func playerInstallation(exe string) (installation, error) {
 		keep = true
 		return installation{install, release}, nil
 	}
+	// A launcher that was closed mid-install leaves its staging folder. This
+	// launcher holds the lock, so every staging folder here is abandoned.
+	if items, listErr := os.ReadDir(install); listErr == nil {
+		for _, item := range items {
+			if item.IsDir() && strings.HasPrefix(item.Name(), ".install-") {
+				os.RemoveAll(filepath.Join(install, item.Name()))
+			}
+		}
+	}
 	// Verify the full download before replacing any file in a working install.
 	incoming, err := os.MkdirTemp(install, ".install-")
 	if err != nil {
