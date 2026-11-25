@@ -72,6 +72,17 @@ struct Method {const char *name;uint32_t rva;Call call;};
 static const Method methods[]={
 #include "engine-calls.inc"
 };
+static void getComponentsForList(State &s, void *original) {
+    using Fill = bool(*)(P, P, P);
+    static auto fill = reinterpret_cast<Fill>(GetProcAddress(GetModuleHandleW(L"GameAssembly.dll"), "FillLargeComponentList"));
+    Cursor cursor(s);
+    P component = cursor.read<P>();
+    P type = cursor.read<P>();
+    P list = cursor.read<P>();
+    if (!fill || !fill(component, type, list)) {
+        reinterpret_cast<void(*)(P, P, P)>(original)(component, type, list);
+    }
+}
 static void createTexture2D(State &s,void *original){
     constexpr uint32_t rgb8Srgb=3, rgb8Unorm=7;
     // ScreenCaptureBlur.Activate displays a camera readback. The Android
@@ -271,6 +282,7 @@ extern "C" __declspec(dllexport) Call BindEngineCall(const char *key,void *fn) {
     auto base=reinterpret_cast<uintptr_t>(GetModuleHandleW(L"UnityPlayer.dll"));
     if(it==std::end(methods)||std::strcmp(key,it->name)||it->rva!=reinterpret_cast<uintptr_t>(fn)-base)return nullptr;
     if(GetEnvironmentVariableW(L"REINCOMP_NATIVE_CHECKPOINT",nullptr,0)){
+        if(!std::strcmp(key,"UnityEngine.Component::GetComponentsForListInternal"))return getComponentsForList;
         if(auto callback=fsr_engine::bind(key))return callback;
         if(!std::strcmp(key,"UnityEngine.Texture2D::Internal_CreateImpl"))return createTexture2D;
         // The game's two RenderManager.SetResolution calls always request
@@ -288,6 +300,17 @@ extern "C" __declspec(dllexport) Call BindEngineCall(const char *key,void *fn) {
                 return;
             }
             invoke<double,P>(s,original);
+        };
+        if(!std::strcmp(key,"UnityEngine.Transform::set_localScale_Injected"))return [](State &s,void *original){
+            // SkillIcon.LoadSprite can finish after its quest dialog closes.
+            // The Transform setter's saved caller identifies that continuation.
+            if(s.gpr.x30.qword==0x84d80734 && !nativeUnityObjectAlive(reinterpret_cast<P>(s.gpr.x0.qword))){
+                uintptr_t caller=0;
+                auto savedCaller=reinterpret_cast<const void *>(s.gpr.x29.qword+sizeof(uintptr_t));
+                if(ReadProcessMemory(GetCurrentProcess(),savedCaller,&caller,sizeof(caller),nullptr) &&
+                   caller==0x82e2b94c)return;
+            }
+            invoke<void,P,P>(s,original);
         };
         if(!std::strcmp(key,"UnityEngine.Behaviour::set_enabled"))return [](State &s,void *original){
             const auto caller=s.gpr.x30.qword;

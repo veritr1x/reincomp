@@ -45,6 +45,7 @@ extern "C" __declspec(dllexport) void TraceInputActor(P object){
     }
 }
 #ifdef REINCOMP_BUNKER_MODULES
+#include "subquest-list.h"
 extern "C" {
 #include "title_now.h"
 #include "badge_pace.h"
@@ -89,6 +90,7 @@ static std::atomic<P> campaignBadgeUpdate{},headerStart{},headerUpdate{},flyingM
 static size_t campaignBadgeLabelOffset;
 static void prepareBunkerMenuCallbacks(){
     if(campaignBadgeUpdate.load(std::memory_order_relaxed) && headerStart.load(std::memory_order_relaxed))return;
+    subquest_list::prepare();
     size_t count=0;
     auto assemblies=static_cast<P *>(il2cpp_domain_get_assemblies(il2cpp_domain_get(),&count));
     for(size_t i=0;i<count;++i){

@@ -7,6 +7,7 @@
 #include <cstdlib>
 #include <cstring>
 #include "frame-memory.h"
+#include "unity-object.h"
 #include "../../runtime/fast_tls.h"
 #include <map>
 #include <unordered_set>
@@ -269,6 +270,8 @@ extern "C" __declspec(dllexport) P il2cpp_runtime_invoke(P method,P object,P *ar
         }
     }
 #ifdef REINCOMP_BUNKER_MODULES
+    if(object && method && method==subquest_list::onDisable.load(std::memory_order_acquire))
+        subquest_list::disable(object);
     if(skipUnchangedCampaignBadge(method,object)){
         if(exception)*exception=nullptr;
         return nullptr;
@@ -294,6 +297,8 @@ extern "C" __declspec(dllexport) P il2cpp_runtime_invoke(P method,P object,P *ar
     if(recordRender)frame_cpu::beginRender();
     auto result=profile?managed_profile::measure(method,object,call):call();
 #ifdef REINCOMP_BUNKER_MODULES
+    if(object && method && method==subquest_list::lateUpdate.load(std::memory_order_acquire) && (!exception || !*exception))
+        subquest_list::update(object);
     if(method && method==headerStart.load(std::memory_order_acquire) && (!exception || !*exception)){
         if(desktopHeaderReady)desktop_header_start(object);
         else applyBunkerSeasons();
@@ -344,6 +349,35 @@ R2(il2cpp_array_new,P,P,size_t)
 R2(il2cpp_array_new_specific,P,P,size_t)
 R2(il2cpp_array_class_get,P,P,uint32_t)
 R1(il2cpp_array_length,uint32_t,P)
+
+// Unity 2019's GetComponentsForListInternal clears the entire unused capacity
+// of the output List<T> one write barrier at a time. The UI pools these lists,
+// so a large event menu makes even single-component queries expensive later.
+extern "C" __declspec(dllexport) bool FillLargeComponentList(P owner, P type, P destination) {
+    // These are the List<T> and one-dimensional reference array layouts used
+    // directly by the pinned Windows player's component-list implementation.
+    struct Array { P klass, monitor, bounds; size_t length; };
+    struct List { P klass, monitor; Array *items; int32_t size; uint32_t version; };
+    auto list = static_cast<List *>(destination);
+    if (!list || !list->items || list->items->length <= 64 || !type || !nativeUnityObjectAlive(owner)) return false;
+    static auto gameObject = reinterpret_cast<P(*)(P)>(registry.at("UnityEngine.Component::get_gameObject"));
+    static auto components = reinterpret_cast<Array *(*)(P, P, uint8_t, uint8_t, uint8_t, uint8_t, P)>(
+        registry.at("UnityEngine.GameObject::GetComponentsInternal"));
+    // Use the engine's own single-object search, including interface matches
+    // and component ordering. Leave capacity growth to the ordinary list path.
+    auto result = components(gameObject(owner), type, true, false, true, false, nullptr);
+    if (!result || result->length > list->items->length) return false;
+    auto slots = reinterpret_cast<P *>(list->items + 1);
+    auto matches = reinterpret_cast<P *>(result + 1);
+    int count = static_cast<int>(result->length);
+    for (int i = 0; i < count; ++i) il2cpp_gc_wbarrier_set_field(list->items, slots + i, matches[i]);
+    // Slots beyond the old Count are already empty. Clear only live references
+    // displaced by the query, preserving both the list and its backing array.
+    for (int i = count; i < list->size; ++i) il2cpp_gc_wbarrier_set_field(list->items, slots + i, nullptr);
+    list->size = count;
+    ++list->version;
+    return true;
+}
 R1(il2cpp_array_element_size,int,P)
 R2(il2cpp_value_box,P,P,P)
 R1(il2cpp_object_get_size,uint32_t,P)
