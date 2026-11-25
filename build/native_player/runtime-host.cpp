@@ -150,6 +150,10 @@ void registerEngine(const char *name,void *fn) {
         }
     }
     auto callable=bindCall(name,fn);
+    if (callable && key=="UnityEngine.Object::Internal_CloneSingleWithParent") {
+        auto clone=GetProcAddress(GetModuleHandleW(L"GameAssembly.dll"),"CloneWithSubquestArtwork");
+        if (clone) fn=reinterpret_cast<void *>(clone);
+    }
     if(callable)++bound;
     guestRuntime->AddImport(marker,[key,fn,callable](State &s){
         CurrentCall current(key.c_str());
@@ -197,11 +201,25 @@ extern "C" int __wrap__ZN6bunker7windows10SignalHost11BindCurrentEy(SignalHost *
 #include "field-metadata.h"
 #include "field-load-queue.h"
 #include "story-work.h"
-#include "weapon-evolution.h"
+#include "master-table-queries.h"
 #include "liveness-walk.h"
 #include "battle-cleanup.h"
 #include "bunker-events.h"
 #include "unity-object.h"
+extern "C" Memory *sub_82b03d98(State &,addr_t,Memory *);
+static Memory *setupEventTabContent(State &s,addr_t pc,Memory *memory) {
+    // Only VerticalTab.Setup's per-row virtual call. Programmatic rebinds
+    // and the deferred call through il2cpp_runtime_invoke run the original.
+    if (s.gpr.x30.qword == 0x82a340c4) {
+        using Defer = bool(*)(void *, void *);
+        static auto defer = reinterpret_cast<Defer>(GetProcAddress(GetModuleHandleW(L"GameAssembly.dll"), "DeferSubquestArtwork"));
+        if (defer && defer(reinterpret_cast<void *>(s.gpr.x0.qword), reinterpret_cast<void *>(s.gpr.x1.qword))) {
+            s.gpr.pc.qword = s.gpr.x30.qword;
+            return memory;
+        }
+    }
+    return sub_82b03d98(s,pc,memory);
+}
 extern "C" Memory *sub_830de5a0(State &,addr_t,Memory *);
 static Memory *scrollContentChanged(State &s,addr_t pc,Memory *memory) {
     // CreateAsync can resume after leaving the Library. A disposed scroll
@@ -263,7 +281,8 @@ extern "C" void __wrap__ZN6recomp21PublishGuestOverridesEv(){
         bunker_events::install();
         recomp::AddGuestDirectEntry(0x830de5a0,scrollContentChanged);
         recomp::AddGuestDirectEntry(0x830df4e8,UpdateSnapPositionBunker);
-        weapon_evolution::install();
+        master_table_queries::install();
+        recomp::AddGuestDirectEntry(0x82b03d98,setupEventTabContent);
         if(std::getenv("REINCOMP_PROFILE_STORY_WORK"))
             recomp::AddGuestDirectEntry(0x830cfc3c,[](State &s,addr_t pc,Memory *memory){
                 return timeStoryWork(s,pc,memory,StartFollowPathRelease,"FollowPathController.StartFollowPath");

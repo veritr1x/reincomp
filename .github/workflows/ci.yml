@@ -42,6 +42,10 @@ jobs:
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
           ./octo-write.exe "$env:RUNNER_TEMP/octo-write"
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          & $compiler -std=c++17 -O2 -static build/native_player/tests/master-table-queries.cpp -o master-table-queries.exe
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          ./master-table-queries.exe
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
           python build/build.py --compile-only --out out --cxx $compiler
 
   launcher:

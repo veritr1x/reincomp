@@ -20,7 +20,7 @@ param(
     [switch]$RenderTimingOnly,
     [switch]$Fullscreen,
     [string]$MenuSave,
-    [ValidateSet('Summon','SummonRates','SummonNotice','Organization','Enhance','Quest','Map','Library','Menu','Mama','All')][string]$OpenScreen,
+    [ValidateSet('Summon','SummonRates','SummonNotice','Organization','Enhance','Quest','Subquests','Map','Library','Menu','Mama','All')][string]$OpenScreen,
     [switch]$Play,
     [string]$PythonPath
 )

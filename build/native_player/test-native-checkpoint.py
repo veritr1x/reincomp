@@ -71,7 +71,7 @@ try:
             env['REINCOMP_CHECKPOINT_PREFS'] = str(Path(sys.argv[sys.argv.index('--player-prefs')+1]).resolve())
         env['REINCOMP_BENCH_PROFILE'] = 'native-checkpoint-' + server_data.name.split('-server-')[0]
     if '--open-screen' in sys.argv[2:]:
-        screens = {s.lower(): s for s in ('Organization','Enhance','Quest','Map','Library','Menu','Mama','All')}
+        screens = {s.lower(): s for s in ('Organization','Enhance','Quest','Subquests','Map','Library','Menu','Mama','All')}
         screens['summon'] = 'Gacha'
         env['REINCOMP_OPEN_SCREEN'] = screens[sys.argv[sys.argv.index('--open-screen')+1].lower()]
     if '--movie' in sys.argv[2:]:env['REINCOMP_TEST_TITLE_MOVIE']='1'

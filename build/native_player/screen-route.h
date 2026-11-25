@@ -48,6 +48,29 @@ static bool openSummonInfo(bool rates,FILE *log){
     if(log){std::fprintf(log,"Summons selected banner action=%s exception=%d\n",method,bool(error));std::fflush(log);}
     return true; // A banner action is issued once per replay.
 }
+static bool tapSubquests(FILE *log) {
+    static auto find = reinterpret_cast<P(*)(P)>(registry.at("UnityEngine.GameObject::Find"));
+    static auto component = reinterpret_cast<P(*)(P, P)>(registry.at("UnityEngine.GameObject::GetComponent"));
+    static auto width = reinterpret_cast<int(*)()>(registry.at("UnityEngine.Screen::get_width"));
+    static auto height = reinterpret_cast<int(*)()>(registry.at("UnityEngine.Screen::get_height"));
+    static P buttonClass = desktop_skip::type("Dark.View.UserInterface.Parts", "DarkButton");
+    if (!buttonClass) return false;
+    auto path = reinterpret_cast<P>(invoke("il2cpp_string_new", "/containers/window_system/quest_top/all/event_button"));
+    P object = find(path);
+    P button = object ? component(object, il2cpp_type_get_object(il2cpp_class_get_type(buttonClass))) : nullptr;
+    desktop_skip::HitTest hit;
+    float position[2]{};
+    const int w = width(), h = height();
+    if (!button || !hit.init() || !hit.hits(button, position, w, h)) return false;
+    if (log) {
+        LARGE_INTEGER counter, frequency;
+        QueryPerformanceCounter(&counter);
+        QueryPerformanceFrequency(&frequency);
+        std::fprintf(log, "Subquests tap qpcMs=%.4f\n", 1000.0*counter.QuadPart/frequency.QuadPart);
+        std::fflush(log);
+    }
+    return desktop_skip::call(desktop_skip::classOf(button), button, "OnTap", {position});
+}
 static void openRequestedScreen(unsigned actor,int frame,FILE *log){
     static const char *request=std::getenv("REINCOMP_OPEN_SCREEN");
     if(!request)return;
@@ -72,8 +95,9 @@ static void openRequestedScreen(unsigned actor,int frame,FILE *log){
     }();
     static const bool summonRates=!std::strcmp(request,"SummonRates");
     static const bool summonInfo=summonRates || !std::strcmp(request,"SummonNotice");
+    static const bool subquests=!std::strcmp(request,"Subquests");
     static bool infoDispatched=false;
-    const char *target=summonInfo?"Gacha":(all?screens[index].key:request);
+    const char *target=subquests?"Quest":(summonInfo?"Gacha":(all?screens[index].key:request));
     static unsigned attempts=0;
     static unsigned newsTaps=0;
     static ULONGLONG next=0,started=0;
@@ -100,6 +124,20 @@ static void openRequestedScreen(unsigned actor,int frame,FILE *log){
     next=now+2000;
     P type=nullptr;
     if(!started)started=now;
+    if(subquests && enteredTab){
+        static bool tapped=false;
+        constexpr auto ns="Dark.View.UserInterface.Outgame.Quest";
+        if(findScreenComponent(ns,"EventQuestTopScreenView",type)){
+            if(log){std::fprintf(log,"Screen route arrived at EventQuestTopScreenView\n");std::fflush(log);}
+            arrived=true;requestedScreenVisible=true;next=now+hold;
+        }else if(now-started>=30000){
+            if(log){std::fprintf(log,"Screen route timed out opening Subquests\n");std::fflush(log);}
+            finished=true;
+        }else if(!tapped){
+            tapped=tapSubquests(log);
+        }
+        return;
+    }
     if(summonInfo && enteredTab){
         if(!infoDispatched)infoDispatched=openSummonInfo(summonRates,log);
         if(infoDispatched && game_pages::finishedPage(summonRates?L"/gacha-rate":L"/information/")){
@@ -118,6 +156,9 @@ static void openRequestedScreen(unsigned actor,int frame,FILE *log){
     }
     for(const auto &screen:screens){
         if(!std::strcmp(target,screen.key) && findScreenComponent(screen.ns,screen.name,type)){
+            if(subquests){
+                enteredTab=true;started=now;return;
+            }
             if(summonInfo){
                 enteredTab=true;started=now;next=now+3000;return;
             }

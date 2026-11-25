@@ -8,12 +8,18 @@
 namespace subquest_list {
 static std::atomic<P> lateUpdate{}, onDisable{};
 static P tabType, setupField;
+static std::atomic<P> eventContentClass{};
+static P scrollType, contentSetup;
 
 static void prepare() {
     if (lateUpdate.load(std::memory_order_acquire)) return;
     auto scroll = desktop_skip::type("Dark.View.UserInterface.ScrollView", "DarkScrollRect");
     auto tab = desktop_skip::type("Dark.View.UserInterface.Outgame", "VerticalTab");
     if (!scroll || !tab) return;
+    scrollType = il2cpp_type_get_object(il2cpp_class_get_type(scroll));
+    auto eventContent = desktop_skip::type("Dark.View.UserInterface.Outgame", "EventQuestTabContent");
+    if (eventContent) contentSetup = il2cpp_class_get_method_from_name(eventContent, "Setup", 1);
+    eventContentClass.store(eventContent, std::memory_order_release);
     tabType = il2cpp_type_get_object(il2cpp_class_get_type(tab));
     setupField = il2cpp_class_get_field_from_name(tab, "_isEndSetup");
     auto disable = il2cpp_class_get_method_from_name(scroll, "OnDisable", 0);
@@ -37,9 +43,11 @@ static bool isEventPicker(P scroll) {
 struct HiddenVisual {
     uint32_t handle;
     bool outside;
+    uint32_t setupTarget = 0, setupData = 0;
 };
 struct List {
     bool eventPicker = false;
+    bool buildingDormantRows = false;
     std::vector<P> rows;
     float warmup = 0;
     std::map<P, HiddenVisual> hidden;
@@ -52,6 +60,99 @@ static void setActive(P object, bool active) {
     set(object, active);
 }
 
+static P rowArtwork(P row) {
+    static auto transform = reinterpret_cast<P(*)(P)>(registry.at("UnityEngine.Component::get_transform"));
+    static auto count = reinterpret_cast<int(*)(P)>(registry.at("UnityEngine.Transform::GetChildCount"));
+    static auto child = reinterpret_cast<P(*)(P, int)>(registry.at("UnityEngine.Transform::GetChild"));
+    static auto object = reinterpret_cast<P(*)(P)>(registry.at("UnityEngine.Component::get_gameObject"));
+    auto root = transform(row);
+    return count(root) == 1 ? object(child(root, 0)) : nullptr;
+}
+
+static P eventScroll(P parent) {
+    static auto getParent = reinterpret_cast<P(*)(P)>(registry.at("UnityEngine.Transform::GetParent"));
+    static auto object = reinterpret_cast<P(*)(P)>(registry.at("UnityEngine.Component::get_gameObject"));
+    static auto component = reinterpret_cast<P(*)(P, P)>(registry.at("UnityEngine.GameObject::GetComponent"));
+    P viewport = parent ? getParent(parent) : nullptr, tab = viewport ? getParent(viewport) : nullptr;
+    return tab && scrollType ? component(object(tab), scrollType) : nullptr;
+}
+
+// Each row keeps its original button and fixed-height RectTransform. Clone
+// only the first screenful with active artwork. Unity can bind the remaining
+// rows normally without registering their text, masks and animations on entry.
+extern "C" __declspec(dllexport) P CloneWithSubquestArtwork(P prefab, P parent, uint8_t worldPositionStays) {
+    static auto clone = reinterpret_cast<P(*)(P, P, uint8_t)>(registry.at("UnityEngine.Object::Internal_CloneSingleWithParent"));
+    auto contentClass = eventContentClass.load(std::memory_order_acquire);
+    if (!contentClass || !prefab || !parent || readField<sizeof(P), 0>(prefab) != uintptr_t(contentClass))
+        return clone(prefab, parent, worldPositionStays);
+
+    static auto count = reinterpret_cast<int(*)(P)>(registry.at("UnityEngine.Transform::GetChildCount"));
+    static auto active = reinterpret_cast<uint8_t(*)(P)>(registry.at("UnityEngine.GameObject::get_activeSelf"));
+    if (count(parent) < 10) return clone(prefab, parent, worldPositionStays);
+    P scroll = eventScroll(parent);
+    if (!scroll) return clone(prefab, parent, worldPositionStays);
+    auto known = lists.find(scroll);
+    if (known == lists.end() ? !isEventPicker(scroll) : !known->second.eventPicker)
+        return clone(prefab, parent, worldPositionStays);
+    P templateVisual = rowArtwork(prefab);
+    if (!templateVisual || !active(templateVisual)) return clone(prefab, parent, worldPositionStays);
+
+    P row;
+    {
+        struct Restore { P visual; ~Restore() { setActive(visual, true); } } restore{templateVisual};
+        setActive(templateVisual, false);
+        row = clone(prefab, parent, worldPositionStays);
+    }
+    if (row) {
+        P visual = rowArtwork(row);
+        if (!visual) return row;
+        auto handle = uint32_t(invoke("il2cpp_gchandle_new", visual, false));
+        if (handle) {
+            auto &list = lists[scroll];
+            list.eventPicker = list.buildingDormantRows = true;
+            list.hidden.emplace(visual, HiddenVisual{handle, true});
+        } else setActive(visual, true);
+    }
+    return row;
+}
+
+// VerticalTab has already registered the real button. Defer only the event
+// label, maintenance notice and campaign artwork bound by TabContent.Setup.
+extern "C" __declspec(dllexport) bool DeferSubquestArtwork(P row, P data) {
+    static auto transform = reinterpret_cast<P(*)(P)>(registry.at("UnityEngine.Component::get_transform"));
+    static auto parent = reinterpret_cast<P(*)(P)>(registry.at("UnityEngine.Transform::GetParent"));
+    if (!row || !data || !contentSetup) return false;
+    auto list = lists.find(eventScroll(parent(transform(row))));
+    if (list == lists.end()) return false;
+    auto hidden = list->second.hidden.find(rowArtwork(row));
+    if (hidden == list->second.hidden.end()) return false;
+    auto &entry = hidden->second;
+    auto dataHandle = uint32_t(invoke("il2cpp_gchandle_new", data, false));
+    if (!dataHandle) return false;
+    if (!entry.setupTarget) entry.setupTarget = uint32_t(invoke("il2cpp_gchandle_new", row, false));
+    if (!entry.setupTarget) {
+        invoke("il2cpp_gchandle_free", dataHandle);
+        return false;
+    }
+    if (entry.setupData) invoke("il2cpp_gchandle_free", entry.setupData);
+    entry.setupData = dataHandle;
+    return true;
+}
+
+static void bindArtwork(HiddenVisual &entry) {
+    if (!entry.setupData) return;
+    P target = reinterpret_cast<P>(invoke("il2cpp_gchandle_get_target", entry.setupTarget));
+    P data = reinterpret_cast<P>(invoke("il2cpp_gchandle_get_target", entry.setupData));
+    if (nativeUnityObjectAlive(target) && data) {
+        P exception = nullptr;
+        invoke("il2cpp_runtime_invoke", contentSetup, target, &data, &exception);
+        if (exception) invoke("il2cpp_unhandled_exception", exception);
+    }
+    invoke("il2cpp_gchandle_free", entry.setupData);
+    invoke("il2cpp_gchandle_free", entry.setupTarget);
+    entry.setupData = entry.setupTarget = 0;
+}
+
 static void restore(List &list, bool all) {
     for (auto it = list.hidden.begin(); it != list.hidden.end();) {
         if (!all && it->second.outside) {
@@ -59,6 +160,7 @@ static void restore(List &list, bool all) {
             continue;
         }
         if (nativeUnityObjectAlive(it->first)) setActive(it->first, true);
+        bindArtwork(it->second);
         invoke("il2cpp_gchandle_free", it->second.handle);
         it = list.hidden.erase(it);
     }
@@ -95,7 +197,7 @@ static void update(P scroll) {
         if (list.rows[i] != row) changed = true;
         list.rows[i] = row;
     }
-    if (changed) {
+    if (changed && !list.buildingDormantRows) {
         restore(list, true);
         list.warmup = 0;
     }
@@ -109,9 +211,13 @@ static void update(P scroll) {
     if (P tab = component(object(scroll), tabType))
         invoke("il2cpp_field_get_value", tab, setupField, &ready);
     if (!ready) {
-        restore(list, true);
+        if (!list.buildingDormantRows) restore(list, true);
         list.warmup = 0;
         return;
+    }
+    if (list.buildingDormantRows) {
+        list.buildingDormantRows = false;
+        list.warmup = 2.f;
     }
     if (list.warmup < 2.f) {
         list.warmup += std::min(delta(), .1f);
@@ -150,5 +256,13 @@ static void update(P scroll) {
     }
     // Also restore any rows removed or pooled since the previous layout.
     restore(list, false);
+    // Give visible rows priority. Bind one more offscreen row per frame so
+    // fast scrolling and leaving the picker do not accumulate deferred work.
+    for (auto &[visual, entry] : list.hidden) {
+        if (entry.setupData) {
+            bindArtwork(entry);
+            break;
+        }
+    }
 }
 }

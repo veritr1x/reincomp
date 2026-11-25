@@ -3,8 +3,10 @@
 #include <vector>
 #include "inspect-player-scene.h"
 #include "player-window.h"
-#include "screen-route.h"
+static P findScreenComponent(const char *ns, const char *name, P &type);
+static P screenObjectField(P object, const char *name);
 #include "desktop-skip.h"
+#include "screen-route.h"
 // Picturebook input snaps a reversal to RunPanLevel regardless of drag length.
 // Use the game's walk level for that turn while a desktop walk gesture is held.
 extern "C" __declspec(dllexport) void SetDesktopWalkTurn(bool walking){

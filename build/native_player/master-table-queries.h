@@ -1,11 +1,13 @@
 #include <algorithm>
-// Restrict the two All views used by CalculatorWeapon.GetAfterEvolutionWeapons.
-// Keep its original FirstOrDefault, Where, Select and newly allocated List<int>.
-// Both predicates read plain integer fields from the current master table.
-namespace weapon_evolution {
+// These three TableBase<T>.All consumers filter on an integer master-data key.
+// Restrict their enumerator bounds before running the original LINQ predicates.
+namespace master_table_queries {
 extern "C" Memory *sub_847c006c(State &,addr_t,Memory *);
 extern "C" Memory *sub_827bf094(State &,addr_t,Memory *);
 constexpr addr_t firstRow=0x827bf158,groupRows=0x827bf21c;
+// CalculatorQuest.IsValidEventQuestTerm filters schedule rows by QuestId,
+// then evaluates the date and cron rules for all matching rows.
+constexpr addr_t eventQuestSchedule=0x8273de30;
 static thread_local bool compareOriginal=false;
 static const bool checking=std::getenv("REINCOMP_VERIFY_WEAPON_QUERY")!=nullptr;
 static thread_local uint64_t originalRows=0,candidateRows=0;
@@ -16,14 +18,15 @@ template<class T> static T read(addr_t at){T v;std::memcpy(&v,reinterpret_cast<v
 
 static Memory *all(State &s,addr_t pc,Memory *memory){
     const auto caller=s.gpr.x30.qword;
-    if((caller!=firstRow && caller!=groupRows) || compareOriginal)return sub_847c006c(s,pc,memory);
+    const bool weaponQuery=caller==firstRow || caller==groupRows;
+    if(caller!=eventQuestSchedule && (!weaponQuery || compareOriginal))return sub_847c006c(s,pc,memory);
     const auto destination=s.gpr.x8.qword,closure=s.gpr.x19.qword;
     auto result=sub_847c006c(s,pc,memory);
     if(s.gpr.pc.qword!=caller || !destination || !closure)return result;
     auto view=read<Range>(destination);
     if(!view.array || !view.hasValue || !view.ascending || view.first!=0 || view.last<0)return result;
     const bool first=caller==firstRow;
-    const auto keyObject=first?closure:read<addr_t>(closure+0x18);
+    const auto keyObject=caller==groupRows?read<addr_t>(closure+0x18):closure;
     if(!keyObject)return result;
     const auto key=read<int32_t>(keyObject+0x10);
     int32_t left=-1,right=-1;
@@ -47,7 +50,7 @@ static Memory *all(State &s,addr_t pc,Memory *memory){
         }
     }
     view.hasValue=left>=0;
-    if(checking){
+    if(checking && weaponQuery){
         originalRows+=uint64_t(view.last)+1;
         if(view.hasValue)candidateRows+=uint64_t(right-left)+1;
     }

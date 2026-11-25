@@ -117,6 +117,7 @@ multiple players, Ctrl+B → Pod Programs → Players lets you choose the charac
 .\build\replay_checkpoint.ps1 menu -Install .\build-output\reincomp -Play -OpenScreen Summon
 .\build\replay_checkpoint.ps1 menu -Install .\build-output\reincomp -Play -OpenScreen SummonRates
 .\build\replay_checkpoint.ps1 menu -Install .\build-output\reincomp -Play -OpenScreen SummonNotice
+.\build\replay_checkpoint.ps1 menu -Install .\build-output\reincomp -Play -OpenScreen Subquests
 .\build\replay_checkpoint.ps1 menu -Install .\build-output\reincomp -Play -OpenScreen All
 .\build\replay_checkpoint.ps1 3d -Install .\build-output\reincomp -SaveArchive .\field.zip -AutoWalk
 .\build\replay_checkpoint.ps1 2d -Install .\build-output\reincomp -SaveArchive .\storybook.zip -Play
@@ -126,6 +127,9 @@ multiple players, Ctrl+B → Pod Programs → Players lets you choose the charac
 banner’s information button. For Mama’s Exciting Festival, the notice links
 to the Summons Details page with the cost, featured items and item pool.
 Both replays wait for the embedded page to finish loading.
+
+`Subquests` taps the event button on the Quests screen. The player's
+`frame-state.log` records the tap timestamp and the longest frame during the transition.
 The timed 3D replay expects the bridge (`tw002001`). For a save in Fio’s
 Chambers of Dusk, add `-FieldScene bg007001` to measure the loaded chamber.
 The report checks the active scene, the 3D actor, graphics settings and focus.
