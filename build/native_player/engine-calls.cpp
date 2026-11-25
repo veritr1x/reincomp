@@ -235,6 +235,15 @@ extern "C" __declspec(dllexport) bool ConsumeDesktopAutoRun(){
 }
 extern "C" __declspec(dllexport) void DesktopGamepadsChanged(){desktop_gamepad::devicesChanged.store(true);}
 extern "C" __declspec(dllexport) void ShutdownDesktopGamepads(){desktop_gamepad::shutdown();}
+extern "C" __declspec(dllexport) void FlushCheckpointPreferences(){
+    std::lock_guard guard(checkpoint_prefs::mutex);
+    if (!checkpoint_prefs::dirty) return;
+    try {
+        checkpoint_prefs::saveLocked();
+    } catch (const std::exception &error) {
+        std::fprintf(stderr,"Could not flush checkpoint preferences on shutdown: %s\n",error.what());
+    }
+}
 extern "C" __declspec(dllexport) bool DesktopTouchActive(){
     using namespace desktop_input;
     return realCount || pointer.visible || movement.visible || padPointer.visible;

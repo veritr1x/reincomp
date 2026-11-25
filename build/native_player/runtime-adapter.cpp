@@ -109,6 +109,7 @@ R0(il2cpp_class_get_userdata_offset,int32_t)
 R0(il2cpp_domain_get,P)
 extern "C" __declspec(dllexport) void il2cpp_shutdown(){
     frame_memory::shutdown();
+    if(auto flush=reinterpret_cast<void(*)()>(GetProcAddress(GetModuleHandleW(L"EngineCalls.dll"),"FlushCheckpointPreferences")))flush();
     if(auto stop=reinterpret_cast<void(*)()>(GetProcAddress(GetModuleHandleW(L"EngineCalls.dll"),"ShutdownDesktopGamepads")))stop();
     invoke("il2cpp_shutdown");
 }

@@ -2,6 +2,7 @@
 namespace checkpoint_prefs {
 using namespace bunker::windows;
 static std::mutex mutex;
+static bool dirty = false;
 static auto file() { return std::filesystem::path(_wgetenv(L"REINCOMP_CHECKPOINT_PREFS")); }
 static SharedPreferencesSnapshot load() {
     auto path = file();
@@ -21,8 +22,7 @@ static std::u16string stringValue(uint64_t object) {
     auto value = pathText(reinterpret_cast<P>(object));
     return std::u16string(value.begin(), value.end());
 }
-static void save(State &, void *) {
-    std::lock_guard guard(mutex);
+static void saveLocked() {
     auto path = file();
     auto pending = path;
     pending += L".tmp";
@@ -32,6 +32,11 @@ static void save(State &, void *) {
     out.close();
     if (!out || !MoveFileExW(pending.c_str(), path.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH))
         throw std::runtime_error("Cannot save checkpoint preferences");
+    dirty = false;
+}
+static void save(State &, void *) {
+    std::lock_guard guard(mutex);
+    saveLocked();
 }
 template<SharedPreferenceValue::Kind kind>
 static void read(State &s, void *) {
@@ -65,6 +70,7 @@ static void set(State &s, void *) {
     else std::memcpy(&value.bits, &s.simd.v[0], sizeof(uint32_t));
     std::lock_guard guard(mutex);
     values()[key] = std::move(value);
+    dirty = true;
     s.gpr.x0.qword = 1;
 }
 static void has(State &s, void *) {
@@ -75,11 +81,14 @@ static void has(State &s, void *) {
 static void erase(State &s, void *) {
     auto key = stringValue(s.gpr.x0.qword);
     std::lock_guard guard(mutex);
-    values().erase(key);
+    if (values().erase(key)) dirty = true;
 }
 static void clear(State &, void *) {
     std::lock_guard guard(mutex);
-    values().clear();
+    if (!values().empty()) {
+        values().clear();
+        dirty = true;
+    }
 }
 static Call bind(std::string_view key) {
     constexpr std::string_view prefix = "UnityEngine.PlayerPrefs::";
