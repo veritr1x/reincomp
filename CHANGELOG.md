@@ -3,6 +3,10 @@
 What changed, newest first, by date and area. A release's heading comes
 above the dated sections it holds.
 
+## 0.3.15 (2026-11-26)
+
+- The Windows and Linux players now carry Bunker 1.12.27, which brings **Daily Quests** back to Subquests in the first weeks of an Original calendar loop. The web builder builds Bunker 1.12.27 for every platform.
+
 ## 0.3.14 (2026-11-26)
 
 - Fixed **Stop Lunar Tear**, updates and Pod Programs changes leaving a frozen game window. The game sometimes does not finish closing; the launcher now ends it after 10 seconds and carries on.

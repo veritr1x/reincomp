@@ -1,9 +1,9 @@
 {
   "portable": {
-    "bunkerVersion": "1.12.26",
-    "runtimeManifestSHA256": "1431a9c78c55ed6a462c7aa77e27ed824c1b6644b8dff45e18005e45f9e0dc9f",
-    "sha256": "75e08655165df2ee69781ff8fc2928d5b57bbc4885f4e2e1f5c9f832917b15a1",
-    "size": 1049386558,
+    "bunkerVersion": "1.12.27",
+    "runtimeManifestSHA256": "e90f25a8ac5d15950f4bc7ffe43d16cd1cfb512fb075bcfbc83de027f3080ab7",
+    "sha256": "beaa3ff9369685a84bb233998ce444bc2bb037d84ce796a3e3fec68a19169612",
+    "size": 1049387202,
     "playerMembers": {
       "game/EngineCalls.dll": "6f5393a73e26107789750e499d0ceacbafad14796ba70a998ffcaf8a2332d08c",
       "game/Fsr31.dll": "0f74d7dcbeba57d8870a34eb594edd1ba88f3b751a12e226af7899cab2246884",
@@ -20,8 +20,8 @@
       "game/resource-setup.html": "69bb94b9011c277dd52904453ad3ecc5cfaa653ef77b311d7dac22fb7dc04add",
       "game/resource-window.exe": "355db0f63439858c67bb41aeab51f0810df2eedf681e0d87dd5331154f888dde",
       "game/resource_setup.py": "eb728df11d282ee5160c928935ea7a36ea0a65432269f57fbcffe9deefeea0da",
-      "launcher.exe": "8cf3c617ea1134e61bef5ba6a6ba6fc134de7c0dfaecc3b720c73a9c2765f5e0",
-      "pods/VERSION": "177dadc2b45e36d7934b7c8336d81b343f59cf812d484c58bfcd98c0dfd157c8",
+      "launcher.exe": "bf079177d1f6e76ce515043e9c610123fc6fec0744f7267d08d0688c27832f15",
+      "pods/VERSION": "e727de0b24cb51435c337d9c1e374e2e194473e80d13ecd512c6b5ef982f7ea6",
       "pods/app/archive/static/archive.css": "8f20523fbb327ba8502e4c83b676b105c23160e404244fd001107be4288bc7ad",
       "pods/app/archive/templates/base.html": "6ebb5bb56648c3cce2fdcb9152d08ce0f66246d5357aafdf609e17c001903fd0",
       "pods/app/bunker_en.json": "0b6b6faf2c6dc3a6f81b07613ade5c3aa58b104706e6ee54b8df963f1101de6e",
@@ -30,8 +30,10 @@
       "pods/app/web/templates/base.html": "8d38659b40fd80eb578b2b834b597683b9147f532ca3cc7b4587bb7213ec3aca",
       "pods/app/web/templates/desktop-display.html": "3b1773fd541f0c9f0f741f29fe471ccc265098cf800b9768bd184d36c671f295",
       "pods/app/web/templates/patcher.html": "06a2fd8d41198b286b3ce2ad022fdda9ebb1751e2aa15bf393890b4e7e27012f",
-      "server/bunker-server.exe": "5b48ff13594c8c6f9ba83137b516490773a2df576e5d3bd14100310d9f3c8db9",
-      "game/octo_cache.py": "114b2ac513e9ab414b004ca48ed5268cae3cef400fcfbf4a7ee1c0852958a2b0"
+      "server/bunker-server.exe": "fb4144d750b37efa020fbfff7513800d727b8ac4144decf81c7fd7dbb727a827",
+      "game/octo_cache.py": "114b2ac513e9ab414b004ca48ed5268cae3cef400fcfbf4a7ee1c0852958a2b0",
+      "pods/app/android_calendar.py": "0312dd964d9dcc0192ea96ad71815863cb9c1ebdf928ed472d5680d539bc7051",
+      "pods/app/calendar_history.json": "8539df9666a12f975c1b1b1a2fc866ee4daa3e637a31aa6b39f2a203a5c6fd95"
     },
     "hostObjects": {
       "elfload.o": "fdf5f845833ba3cf9556fa7f40ff88106ec00946eacef87d5b9150a8f2ebdd93",
@@ -41,10 +43,10 @@
     }
   },
   "linuxRuntime": {
-    "bunkerVersion": "1.12.26",
-    "asset": "reincomp-linux-x86_64-0.3.14.tar.gz",
-    "sha256": "f8ba955e0277cef2df8d2c880e5d2ec9e296d5af400587076eddcbba0e9ff29a",
-    "size": 272342727
+    "bunkerVersion": "1.12.27",
+    "asset": "reincomp-linux-x86_64-0.3.15.tar.gz",
+    "sha256": "2d4e6b9dd127e2ead88b8ba85c178291196b305c04e3d188024ab866a951af3e",
+    "size": 272342744
   },
   "toolchain": {
     "url": "https://github.com/veritr1x/reincomp/releases/download/v0.1.0/reincomp-toolchain-0.1.0-windows-x86_64.zip",
