@@ -12,7 +12,6 @@ struct Thread {
     DWORD id{};
     HANDLE handle{};
     uintptr_t high{};
-    const NT_TIB *tib{};
     unsigned char *snapshot{};
     std::atomic<unsigned> depth{};
     alignas(16) CONTEXT context{};
@@ -56,8 +55,7 @@ static Thread &attach(uint64_t token,bool guestOwned=false) {
     t.guestOwned=guestOwned;
     t.id=GetCurrentThreadId();
     if(!DuplicateHandle(GetCurrentProcess(),GetCurrentThread(),GetCurrentProcess(),&t.handle,0,FALSE,DUPLICATE_SAME_ACCESS))fail("could not retain native thread");
-    t.tib=reinterpret_cast<const NT_TIB *>(NtCurrentTeb());
-    t.high=reinterpret_cast<uintptr_t>(t.tib->StackBase);
+    t.high=reinterpret_cast<uintptr_t>(reinterpret_cast<NT_TIB *>(NtCurrentTeb())->StackBase);
     t.snapshot=static_cast<unsigned char *>(VirtualAlloc(nullptr,capacity,MEM_RESERVE|MEM_COMMIT,PAGE_READWRITE));
     if(!t.snapshot)fail("native snapshot allocation");
     current=&t;t.token.store(token,std::memory_order_release);
@@ -87,13 +85,6 @@ static void snapshot(Thread &t,bool self){
     if(self)RtlCaptureContext(&t.context);
     else if(!GetThreadContext(t.handle,&t.context))fail("could not read stopped native thread");
     auto sp=uintptr_t(t.context.Rsp);
-    // Under Wine a thread paused inside host code, such as a Direct3D translation layer,
-    // reports that code's stack pointer. Its Windows stack still holds every guest root,
-    // so scan all of it from the lowest committed address.
-    if(!self&&t.tib){
-        const auto low=reinterpret_cast<uintptr_t>(t.tib->StackLimit);
-        if(low&&low<t.high&&(!sp||sp>t.high||sp<low))sp=(low+15)&~uintptr_t(15);
-    }
     if(!sp||sp>t.high||t.high-sp>capacity)fail("unexpected native stack bounds");
     t.bytes=t.high-sp;
     SIZE_T actual=0;
