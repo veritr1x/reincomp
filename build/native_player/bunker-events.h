@@ -8,12 +8,13 @@ extern "C" Memory *sub_82b01eb0(State &,addr_t,Memory *);
 extern "C" Memory *sub_830ce360(State &,addr_t,Memory *);
 
 static Memory *actorCollider(State &s,addr_t pc,Memory *memory){
-    // OnEnter compares the incoming collider's GameObject with GetCollider's
-    // result. A queued crossing can outlive the current actor during a map load.
+    // OnEnter and OnStay compare the incoming collider's GameObject with this
+    // result. Either callback can run after the current actor has been unloaded.
     const auto actor=s.gpr.x0.qword;
-    if(s.gpr.x30.qword==0x82983a50 && actor && !nativeUnityObjectAlive(reinterpret_cast<const void *>(actor))){
+    const auto caller=s.gpr.x30.qword;
+    if((caller==0x82983a50 || caller==0x8298449c) && actor && !nativeUnityObjectAlive(reinterpret_cast<const void *>(actor))){
         s.gpr.x0.qword=0;
-        s.gpr.pc.qword=s.gpr.x30.qword;
+        s.gpr.pc.qword=caller;
         return memory;
     }
     return sub_830ce360(s,pc,memory);

@@ -84,13 +84,14 @@ int main(){
     Object liveActor,destroyedActor;
     liveActor.put(0x10,1);
     for(auto actor:{liveActor.address(),destroyedActor.address(),addr_t(0)}){
-        for(auto caller:{0x82983a50u,0x82983a54u}){
+        for(auto caller:{0x82983a50u,0x8298449cu,0x82983a54u}){
             s.gpr.x0.qword=actor;
             s.gpr.x30.qword=caller;
             s.gpr.pc.qword=0x830ce360;
             colliderLookups=0;
             assert(actorCollider(s,0x830ce360,&memory)==&memory);
-            const bool expired=actor==destroyedActor.address() && caller==0x82983a50u;
+            const bool collisionCallback=caller==0x82983a50u || caller==0x8298449cu;
+            const bool expired=actor==destroyedActor.address() && collisionCallback;
             assert(colliderLookups==(expired?0u:1u));
             assert(s.gpr.x0.qword==(expired?0u:42u) && s.gpr.pc.qword==caller);
         }
