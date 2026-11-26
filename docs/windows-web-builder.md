@@ -43,6 +43,23 @@ Pages build and native runtime are public. If either is published later, run
 platform's `recomplauncher.json`. The packager takes its dependencies from
 the pinned public releases and accepts local copies for testing.
 
+## Checking a kit before publishing
+
+`assemble_kit.py` refuses a player package whose emblem recipe and
+`GameAssembly.dll` disagree. To check an existing kit directory or compiler
+ZIP, run the following command.
+
+```powershell
+python recompiler/web/check_player.py <kit-directory-or-zip>
+```
+
+Then build an EXE from the staged site and install it in an empty folder.
+The command exits with an error when the first-launch installation fails.
+
+```powershell
+"Nier Reincarnation.exe" -prepare 2> error.txt
+```
+
 ## Testing a first build
 
 On Windows, run the following command using Node.js 22 or later and Microsoft

@@ -23,6 +23,8 @@ jobs:
         run: python launcher/test_update_player.py
       - name: Test Windows resource hardlinks
         run: python recompiler/tests/windows-octo-cache.py
+      - name: Test the player package emblem check
+        run: python recompiler/tests/player-emblem.py
       - uses: msys2/setup-msys2@v2
         id: msys2
         with:

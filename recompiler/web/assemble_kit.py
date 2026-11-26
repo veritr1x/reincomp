@@ -7,6 +7,9 @@ import shutil
 from zipfile import ZIP_DEFLATED, ZipFile
 
 HERE = Path(__file__).resolve().parent
+import sys
+sys.path.insert(0, str(HERE))
+from check_player import check_kit
 ROOT = HERE.parents[1]
 
 
@@ -48,6 +51,8 @@ def assemble(a):
         if name!=f'player.part{n:02d}':raise ValueError('Invalid player part')
         put(a.player/name)
         if files[name]!=expected:raise ValueError('Changed player part '+name)
+    # A recipe from another build of the adapter makes every first launch fail.
+    check_kit(a.out)
     for name in ('pyodide.js','pyodide.asm.js','pyodide.asm.wasm','pyodide-lock.json','python_stdlib.zip'):
         put(a.pyodide/name,'pyodide/'+name)
     lock=json.loads((a.pyodide/'pyodide-lock.json').read_text())
