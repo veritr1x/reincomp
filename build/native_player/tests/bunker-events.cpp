@@ -25,7 +25,10 @@ template<class T> T read(addr_t address){T result;std::memcpy(&result,reinterpre
 }
 namespace recomp {
 static void ReadGuestMemory(void *dest,addr_t from,size_t size){std::memcpy(dest,reinterpret_cast<void *>(from),size);}
-template<class F> void AddGuestDirectEntry(addr_t,F){}
+static void WriteGuestMemory(addr_t to,const void *src,size_t size){std::memcpy(reinterpret_cast<void *>(to),src,size);}
+using Entry=Memory *(*)(State &,addr_t,Memory *);
+static std::map<addr_t,Entry> directEntries;
+static void AddGuestDirectEntry(addr_t pc,Entry handler){directEntries[pc]=handler;}
 template<class F> void AddGuestProbe(addr_t,F){}
 }
 static addr_t handle;
@@ -56,6 +59,14 @@ struct Runtime {
     }
 } vm,*threads=&vm;
 #include "../bunker-events.h"
+static bool resumedForceIdle=false,completedForceIdle=false;
+extern "C" Memory *sub_8281dbe0(State &,addr_t pc,Memory *m){
+    assert(pc==0x8281dbe0);resumedForceIdle=true;return m;
+}
+extern "C" Memory *sub_840fce24(State &s,addr_t pc,Memory *m){
+    assert(pc==0x840fce24 && s.gpr.x1.qword==0);
+    completedForceIdle=true;s.gpr.pc.qword=s.gpr.x30.qword;return m;
+}
 extern "C" Memory *sub_83291fb4(State &s,addr_t,Memory *m){s.gpr.pc.qword=s.gpr.x30.qword;return m;}
 extern "C" Memory *sub_82b01eb0(State &s,addr_t,Memory *m){s.gpr.pc.qword=s.gpr.x30.qword;return m;}
 static unsigned colliderLookups=0;
@@ -70,7 +81,33 @@ struct Object {
     addr_t address(){return reinterpret_cast<addr_t>(words.data());}
     void put(size_t offset,addr_t value){std::memcpy(reinterpret_cast<void *>(address()+offset),&value,sizeof(value));}
 };
+static void checkPicturebookForceIdle(){
+    Object runner,player,timeline,director;
+    const auto task=runner.address()+0x10;
+    runner.put(0x10+0x20,player.address());
+    player.put(0x28,timeline.address());
+    timeline.put(0x48,director.address());
+    for(int32_t phase:{-1,0,1})for(bool active:{false,true})for(bool alive:{false,true}){
+        runner.put(0x10,static_cast<uint32_t>(phase));
+        runner.put(0x10+0x38,5);
+        timeline.put(0x60,active);
+        director.put(0x10,alive);
+        State s{};
+        s.gpr.x0.qword=runner.address();s.gpr.x1.qword=17;s.gpr.x30.qword=42;
+        Memory memory{};
+        resumedForceIdle=completedForceIdle=false;
+        assert(recomp::directEntries.at(0x8281dbe0)(s,0x8281dbe0,&memory)==&memory);
+        const bool unloaded=phase>=0 && active && !alive;
+        assert(completedForceIdle==unloaded && resumedForceIdle==!unloaded);
+        assert(field_metadata::read<int32_t>(task)==(unloaded?-2:phase));
+        assert(field_metadata::read<int32_t>(task+0x38)==(unloaded?0:5));
+        if(unloaded)assert(s.gpr.x0.qword==task+8 && s.gpr.pc.qword==42);
+        else assert(s.gpr.x0.qword==runner.address() && s.gpr.x1.qword==17);
+    }
+}
 int main(){
+    bunker_events::install();
+    checkPicturebookForceIdle();
     using namespace bunker_events;
     Object stay,enter,stayType,enterType,state,list,items,zone,collider;
     stayType.put(0x10,reinterpret_cast<addr_t>("EventTriggerOnStayCollision"));
@@ -111,5 +148,5 @@ int main(){
     Object view,button;view.put(0x90,button.address());s.gpr.x0.qword=view.address();
     vm.visible=true;showTimetable(s,0,nullptr);assert(!vm.visible);
     vm.available=true;showTimetable(s,0,nullptr);assert(vm.visible);
-    std::puts("Story zone re-entry, expiry, actor teardown, collider lifetime, and Guerrilla availability passed.");
+    std::puts("Picturebook task completion, story zone re-entry, actor teardown, collider lifetime, and Guerrilla availability passed.");
 }

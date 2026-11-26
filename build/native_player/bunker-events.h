@@ -6,6 +6,33 @@ namespace bunker_events {
 extern "C" Memory *sub_83291fb4(State &,addr_t,Memory *);
 extern "C" Memory *sub_82b01eb0(State &,addr_t,Memory *);
 extern "C" Memory *sub_830ce360(State &,addr_t,Memory *);
+extern "C" Memory *sub_8281dbe0(State &,addr_t,Memory *);
+extern "C" Memory *sub_840fce24(State &,addr_t,Memory *);
+
+static Memory *resumePicturebookForceIdle(State &s,addr_t pc,Memory *memory){
+    using field_metadata::read;
+    // The queued Action invokes the runner, which tail-calls MoveNext with
+    // its embedded state machine just past the two-pointer object header.
+    const auto runner=s.gpr.x0.qword;
+    const auto task=runner?runner+0x10:0;
+    const auto state=task?read<int32_t>(task):-1;
+    if(state==0 || state==1){ // Resuming from one of ForceIdleAsync's two yields.
+        const auto player=read<addr_t>(task+0x20);
+        const auto timeline=player?read<addr_t>(player+0x28):0;
+        const auto director=timeline && read<uint8_t>(timeline+0x60)?read<addr_t>(timeline+0x48):0;
+        if(director && !nativeUnityObjectAlive(reinterpret_cast<const void *>(director))){
+            // The scene unloaded while this task was queued. Finish exactly as
+            // its cancellation branch does, before reading time or idling the actor.
+            const int32_t completed=-2,emptyAwaiter=0;
+            recomp::WriteGuestMemory(task+0x38,&emptyAwaiter,sizeof(emptyAwaiter));
+            recomp::WriteGuestMemory(task,&completed,sizeof(completed));
+            s.gpr.x0.qword=task+8; // AsyncUniTaskMethodBuilder.SetResult()
+            s.gpr.x1.qword=0;
+            return sub_840fce24(s,0x840fce24,memory);
+        }
+    }
+    return sub_8281dbe0(s,pc,memory);
+}
 
 static Memory *actorCollider(State &s,addr_t pc,Memory *memory){
     // OnEnter and OnStay compare the incoming collider's GameObject with this
@@ -130,6 +157,7 @@ static void updateStay(State &s){
     }
 }
 static void install(){
+    recomp::AddGuestDirectEntry(0x8281dbe0,resumePicturebookForceIdle);
     recomp::AddGuestDirectEntry(0x830ce360,actorCollider);
     recomp::AddGuestDirectEntry(0x83291fb4,showRoulette);
     recomp::AddGuestDirectEntry(0x82b01eb0,showTimetable);
