@@ -1,20 +1,20 @@
 {
   "bunker": {
     "repository": "https://github.com/veritr1x/bunker",
-    "release": "v1.12.24",
-    "commit": "f5781470ab891ea4868c63dfbb43bcea07be41e0",
+    "release": "v1.12.26",
+    "commit": "0c8019b15b4cbb260e6337c39ae1ccd107c9d370",
     "browserKit": {
-      "file": "bunker-windows-browser-1.12.24-reincomp-0.3.13.zip",
-      "sha256": "5175b3df00e6d39006b6ff03e08215c4cdb0b992c866a261db86d5928e13cdac"
+      "file": "bunker-windows-browser-1.12.26-reincomp-0.3.14.zip",
+      "sha256": "21962659773c93c2c6e70fc97407b4cf19cb966ae13171f35bc3728264fb710d"
     },
     "server": {
       "linux-x86_64": {
-        "file": "bunker-server-1.12.24-linux-x86_64",
-        "sha256": "f0e1e1e6df636ad66f3071f900ac7ccf0eab9d70a051576092fbf76841251edd"
+        "file": "bunker-server-1.12.26-linux-x86_64",
+        "sha256": "6ab6311b1d7f096f45018c850c322800cb26536657c9aef4f665f46fa23c1b21"
       },
       "windows-x86_64": {
-        "file": "bunker-server-1.12.24-windows-x86_64.exe",
-        "sha256": "5f7f5d60ffb4d5a6a6f1cc39bb70ca8767341167984644db1eb5767ac0fb642a"
+        "file": "bunker-server-1.12.26-windows-x86_64.exe",
+        "sha256": "0b0bcad23c8279b885f84b7eb464f38226d56cc2fd3d3e1897416bac62ec637d"
       }
     }
   }

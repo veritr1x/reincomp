@@ -3,6 +3,13 @@
 What changed, newest first, by date and area. A release's heading comes
 above the dated sections it holds.
 
+## 0.3.14 (2026-11-26)
+
+- Fixed **Stop Lunar Tear**, updates and Pod Programs changes leaving a frozen game window. The game sometimes does not finish closing; the launcher now ends it after 10 seconds and carries on.
+- When Windows closes a game that stopped responding, the launcher now says so and points to **Export logs** instead of an empty game.log.
+- Fixed "The Windows player is missing its packaged Global master data" when returning to the launcher before the game resources were imported.
+- The Windows and Linux players now carry Bunker 1.12.26. The web builder builds Bunker 1.12.26 for every platform.
+
 ## 0.3.13 (2026-11-26)
 
 - The Windows and Linux players now carry Bunker 1.12.24. The web builder builds Bunker 1.12.24 for every platform.
