@@ -531,7 +531,7 @@ func serveAndPlay(root, data, assets, game, server, view, native, apk, fps, rend
 		e = cmd.Run()
 	}
 	if e != nil {
-		return fmt.Errorf("The game stopped: %v. See %s.", e, gameLog.Name())
+		return gameStopped(e, processExitCode, gameLog.Name())
 	}
 	return nil
 }

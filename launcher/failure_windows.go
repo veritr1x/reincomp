@@ -11,7 +11,7 @@ func init() {
 		if console != 0 {
 			return false
 		}
-		text, err := syscall.UTF16PtrFromString("NieR Re[in]carnation could not start.\n\n" + message)
+		text, err := syscall.UTF16PtrFromString(failureText(message))
 		if err != nil {
 			return false
 		}
