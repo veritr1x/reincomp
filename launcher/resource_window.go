@@ -155,12 +155,26 @@ func (w *resourceWindow) close() {
 	}
 }
 
-// Only the local WebView receives this random URL. The file picker returns
-// the original path, so even a 20 GB resource dump stays on disk.
-func startLauncher(root, server, assets, master, dump string, ready, inGameOnly bool, resume *launcherUpdate) (*resourceWindow, error) {
+// The master data the launcher imports with: the one it was given, else the
+// imported one, else the copy packaged with the player. Returning to the
+// launcher after a stop passes none, and the imported one is absent until the
+// resources are imported, so the packaged copy must still be found then.
+func launcherMaster(root, assets, master string, ready bool) string {
 	if ready && !regularFile(master) {
 		master = filepath.Join(assets, "assets", "release", masterName)
 	}
+	if !regularFile(master) {
+		if packaged := filepath.Join(root, "data", "import-master.bin.e"); regularFile(packaged) {
+			return packaged
+		}
+	}
+	return master
+}
+
+// Only the local WebView receives this random URL. The file picker returns
+// the original path, so even a 20 GB resource dump stays on disk.
+func startLauncher(root, server, assets, master, dump string, ready, inGameOnly bool, resume *launcherUpdate) (*resourceWindow, error) {
+	master = launcherMaster(root, assets, master, ready)
 	if !regularFile(master) {
 		return nil, fmt.Errorf("The Windows player is missing its packaged Global master data.")
 	}
