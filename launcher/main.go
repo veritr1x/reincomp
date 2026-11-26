@@ -379,6 +379,13 @@ func serveAndPlay(root, data, assets, game, server, view, native, apk, fps, rend
 				setup.status = "Checking game files for cache sharing…"
 				setup.mu.Unlock()
 			}
+			// A direct start has no launcher window. Show the check there if it takes a while.
+			notice := newProgressNotice(2*time.Second, openProgressWindow)
+			if setup != nil {
+				notice.finish()
+			}
+			defer notice.finish()
+			notice.update("Checking game files for cache sharing…")
 			cache := exec.Command(filepath.Join(root, "pods", "python", "python.exe"),
 				"-I", "-B", "-X", "utf8", helper, data, assets)
 			hideHelperWindow(cache)
@@ -402,6 +409,8 @@ func serveAndPlay(root, data, assets, game, server, view, native, apk, fps, rend
 							setup.mu.Lock()
 							setup.status = status
 							setup.mu.Unlock()
+						} else {
+							notice.update(status)
 						}
 					}
 					finished <- cache.Wait()
@@ -421,6 +430,8 @@ func serveAndPlay(root, data, assets, game, server, view, native, apk, fps, rend
 					return setup.stopped(errStoppedFromLauncher, nil)
 				}
 			}
+			// The game window comes next. The deferred call covers the early returns above.
+			notice.finish()
 		}
 	}
 	menu := setup
