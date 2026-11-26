@@ -52,10 +52,24 @@ int main(int argc, char **argv) {
     };
     auto scale = method("UnityEngine.Transform::set_localScale_Injected", 0x992140);
     auto active = method("UnityEngine.Behaviour::get_isActiveAndEnabled", 0x919370);
+    auto enabled = method("UnityEngine.Behaviour::get_enabled", 0x362d80);
     auto enable = method("UnityEngine.Behaviour::set_enabled", 0x919450);
 
     int nativeObject = 0;
     UnityObject live{nullptr, nullptr, &nativeObject}, destroyed{};
+    UnityObject *conductors[] = {&live, &destroyed, nullptr};
+    for (auto receiver : conductors) {
+        for (auto caller : {0x83a06208u, 0x83a0620cu}) {
+            State s{};
+            s.gpr.x0.qword = reinterpret_cast<uintptr_t>(receiver);
+            s.gpr.x30.qword = caller;
+            calls = 0;
+            enabled(s, reinterpret_cast<void *>(getActive));
+            bool forward = receiver != &destroyed || caller != 0x83a06208;
+            assert(calls == unsigned(forward) && s.gpr.x0.qword == unsigned(forward));
+            if (forward) assert(seenObject == receiver);
+        }
+    }
     float vector[3] = {1, 2, 3};
     GuestFrame skillIcon{0, 0x82e2b94c}, otherCaller{0, 0x82e2b950};
     GuestFrame *frames[] = {&skillIcon, &otherCaller, nullptr};

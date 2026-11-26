@@ -312,6 +312,16 @@ extern "C" __declspec(dllexport) Call BindEngineCall(const char *key,void *fn) {
             }
             invoke<void,P,P>(s,original);
         };
+        if(!std::strcmp(key,"UnityEngine.Behaviour::get_enabled"))return [](State &s,void *original){
+            // StateConductor.Transition can be queued when a picturebook unloads.
+            // Its disabled path returns false without starting the next state.
+            auto conductor=reinterpret_cast<P>(s.gpr.x0.qword);
+            if(s.gpr.x30.qword==0x83a06208 && conductor && !nativeUnityObjectAlive(conductor)){
+                s.gpr.x0.qword=0;
+                return;
+            }
+            invoke<uint8_t,P>(s,original);
+        };
         if(!std::strcmp(key,"UnityEngine.Behaviour::set_enabled"))return [](State &s,void *original){
             const auto caller=s.gpr.x30.qword;
             // These UI callbacks can resume after Unity destroys their view.
