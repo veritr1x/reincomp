@@ -178,23 +178,33 @@ def build_windows_server(go, source, work, destination, env):
         raise ValueError('The pinned Bunker notice image routes changed')
     portraits = (work/'windows-notice-images.go').resolve()
     portraits.write_text(pages.replace(category, category+'|companion'), encoding='utf-8')
-    overlay = windows_archive_overlay(source, work, {original: patched, web: portraits})
+    quest = (source/'internal/questflow/quest.go').resolve()
+    quest_finish = patched_go_file(quest, NATIVE/'quest-finish-checkpoint.patch', work/'quest-overlay')
+    overlay = windows_archive_overlay(source, work, {
+        original: patched, web: portraits, quest: quest_finish,
+        quest.with_name('post_battle_fields_test.go'): NATIVE/'tests/post_battle_fields_test.go',
+    })
     release = json.loads((ROOT/'bunker.lock.json').read_text())['bunker']['release'].removeprefix('v')
     flags = '-s -w -X lunar-tear/server/internal/bunkerversion.Version='+release
     run(go, 'build', '-trimpath', '-buildvcs=false', '-overlay='+str(overlay), '-ldflags='+flags,
         '-o', destination.resolve(), './cmd/bunker-server', cwd=source, env={**env, 'CGO_ENABLED': '0'})
 
 
+def patched_go_file(original, patch, scratch):
+    scratch = scratch.resolve()
+    scratch.mkdir(parents=True, exist_ok=True)
+    patched = scratch/original.name
+    patched.write_text(original.read_text(encoding='utf-8'), encoding='utf-8', newline='\n')
+    run('git', '-c', 'core.autocrlf=false', 'apply', '--no-index', patch, cwd=scratch,
+        env={**os.environ, 'GIT_CEILING_DIRECTORIES': str(scratch.parent)})
+    return patched
+
+
 def windows_archive_overlay(source, work, extra=None):
     # Apply the same streaming verifier to the server's local imports and
     # the Archive helper's resumable HTTP imports.
     archive = (source/'mobile/archive.go').resolve()
-    scratch = (work/'import-overlay').resolve()
-    scratch.mkdir(parents=True, exist_ok=True)
-    checked = scratch/'archive.go'
-    checked.write_text(archive.read_text(encoding='utf-8'), encoding='utf-8', newline='\n')
-    run('git', '-c', 'core.autocrlf=false', 'apply', '--no-index', NATIVE/'windows-resource-import.patch', cwd=scratch,
-        env={**os.environ, 'GIT_CEILING_DIRECTORIES': str(scratch.parent)})
+    checked = patched_go_file(archive, NATIVE/'windows-resource-import.patch', work/'import-overlay')
     replacements = {archive: checked, archive.with_name('resource_workers_windows.go'): NATIVE/'resource_workers.go', **(extra or {})}
     overlay = (work/('windows-server-overlay.json' if extra else 'windows-archive-overlay.json')).resolve()
     overlay.write_text(json.dumps({'Replace': {str(k): str(v) for k,v in replacements.items()}}), encoding='utf-8')

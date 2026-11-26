@@ -1,0 +1,18 @@
+--- a/quest.go
++++ b/quest.go
+@@ -293,8 +293,13 @@
+ 		// CalculatorWorldMap.GetCurrentSeasonId resolve chapter 0 and NRE. The
+ 		// replay's own position is tracked in ReplayFlowCurrentQuestSceneId.
+ 		if isMainQuestPlayable(quest) && !wasMenuReplay && !wasReplay {
+-			lastSceneId := h.getLastMainFlowSceneId(questId)
+-			h.advanceMainFlowScene(user, questId, lastSceneId)
++			finishSceneId := h.getLastMainFlowSceneId(questId)
++			// A half result awards the victory before the player enters the
++			// remaining field scenes. Their own progress requests advance the head.
++			if scene, ok := h.SceneById[user.MainQuest.ProgressQuestSceneId]; ok && scene.QuestId == questId && scene.QuestResultType == int32(model.QuestResultTypeHalfResult) {
++				finishSceneId = scene.QuestSceneId
++			}
++			h.advanceMainFlowScene(user, questId, finishSceneId)
+ 		}
+ 	}
+ 
