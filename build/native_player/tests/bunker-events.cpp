@@ -59,13 +59,16 @@ struct Runtime {
     }
 } vm,*threads=&vm;
 #include "../bunker-events.h"
-static bool resumedForceIdle=false,completedForceIdle=false;
+static bool resumedForceIdle=false,resumedRandomAnimation=false,completedQueuedTask=false;
 extern "C" Memory *sub_8281dbe0(State &,addr_t pc,Memory *m){
     assert(pc==0x8281dbe0);resumedForceIdle=true;return m;
 }
+extern "C" Memory *sub_8281efb4(State &,addr_t pc,Memory *m){
+    assert(pc==0x8281efb4);resumedRandomAnimation=true;return m;
+}
 extern "C" Memory *sub_840fce24(State &s,addr_t pc,Memory *m){
     assert(pc==0x840fce24 && s.gpr.x1.qword==0);
-    completedForceIdle=true;s.gpr.pc.qword=s.gpr.x30.qword;return m;
+    completedQueuedTask=true;s.gpr.pc.qword=s.gpr.x30.qword;return m;
 }
 extern "C" Memory *sub_83291fb4(State &s,addr_t,Memory *m){s.gpr.pc.qword=s.gpr.x30.qword;return m;}
 extern "C" Memory *sub_82b01eb0(State &s,addr_t,Memory *m){s.gpr.pc.qword=s.gpr.x30.qword;return m;}
@@ -95,12 +98,34 @@ static void checkPicturebookForceIdle(){
         State s{};
         s.gpr.x0.qword=runner.address();s.gpr.x1.qword=17;s.gpr.x30.qword=42;
         Memory memory{};
-        resumedForceIdle=completedForceIdle=false;
+        resumedForceIdle=completedQueuedTask=false;
         assert(recomp::directEntries.at(0x8281dbe0)(s,0x8281dbe0,&memory)==&memory);
         const bool unloaded=phase>=0 && active && !alive;
-        assert(completedForceIdle==unloaded && resumedForceIdle==!unloaded);
+        assert(completedQueuedTask==unloaded && resumedForceIdle==!unloaded);
         assert(field_metadata::read<int32_t>(task)==(unloaded?-2:phase));
         assert(field_metadata::read<int32_t>(task+0x38)==(unloaded?0:5));
+        if(unloaded)assert(s.gpr.x0.qword==task+8 && s.gpr.pc.qword==42);
+        else assert(s.gpr.x0.qword==runner.address() && s.gpr.x1.qword==17);
+    }
+}
+static void checkRandomAnimationWait(){
+    Object runner,player,animator;
+    const auto task=runner.address()+0x10;
+    runner.put(0x10+0x18,player.address());
+    for(int32_t phase:{-1,0,-2})for(auto target:{addr_t(0),animator.address()})for(bool alive:{false,true}){
+        runner.put(0x10,static_cast<uint32_t>(phase));
+        runner.put(0x10+0x28,5);
+        player.put(0x40,target);
+        animator.put(0x10,alive);
+        State s{};
+        s.gpr.x0.qword=runner.address();s.gpr.x1.qword=17;s.gpr.x30.qword=42;
+        Memory memory{};
+        resumedRandomAnimation=completedQueuedTask=false;
+        assert(recomp::directEntries.at(0x8281efb4)(s,0x8281efb4,&memory)==&memory);
+        const bool unloaded=phase==0 && target && !alive;
+        assert(completedQueuedTask==unloaded && resumedRandomAnimation==!unloaded);
+        assert(field_metadata::read<int32_t>(task)==(unloaded?-2:phase));
+        assert(field_metadata::read<int32_t>(task+0x28)==(unloaded?0:5));
         if(unloaded)assert(s.gpr.x0.qword==task+8 && s.gpr.pc.qword==42);
         else assert(s.gpr.x0.qword==runner.address() && s.gpr.x1.qword==17);
     }
@@ -108,6 +133,7 @@ static void checkPicturebookForceIdle(){
 int main(){
     bunker_events::install();
     checkPicturebookForceIdle();
+    checkRandomAnimationWait();
     using namespace bunker_events;
     Object stay,enter,stayType,enterType,state,list,items,zone,collider;
     stayType.put(0x10,reinterpret_cast<addr_t>("EventTriggerOnStayCollision"));
@@ -148,5 +174,5 @@ int main(){
     Object view,button;view.put(0x90,button.address());s.gpr.x0.qword=view.address();
     vm.visible=true;showTimetable(s,0,nullptr);assert(!vm.visible);
     vm.available=true;showTimetable(s,0,nullptr);assert(vm.visible);
-    std::puts("Picturebook task completion, story zone re-entry, actor teardown, collider lifetime, and Guerrilla availability passed.");
+    std::puts("Picturebook and animation task completion, story zone re-entry, actor teardown, collider lifetime, and Guerrilla availability passed.");
 }
