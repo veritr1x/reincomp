@@ -3,6 +3,12 @@
 What changed, newest first, by date and area. A release's heading comes
 above the dated sections it holds.
 
+## 0.3.12 (2026-11-26)
+
+- Fixed the first launch of EXEs built with the web builder since 0.3.10. The installation stopped while preparing the APK assets and nothing was installed. If you updated to 0.3.10 or 0.3.11, build a new EXE and run it in the same folder. Saves in `.bunker-player/data` are kept.
+- When the Windows player cannot start, it now shows the reason in a window. It also clears folders left by an interrupted installation.
+- When the Windows player starts the game directly and needs to check its game files for cache sharing, a small window shows the progress.
+
 ## 0.3.11 (2026-11-26)
 
 - Windows opens Subquests faster by narrowing each quest's schedule lookup and deferring artwork for offscreen rows. On a 131-tab save, the longest frame on first opening fell from 5.27 to 1.65 seconds. All 131 events kept their original positions.

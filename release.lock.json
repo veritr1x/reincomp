@@ -1,13 +1,13 @@
 {
   "portable": {
     "bunkerVersion": "1.12.23",
-    "runtimeManifestSHA256": "173ec6d57ff2dc955ce40e10a0dccccc7fc8913ce8abef82a37f31d64c7a4a4f",
-    "sha256": "a8fb3c37860927c1be94c2e297a7a12d93a1b8ff5e7a493796c829055c95de40",
-    "size": 1049362494,
+    "runtimeManifestSHA256": "b404a1c36d6774212b37bc38836a3031eb899bccd38befa760be557fd241d2c2",
+    "sha256": "2980f196183dcb8c7438b038989db105d73f86596936325f56281744bd28704a",
+    "size": 1049383486,
     "playerMembers": {
       "game/EngineCalls.dll": "6f5393a73e26107789750e499d0ceacbafad14796ba70a998ffcaf8a2332d08c",
       "game/Fsr31.dll": "0f74d7dcbeba57d8870a34eb594edd1ba88f3b751a12e226af7899cab2246884",
-      "game/GameAssembly.dll": "dd1554993ea773119e8b39455069dca091d10972a64cc49930177fab1cb4be22",
+      "game/GameAssembly.dll": "54e7205dc0a4f72db40f289b740ae373375067d6684743a413f0453e0eb68ce2",
       "game/WindowsPlayer.exe": "1d2a5afd032eee54d4064719904365f003ed02db8eb75d8476dd55cd6385cafe",
       "game/archive-media.exe": "2f664df4fca41f145b8e75fe175678dc7894cb3a6914da786adddb4471356fe7",
       "game/bunker_icon.py": "cc881470a8c2573943345eb50d03314de1d0c5ee205b4e2964a3df5ec6020b63",
@@ -15,12 +15,12 @@
       "game/desktop_display.py": "fc4f43b6fda5fbfca6eb1b68745385a63928349b0323c0d3fa609548b1c23844",
       "game/desktop_services.py": "98ea7a9027efe2a81541939f1ac39d6b2f82dab7d720e8d7281ed4e3ba221208",
       "game/package_assets.py": "985eddf6f559caf278a3e51d571d6263d9ec5938e7c959ff848a70c2ce5759bc",
-      "game/portable-emblem.json": "874ce44b79fc407b62eb41594d57a95a41394cdc96b0a33334633a57bc8b51a2",
+      "game/portable-emblem.json": "7079596db5c1e3145e7ee0e8483180fd2b4354e55c0aa644fa93c205a9c297b8",
       "game/resource-setup.css": "ea99b4a939d06b18541ac00386f8396bd1ebf6dcadea418577709b4446f9241d",
       "game/resource-setup.html": "69bb94b9011c277dd52904453ad3ecc5cfaa653ef77b311d7dac22fb7dc04add",
       "game/resource-window.exe": "355db0f63439858c67bb41aeab51f0810df2eedf681e0d87dd5331154f888dde",
       "game/resource_setup.py": "eb728df11d282ee5160c928935ea7a36ea0a65432269f57fbcffe9deefeea0da",
-      "launcher.exe": "898f3c869cd366ed916282a4fdb96704b80ad51f34d0fa91eb5ecb152de190f1",
+      "launcher.exe": "5a0fff1c8960182e7a1eaeb92cd588f4a1842d5c8d9d96a0c314beebf2c0a7e6",
       "pods/VERSION": "1190cbd2a7006335d6e8a4c96ad87023bd32c76eecb0c1f1d39e010ca4b7bfdc",
       "pods/app/archive/static/archive.css": "8f20523fbb327ba8502e4c83b676b105c23160e404244fd001107be4288bc7ad",
       "pods/app/archive/templates/base.html": "6ebb5bb56648c3cce2fdcb9152d08ce0f66246d5357aafdf609e17c001903fd0",
@@ -42,9 +42,9 @@
   },
   "linuxRuntime": {
     "bunkerVersion": "1.12.23",
-    "asset": "reincomp-linux-x86_64-0.3.11.tar.gz",
-    "sha256": "4c0a054fe43c5e2150e0f768107e2bc6e6dc9cfec62d96251c6ba69f7ee30120",
-    "size": 272342077
+    "asset": "reincomp-linux-x86_64-0.3.12.tar.gz",
+    "sha256": "bef67104d7e7cb2ce330b3d940516962f0429aa6a291f94e849e00dfba746346",
+    "size": 272342076
   },
   "toolchain": {
     "url": "https://github.com/veritr1x/reincomp/releases/download/v0.1.0/reincomp-toolchain-0.1.0-windows-x86_64.zip",
