@@ -3,6 +3,10 @@
 What changed, newest first, by date and area. A release's heading comes
 above the dated sections it holds.
 
+## 0.3.13 (2026-11-26)
+
+- The Windows and Linux players now carry Bunker 1.12.24. The web builder builds Bunker 1.12.24 for every platform.
+
 ## 0.3.12 (2026-11-26)
 
 - Fixed the first launch of EXEs built with the web builder since 0.3.10. The installation stopped while preparing the APK assets and nothing was installed. If you updated to 0.3.10 or 0.3.11, build a new EXE and run it in the same folder. Saves in `.bunker-player/data` are kept.
