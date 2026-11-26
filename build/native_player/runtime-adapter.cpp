@@ -112,22 +112,7 @@ extern "C" __declspec(dllexport) void il2cpp_shutdown(){
     frame_memory::shutdown();
     if(auto flush=reinterpret_cast<void(*)()>(GetProcAddress(GetModuleHandleW(L"EngineCalls.dll"),"FlushCheckpointPreferences")))flush();
     if(auto stop=reinterpret_cast<void(*)()>(GetProcAddress(GetModuleHandleW(L"EngineCalls.dll"),"ShutdownDesktopGamepads")))stop();
-    // The original shutdown sometimes never returns, which leaves a frozen window that the
-    // launcher and the player cannot close. The save is on the server and the preferences
-    // are flushed above, so after a few seconds the process ends itself.
-    static HANDLE finished=CreateEventW(nullptr,TRUE,FALSE,nullptr);
-    if(finished){
-        if(HANDLE watch=CreateThread(nullptr,0,[](void *)->DWORD{
-            if(WaitForSingleObject(finished,5000)==WAIT_TIMEOUT){
-                std::fprintf(stderr,"Game shutdown: the original il2cpp_shutdown did not return in 5 s; ending the process\n");
-                std::fflush(stderr);
-                TerminateProcess(GetCurrentProcess(),0);
-            }
-            return 0;
-        },nullptr,0,nullptr))CloseHandle(watch);
-    }
     invoke("il2cpp_shutdown");
-    if(finished)SetEvent(finished);
 }
 R0(il2cpp_get_corlib,P)
 R0(il2cpp_thread_current,P)
