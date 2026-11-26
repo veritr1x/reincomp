@@ -33,6 +33,9 @@ type playerRequest struct {
 }
 
 var closePlayerWindow = func(pid int) bool { return false }
+
+// How long a game asked to close may take before the launcher ends it.
+var playerCloseWait = 10 * time.Second
 var applyPlayerDisplay = func(pid int, display displaySettings, resize bool) error {
 	return errors.New("the native player is unavailable")
 }
@@ -148,16 +151,21 @@ func (s *playerSession) play(makePlayer func() (*exec.Cmd, error), menu *resourc
 			}
 			var stopErr error
 			if closePlayerWindow(cmd.Process.Pid) {
+				var err error
 				select {
-				case err := <-exited:
-					if req.result == nil {
-						return menu.stopped(errReturnToLauncher, err)
-					}
-					req.result <- err
-					break playing
-				case <-time.After(30 * time.Second):
-					stopErr = errors.New("the game did not close in time")
+				case err = <-exited:
+				case <-time.After(playerCloseWait):
+					// The game can hang in its own shutdown after it has stopped
+					// drawing. Its save is on the server, so end the process.
+					log.Print("The game did not close in time; ending its process.")
+					cmd.Process.Kill()
+					<-exited
 				}
+				if req.result == nil {
+					return menu.stopped(errReturnToLauncher, err)
+				}
+				req.result <- err
+				break playing
 			} else {
 				stopErr = errors.New("the game window is not ready to close")
 			}

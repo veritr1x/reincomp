@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -44,6 +45,38 @@ func TestStopLunarTearClosesPlayerAndReturnsToLauncher(t *testing.T) {
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("Stop did not finish the game session")
+	}
+}
+
+// A game that hangs in its shutdown is ended, and the stop still completes.
+func TestStopLunarTearEndsAPlayerThatDoesNotClose(t *testing.T) {
+	dir := t.TempDir()
+	menu := &resourceWindow{stopServices: make(chan struct{}, 1)}
+	started := make(chan int, 1)
+	session := &playerSession{started: func(pid int) { started <- pid }}
+	oldClose, oldWait := closePlayerWindow, playerCloseWait
+	closePlayerWindow, playerCloseWait = func(int) bool { return true }, 200*time.Millisecond
+	defer func() { closePlayerWindow, playerCloseWait = oldClose, oldWait }()
+	done := make(chan error, 1)
+	go func() { done <- session.play(calendarChild(dir), menu) }()
+	var pid int
+	select {
+	case pid = <-started:
+		menu.stopServices <- struct{}{}
+	case <-time.After(5 * time.Second):
+		t.Fatal("player did not start")
+	}
+	select {
+	case err := <-done:
+		if !errors.Is(err, errReturnToLauncher) {
+			t.Fatalf("Stop returned %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Stop did not finish while the game ignored its close request")
+	}
+	if process, err := os.FindProcess(pid); err == nil && process.Signal(syscall.Signal(0)) == nil {
+		process.Kill()
+		t.Fatal("the unresponsive game was left running")
 	}
 }
 
