@@ -60,11 +60,15 @@ struct Runtime {
 } vm,*threads=&vm;
 #include "../bunker-events.h"
 static bool resumedForceIdle=false,resumedRandomAnimation=false,completedQueuedTask=false;
+static bool resumedTrigger=false;
 extern "C" Memory *sub_8281dbe0(State &,addr_t pc,Memory *m){
     assert(pc==0x8281dbe0);resumedForceIdle=true;return m;
 }
 extern "C" Memory *sub_8281efb4(State &,addr_t pc,Memory *m){
     assert(pc==0x8281efb4);resumedRandomAnimation=true;return m;
+}
+extern "C" Memory *sub_8281ef90(State &,addr_t pc,Memory *m){
+    assert(pc==0x8281ef90);resumedTrigger=true;return m;
 }
 extern "C" Memory *sub_840fce24(State &s,addr_t pc,Memory *m){
     assert(pc==0x840fce24 && s.gpr.x1.qword==0);
@@ -130,10 +134,36 @@ static void checkRandomAnimationWait(){
         else assert(s.gpr.x0.qword==runner.address() && s.gpr.x1.qword==17);
     }
 }
+static void checkRandomAnimationTrigger(){
+    Object runner,player,animator;
+    const auto task=runner.address()+0x10;
+    const auto reference=player.address();
+    for(int32_t phase:{-2,-1,0,1})for(auto target:{addr_t(0),animator.address()})for(bool alive:{false,true}){
+        runner.put(0x10,static_cast<uint32_t>(phase));
+        runner.put(0x10+0x18,player.address());
+        runner.put(0x10+0x28,7);
+        runner.put(0x10+0x30,reference);
+        player.put(0x40,target);
+        animator.put(0x10,alive);
+        State s{};
+        s.gpr.x0.qword=runner.address();s.gpr.x1.qword=17;s.gpr.x30.qword=42;
+        Memory memory{};
+        resumedTrigger=completedQueuedTask=false;
+        assert(recomp::directEntries.at(0x8281ef90)(s,0x8281ef90,&memory)==&memory);
+        const bool unloaded=phase==1 && target && !alive;
+        assert(completedQueuedTask==unloaded && resumedTrigger==!unloaded);
+        assert(field_metadata::read<int32_t>(task)==(unloaded?-2:phase));
+        assert(field_metadata::read<addr_t>(task+0x30)==(unloaded?0:reference));
+        assert(field_metadata::read<addr_t>(task+0x28)==7);
+        if(unloaded)assert(s.gpr.x0.qword==task+8 && s.gpr.pc.qword==42);
+        else assert(s.gpr.x0.qword==runner.address() && s.gpr.x1.qword==17);
+    }
+}
 int main(){
     bunker_events::install();
     checkPicturebookForceIdle();
     checkRandomAnimationWait();
+    checkRandomAnimationTrigger();
     using namespace bunker_events;
     Object stay,enter,stayType,enterType,state,list,items,zone,collider;
     stayType.put(0x10,reinterpret_cast<addr_t>("EventTriggerOnStayCollision"));

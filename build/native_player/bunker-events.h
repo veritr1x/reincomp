@@ -7,11 +7,14 @@ extern "C" Memory *sub_83291fb4(State &,addr_t,Memory *);
 extern "C" Memory *sub_82b01eb0(State &,addr_t,Memory *);
 extern "C" Memory *sub_830ce360(State &,addr_t,Memory *);
 extern "C" Memory *sub_8281dbe0(State &,addr_t,Memory *);
+extern "C" Memory *sub_8281ef90(State &,addr_t,Memory *);
 extern "C" Memory *sub_8281efb4(State &,addr_t,Memory *);
 extern "C" Memory *sub_840fce24(State &,addr_t,Memory *);
 
+template<class Awaiter=int32_t>
 static Memory *completeQueuedTask(State &s,Memory *memory,addr_t task,addr_t awaiter){
-    const int32_t completed=-2,emptyAwaiter=0;
+    const int32_t completed=-2;
+    const Awaiter emptyAwaiter{};
     recomp::WriteGuestMemory(awaiter,&emptyAwaiter,sizeof(emptyAwaiter));
     recomp::WriteGuestMemory(task,&completed,sizeof(completed));
     s.gpr.x0.qword=task+8; // AsyncUniTaskMethodBuilder.SetResult()
@@ -39,18 +42,29 @@ static Memory *resumePicturebookForceIdle(State &s,addr_t pc,Memory *memory){
     return sub_8281dbe0(s,pc,memory);
 }
 
-static Memory *resumeRandomAnimationWait(State &s,addr_t pc,Memory *memory){
+static bool randomAnimatorUnloaded(addr_t task){
     using field_metadata::read;
+    const auto player=read<addr_t>(task+0x18);
+    const auto animator=player?read<addr_t>(player+0x40):0;
+    return animator && !nativeUnityObjectAlive(reinterpret_cast<const void *>(animator));
+}
+
+static Memory *resumeRandomAnimationTrigger(State &s,addr_t pc,Memory *memory){
     const auto runner=s.gpr.x0.qword;
     const auto task=runner?runner+0x10:0;
-    if(task && read<int32_t>(task)==0){
-        // RandomAnimationPlayer.WaitAnimationAsync polls its Animator before
-        // checking cancellation. The field can unload during that frame's yield.
-        const auto player=read<addr_t>(task+0x18);
-        const auto animator=player?read<addr_t>(player+0x40):0;
-        if(animator && !nativeUnityObjectAlive(reinterpret_cast<const void *>(animator)))
-            return completeQueuedTask(s,memory,task,task+0x28);
-    }
+    // UpdateTriggerAsync resumes after its random delay and calls SetTrigger
+    // before the next cancellation check. This awaiter holds a task reference.
+    if(task && field_metadata::read<int32_t>(task)==1 && randomAnimatorUnloaded(task))
+        return completeQueuedTask<addr_t>(s,memory,task,task+0x30);
+    return sub_8281ef90(s,pc,memory);
+}
+
+static Memory *resumeRandomAnimationWait(State &s,addr_t pc,Memory *memory){
+    const auto runner=s.gpr.x0.qword;
+    const auto task=runner?runner+0x10:0;
+    // WaitAnimationAsync polls its Animator after a frame yield.
+    if(task && field_metadata::read<int32_t>(task)==0 && randomAnimatorUnloaded(task))
+        return completeQueuedTask(s,memory,task,task+0x28);
     return sub_8281efb4(s,pc,memory);
 }
 
@@ -178,6 +192,7 @@ static void updateStay(State &s){
 }
 static void install(){
     recomp::AddGuestDirectEntry(0x8281dbe0,resumePicturebookForceIdle);
+    recomp::AddGuestDirectEntry(0x8281ef90,resumeRandomAnimationTrigger);
     recomp::AddGuestDirectEntry(0x8281efb4,resumeRandomAnimationWait);
     recomp::AddGuestDirectEntry(0x830ce360,actorCollider);
     recomp::AddGuestDirectEntry(0x83291fb4,showRoulette);
